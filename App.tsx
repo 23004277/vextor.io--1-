@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS: GameSettings = {
     darkMode: true,
     showMinimap: true,
     showLeaderboard: true,
+    compactScoreNotation: false,
     shakeEnabled: true,
     shakeIntensity: 1.0,
     particleDensity: 1.0,

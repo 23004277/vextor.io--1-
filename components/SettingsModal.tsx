@@ -221,6 +221,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                             playSound={playSound}
                                         />
                                     </ControlRow>
+                                    <ControlRow label="Compact_Scores" desc="Display score values as k/m/b/t">
+                                        <Toggle
+                                            id="compact-score-toggle"
+                                            active={settings.compactScoreNotation}
+                                            onToggle={() => setSettings((prev: GameSettings) => ({ ...prev, compactScoreNotation: !prev.compactScoreNotation }))}
+                                            playSound={playSound}
+                                        />
+                                    </ControlRow>
                                     <SliderRow 
                                         label="Interface_Scale" 
                                         value={settings.uiScale} 

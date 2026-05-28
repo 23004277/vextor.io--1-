@@ -58,6 +58,7 @@ export interface IGameEngine {
     upgradeStat: (tank: any, stat: StatType) => void;
     player?: any;
     getNowMs?: () => number;
+    getSimTimeMs?: () => number;
 }
 
 export class EnemyAITanks {
@@ -81,6 +82,7 @@ export class EnemyAITanks {
      */
     static update(bot: IAITank, engine: IGameEngine, dt: number, botStatPriorities: Record<TankClass, StatType[]>) {
         if (!bot || bot.isDead) return;
+        this.ensureLegacyDefaults(bot, engine);
 
         // Apply movement using saved steering vector
         engine.applyTankMovement(bot, bot.lastSteering);
@@ -94,7 +96,9 @@ export class EnemyAITanks {
         // De-sync AI ticking, updating strategic plan every 100-200ms
         bot.aiUpdateTimer -= dt;
         if (bot.aiUpdateTimer > 0) return;
-        bot.aiUpdateTimer = 0.08 + Math.random() * 0.08; // 80-160ms highly responsive strategic planning
+        const tickSeed = Math.floor(this.nowMs(engine) / Math.max(1, dt * 1000));
+        const stagger = this.seeded01((bot.id * 73856093) ^ (tickSeed * 19349663));
+        bot.aiUpdateTimer = 0.08 + stagger * 0.08; // 80-160ms strategic planning cadence
 
         const hpRatio = bot.health / bot.maxHealth;
         const vision = bot.visionRange;
@@ -263,7 +267,7 @@ export class EnemyAITanks {
     private static resolveSocialState(bot: IAITank, data: any, engine: IGameEngine, fallback: AIState): AIState {
         if (engine.gameMode !== GameMode.TEAMS || bot.team === Team.NONE) return fallback;
 
-        const now = engine.getNowMs ? engine.getNowMs() : Date.now();
+        const now = this.nowMs(engine);
         const player = engine.player;
         if (!player || player.isDead || player.team !== bot.team) return fallback;
 
@@ -390,8 +394,9 @@ export class EnemyAITanks {
                 }
                 bot.aiTargetRot += 0.6;
                 bot.aiShooting = false;
-                if (bot.socialWiggleUntil && bot.socialWiggleUntil > (engine.getNowMs ? engine.getNowMs() : Date.now())) {
-                    bot.chassisRotation = (bot.chassisRotation || bot.rotation) + Math.sin((engine.getNowMs ? engine.getNowMs() : Date.now()) * 0.03) * 0.05;
+                const now = this.nowMs(engine);
+                if (bot.socialWiggleUntil && bot.socialWiggleUntil > now) {
+                    bot.chassisRotation = (bot.chassisRotation || bot.rotation) + Math.sin(now * 0.03) * 0.05;
                 }
             }
         } else if (bot.aiState === AIState.ESCORT) {
@@ -751,6 +756,52 @@ export class EnemyAITanks {
         // Shoot when lined up within error tolerance of ~22 degrees
         if (Math.abs(diff) < 0.38) {
             engine.attemptShoot(bot);
+        }
+    }
+
+    private static nowMs(engine: IGameEngine): number {
+        if (engine.getSimTimeMs) return engine.getSimTimeMs();
+        if (engine.getNowMs) return engine.getNowMs();
+        return Date.now();
+    }
+
+    private static seeded01(seed: number): number {
+        const s = Math.sin(seed * 0.000001 + 1.23456789) * 43758.5453123;
+        return s - Math.floor(s);
+    }
+
+    private static ensureLegacyDefaults(bot: IAITank, engine: IGameEngine) {
+        if (!bot.lastSteering) bot.lastSteering = { x: 0, y: 0 };
+        if (typeof bot.aiTargetRot !== 'number') bot.aiTargetRot = bot.rotation || 0;
+        if (typeof bot.aiShooting !== 'boolean') bot.aiShooting = false;
+        if (typeof bot.aiUpdateTimer !== 'number' || Number.isNaN(bot.aiUpdateTimer)) bot.aiUpdateTimer = 0;
+        if (!bot.stats) {
+            bot.stats = {
+                [StatType.REGEN]: 0,
+                [StatType.MAX_HEALTH]: 0,
+                [StatType.BODY_DAMAGE]: 0,
+                [StatType.BULLET_SPEED]: 0,
+                [StatType.BULLET_PENETRATION]: 0,
+                [StatType.BULLET_DAMAGE]: 0,
+                [StatType.RELOAD]: 0,
+                [StatType.MOVEMENT_SPEED]: 0,
+                [StatType.BULLET_SPREAD]: 0,
+                [StatType.MAX_SHIELD]: 0,
+                [StatType.HEALING_RADIUS]: 0,
+                [StatType.HEALING_EFFICIENCY]: 0,
+                [StatType.HEALING_BURST]: 0,
+                [StatType.SUPPORT_XP_MULT]: 0,
+                [StatType.DRAIN_RADIUS]: 0,
+                [StatType.DRAIN_EFFICIENCY]: 0,
+                [StatType.DRAIN_LIFESTEAL]: 0,
+                [StatType.DRAIN_BURST]: 0
+            } as Record<StatType, number>;
+        }
+
+        // If context is partially missing, default to safe non-crashing behavior.
+        if (!engine || !engine.spatialGrid || !engine.applyTankMovement || !engine.getInterceptPoint || !engine.attemptShoot || !engine.upgradeStat) {
+            bot.aiShooting = false;
+            bot.lastSteering = { x: 0, y: 0 };
         }
     }
 }

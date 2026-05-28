@@ -4,6 +4,10 @@ export interface ECSComponentMap {
   [key: string]: unknown;
 }
 
+export interface CreateEntityOptions {
+  tags?: string[];
+}
+
 export interface ECSEntityRecord {
   id: number;
   type: EntityType;
@@ -17,11 +21,20 @@ export class EntityManager {
   private readonly scratchActive: ECSEntityRecord[] = [];
   private readonly scratchQuery: ECSEntityRecord[] = [];
 
-  create(id: number, type: EntityType, components: ECSComponentMap = {}): ECSEntityRecord {
-    const record: ECSEntityRecord = { id, type, active: true, components };
+  create(id: number, type: EntityType, components: ECSComponentMap = {}, options: CreateEntityOptions = {}): ECSEntityRecord {
+    const normalized = this.withNormalizedTags(type, components, options.tags);
+    const record: ECSEntityRecord = { id, type, active: true, components: normalized };
     this.entities.set(id, record);
     this.activeIds.push(id);
     return record;
+  }
+
+  private withNormalizedTags(type: EntityType, components: ECSComponentMap, explicitTags: string[] = []): ECSComponentMap {
+    const existing = Array.isArray(components.tags) ? (components.tags as string[]) : [];
+    const tags = new Set<string>([...existing, ...explicitTags].map(t => String(t).toLowerCase()));
+    if (type === EntityType.DRONE) tags.add('drone');
+    if (type === EntityType.MINI_TANK) tags.add('minion');
+    return { ...components, tags: Array.from(tags) };
   }
 
   destroy(id: number): void {
@@ -87,6 +100,16 @@ export class EntityManager {
       const rec = this.entities.get(this.activeIds[i]);
       if (rec && rec.active) fn(rec);
     }
+  }
+
+  queryWhereInto(predicate: (record: ECSEntityRecord) => boolean, out: ECSEntityRecord[]): ECSEntityRecord[] {
+    out.length = 0;
+    for (let i = 0; i < this.activeIds.length; i++) {
+      const rec = this.entities.get(this.activeIds[i]);
+      if (!rec || !rec.active) continue;
+      if (predicate(rec)) out.push(rec);
+    }
+    return out;
   }
 
   clear(): void {

@@ -51,6 +51,14 @@ export const randomPos = (width: number, height: number): Vector2 => ({
 
 export const formatCompactNumber = (value: number): string => {
   const abs = Math.abs(value);
+  if (abs >= 1_000_000_000_000) {
+    const n = value / 1_000_000_000_000;
+    return `${Number(n.toFixed(n >= 10 ? 0 : 1))}t`;
+  }
+  if (abs >= 1_000_000_000) {
+    const n = value / 1_000_000_000;
+    return `${Number(n.toFixed(n >= 10 ? 0 : 1))}b`;
+  }
   if (abs >= 1_000_000) {
     const n = value / 1_000_000;
     return `${Number(n.toFixed(n >= 10 ? 0 : 1))}m`;
@@ -60,4 +68,9 @@ export const formatCompactNumber = (value: number): string => {
     return `${Number(n.toFixed(n >= 10 ? 0 : 1))}k`;
   }
   return `${Math.round(value)}`;
+};
+
+export const formatScoreValue = (value: number, compact: boolean): string => {
+  if (compact) return formatCompactNumber(value);
+  return Math.round(value).toLocaleString();
 };

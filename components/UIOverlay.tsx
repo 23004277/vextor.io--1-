@@ -6,7 +6,7 @@ import { CLASS_TREE, COLORS, STAT_COLORS, TANK_CONFIGS } from '../constants';
 import { TankPreview } from './TankPreview';
 import { ShapePreview } from './ShapePreview';
 import { TacticalMinimap } from './TacticalMinimap';
-import { formatCompactNumber } from '../services/MathUtils';
+import { formatScoreValue } from '../services/MathUtils';
 import { Search, SlidersHorizontal, FlaskConical, Cpu, Boxes, MousePointer2, ShieldAlert, Swords, Timer, HeartPulse, Droplets } from 'lucide-react';
 
 interface UIOverlayProps {
@@ -35,7 +35,7 @@ const STAT_ORDER = [
 ];
 
 type SandboxTab = 'SYSTEM' | 'RESEARCH' | 'SPAWN';
-const SANDBOX_RESEARCH_ICON_REV = '2026-05-27-remaster';
+const SANDBOX_RESEARCH_ICON_REV = '2026-05-28-engine-match';
 const SANDBOX_TAB_META: Record<SandboxTab, { label: string; icon: any; hint: string }> = {
   SYSTEM: { label: 'World', icon: Cpu, hint: 'Simulation controls' },
   RESEARCH: { label: 'Tanks', icon: FlaskConical, hint: 'Class research and swap' },
@@ -110,6 +110,16 @@ const CLASS_CATEGORIES = [
             TankClass.VAMPIRE,
             TankClass.REAPER
         ]
+    },
+    {
+        name: "Rebirth",
+        classes: [
+            TankClass.COLOSSAL,
+            TankClass.LEVIATHAN,
+            TankClass.WARLORD,
+            TankClass.CELESTIAL,
+            TankClass.OBLITERATOR
+        ]
     }
 ];
 
@@ -135,6 +145,12 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     // Fallback keeps research grid stable if a future class key is renamed but not yet remapped.
     return TANK_CONFIGS[cls] ? cls : TankClass.BASIC;
   };
+  const isRebirthPreviewClass = (cls: TankClass): boolean =>
+    cls === TankClass.COLOSSAL ||
+    cls === TankClass.LEVIATHAN ||
+    cls === TankClass.WARLORD ||
+    cls === TankClass.CELESTIAL ||
+    cls === TankClass.OBLITERATOR;
   const researchCategories = useMemo(() => {
     const q = researchQuery.trim().toLowerCase();
     return CLASS_CATEGORIES
@@ -151,23 +167,29 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   }, [researchQuery, researchSector]);
 
   const xpPercent = Math.min(100, (xp / maxXp) * 100);
+  const scoreLabel = formatScoreValue(score, settings.compactScoreNotation);
   const availableClasses = CLASS_TREE[currentClass] || [];
-  
-  let upgradeLevelReq = 15;
-  if (currentClass !== TankClass.BASIC) {
-      const tier2 = [
-        TankClass.TWIN, TankClass.SNIPER, TankClass.MACHINE_GUN, TankClass.FLANK_GUARD,
-        TankClass.PACIFIST_TRAINEE, TankClass.DRAINER_TRAINEE, TankClass.NURSE, TankClass.LEECH
-      ];
-      if (tier2.includes(currentClass)) upgradeLevelReq = 30; 
-      else {
-          upgradeLevelReq = 45;
-      }
-  }
+  const getClassUpgradeLevelRequirement = (targetClass: TankClass): number => {
+    const tier30 = new Set<TankClass>([
+      TankClass.TWIN, TankClass.SNIPER, TankClass.MACHINE_GUN, TankClass.FLANK_GUARD,
+      TankClass.PACIFIST_TRAINEE, TankClass.DRAINER_TRAINEE,
+    ]);
+    const tier60 = new Set<TankClass>([
+      TankClass.TRIPLE_SHOT, TankClass.QUAD_TANK, TankClass.TWIN_FLANK,
+      TankClass.HUNTER, TankClass.ASSASSIN, TankClass.DESTROYER, TankClass.GUNNER,
+      TankClass.SPREAD_SHOT, TankClass.TRI_ANGLE, TankClass.OVERSEER,
+      TankClass.NURSE, TankClass.LEECH, TankClass.SPRAYER, TankClass.VAMPIRE, TankClass.DOCTOR,
+    ]);
+    if (tier30.has(targetClass)) return 30;
+    if (tier60.has(targetClass)) return 60;
+    return 90;
+  };
+  const unlockableClasses = availableClasses.filter(cls => level >= getClassUpgradeLevelRequirement(cls as TankClass));
   
   const showBossChoiceUI = playerState === PlayerState.BOSS_SELECTION;
-  const showStandardUpgrades = !showBossChoiceUI && (availableClasses.length > 0 && level >= upgradeLevelReq && !isTransformed) && gameMode !== GameMode.SANDBOX;
-  const showStatUpgradeUI = showStatsMenu && !showStandardUpgrades;
+  const showStandardUpgrades = !showBossChoiceUI && (unlockableClasses.length > 0 && !isTransformed) && gameMode !== GameMode.SANDBOX;
+  const isRebirthClass = currentClass === TankClass.COLOSSAL || currentClass === TankClass.LEVIATHAN || currentClass === TankClass.WARLORD || currentClass === TankClass.CELESTIAL || currentClass === TankClass.OBLITERATOR;
+  const showStatUpgradeUI = showStatsMenu && !showStandardUpgrades && !isRebirthClass;
 
   useEffect(() => {
     if (availableStatPoints > 0 && !showStandardUpgrades) {
@@ -190,7 +212,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
           <div className="grid grid-cols-3 gap-3 mb-6">
             <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
               <div className="text-[9px] uppercase tracking-[0.2em] text-white/45 font-bold">Score</div>
-              <div className="text-2xl font-black text-cyan-300 mt-1">{score.toLocaleString()}</div>
+              <div className="text-2xl font-black text-cyan-300 mt-1">{scoreLabel}</div>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
               <div className="text-[9px] uppercase tracking-[0.2em] text-white/45 font-bold">Level</div>
@@ -359,13 +381,13 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                   <div className="mt-2 text-3xl font-black text-white">Choose Your Legendary Chassis</div>
                 </div>
                 <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {(bossChoices && bossChoices.length > 0 ? bossChoices : [TankClass.COLOSSAL, TankClass.LEVIATHAN, TankClass.WARLORD, TankClass.CELESTIAL]).map((cls) => (
+                  {(bossChoices && bossChoices.length > 0 ? bossChoices : [TankClass.COLOSSAL, TankClass.LEVIATHAN, TankClass.WARLORD, TankClass.CELESTIAL, TankClass.OBLITERATOR]).map((cls) => (
                     <button
                       key={cls}
                       onClick={() => { onUpgradeClass(cls); playHover?.(); }}
                       className="group rounded-2xl border border-white/10 bg-white/5 hover:bg-cyan-500/10 hover:border-cyan-300/50 transition-all p-3 flex flex-col items-center gap-2"
                     >
-                      <TankPreview tankClass={resolvePreviewClass(cls)} size={46} />
+                      <TankPreview tankClass={resolvePreviewClass(cls)} size={46} showArenaVfx={isRebirthPreviewClass(cls)} />
                       <span className="text-[10px] font-black uppercase tracking-wider text-white/85">{cls}</span>
                     </button>
                   ))}
@@ -396,7 +418,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             
             {showStandardUpgrades && (
                 <div 
-                  key={`${currentClass}-${availableClasses.join('-')}`} 
+                  key={`${currentClass}-${unlockableClasses.join('-')}`} 
                   className="mt-2 animate-in slide-in-from-left-20 duration-500 ease-out fade-in pointer-events-auto"
                 >
                     <div className="relative overflow-hidden rounded-2xl border-[3px] border-cyan-400 bg-[#121212]/95 shadow-[0_0_40px_rgba(34,211,238,0.2)] backdrop-blur-xl w-[280px]">
@@ -405,7 +427,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             <p className="text-[8px] font-bold text-cyan-400/40 uppercase mt-0.5 tracking-widest">Select chassis upgrade</p>
                         </div>
                         <div className="p-4 grid grid-cols-2 gap-3">
-                            {availableClasses.map((cls) => (
+                            {unlockableClasses.map((cls) => (
                                 <button 
                                   key={cls} 
                                   onClick={() => handleClassSelection(cls as TankClass)} 
@@ -489,7 +511,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                <TankPreview tankClass={iconClass} size={18} />
                              </div>
                              <span className="truncate font-black tracking-wide">{entry.name}</span>
-                             <span className="font-mono text-[11px] text-white/75">{formatCompactNumber(entry.score)}</span>
+                             <span className="font-mono text-[11px] text-white/75">{formatScoreValue(entry.score, settings.compactScoreNotation)}</span>
                           </div>
                            );
                          })()
@@ -715,6 +737,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                                   key={`${SANDBOX_RESEARCH_ICON_REV}-bg-${cls}`}
                                                   tankClass={resolvePreviewClass(cls)}
                                                   size={100}
+                                                  showArenaVfx={isRebirthPreviewClass(cls)}
                                                 />
                                             </div>
                                             <div className="shrink-0 transform group-hover:scale-110 transition-transform duration-500 relative z-10 w-fit">
@@ -724,6 +747,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                                       tankClass={resolvePreviewClass(cls)}
                                                       size={54}
                                                       color={currentClass === cls ? '#fff' : undefined}
+                                                      showArenaVfx={isRebirthPreviewClass(cls)}
                                                     />
                                                 </div>
                                             </div>
@@ -1084,7 +1108,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
         {/* Center HUD */}
         <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-[40%] max-w-2xl flex flex-col items-center pointer-events-auto">
             <div className="mb-2 text-center">
-               <div className="text-4xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] tracking-tighter leading-none">{score.toLocaleString()}</div>
+               <div className="text-4xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] tracking-tighter leading-none">{scoreLabel}</div>
                <div className="text-[10px] font-black text-white/60 uppercase tracking-[0.2em] mt-2">Lvl {level} {currentClass}</div>
             </div>
            <div className="w-full h-4 mb-1.5 bg-black/60 rounded-full border border-gray-600/50 relative shadow-lg overflow-hidden group">

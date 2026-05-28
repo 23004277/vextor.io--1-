@@ -261,6 +261,11 @@ export class SoundEngine {
       [TankClass.ANNIHILATOR]: { baseFreq: 60, sweepDepth: 0.04, duration: 1.0, amplitude: 1.0, waveType: 'sine', attackTime: 0.04, noiseIntensity: 2.0, noiseDecay: 0.7, metalResonance: 100, addSub: true },
       [TankClass.HUNTER]: { baseFreq: 380, sweepDepth: 0.2, duration: 0.3, amplitude: 0.45, waveType: 'sawtooth', attackTime: 0.008, noiseIntensity: 0.7, noiseDecay: 0.1, metalResonance: 800, addSub: true },
       [TankClass.X_HUNTER]: { baseFreq: 360, sweepDepth: 0.25, duration: 0.35, amplitude: 0.5, waveType: 'sawtooth', attackTime: 0.008, noiseIntensity: 0.8, noiseDecay: 0.12, metalResonance: 900, addSub: true },
+      [TankClass.COLOSSAL]: { baseFreq: 64, sweepDepth: 0.042, duration: 0.82, amplitude: 0.94, waveType: 'sine', attackTime: 0.024, noiseIntensity: 1.72, noiseDecay: 0.56, metalResonance: 180, addSub: true },
+      [TankClass.LEVIATHAN]: { baseFreq: 88, sweepDepth: 0.09, duration: 0.66, amplitude: 0.86, waveType: 'sawtooth', attackTime: 0.016, noiseIntensity: 1.4, noiseDecay: 0.4, metalResonance: 360, addSub: true },
+      [TankClass.WARLORD]: { baseFreq: 78, sweepDepth: 0.062, duration: 0.72, amplitude: 0.9, waveType: 'triangle', attackTime: 0.017, noiseIntensity: 1.58, noiseDecay: 0.5, metalResonance: 280, addSub: true },
+      [TankClass.CELESTIAL]: { baseFreq: 132, sweepDepth: 0.13, duration: 0.58, amplitude: 0.78, waveType: 'triangle', attackTime: 0.011, noiseIntensity: 1.06, noiseDecay: 0.32, metalResonance: 1120, addSub: false },
+      [TankClass.OBLITERATOR]: { baseFreq: 60, sweepDepth: 0.038, duration: 0.98, amplitude: 1.0, waveType: 'sawtooth', attackTime: 0.022, noiseIntensity: 2.3, noiseDecay: 0.74, metalResonance: 150, addSub: true },
     };
     return profiles[type] ?? DEFAULT_SOUND_PROFILE;
   }
@@ -272,9 +277,23 @@ export class SoundEngine {
     if (!this.shouldPlaySound(options, true)) return;
 
     const spatial = this.getSpatialMix(options);
-    const minCooldownBase = (type === TankClass.STREAMLINER || type === TankClass.GUNNER) ? 22 : (type === TankClass.OVERSEER || type === TankClass.OVERLORD || type === TankClass.MANAGER ? 30 : 38);
+    const isRebirthClass =
+      type === TankClass.COLOSSAL ||
+      type === TankClass.LEVIATHAN ||
+      type === TankClass.WARLORD ||
+      type === TankClass.CELESTIAL ||
+      type === TankClass.OBLITERATOR;
+    const minCooldownBase = isRebirthClass
+      ? 56
+      : (type === TankClass.STREAMLINER || type === TankClass.GUNNER)
+      ? 22
+      : (type === TankClass.OVERSEER || type === TankClass.OVERLORD || type === TankClass.MANAGER ? 30 : 38);
     const minCooldown = Math.round(minCooldownBase * spatial.throttleMul);
     if (!this.throttle(`shoot-${type}`, minCooldown)) return;
+    if (isRebirthClass) {
+      const rebirthBusCooldown = Math.round(28 * spatial.throttleMul);
+      if (!this.throttle('shoot-rebirth-bus', rebirthBusCooldown)) return;
+    }
 
     const t = this.ctx.currentTime;
     const profile = this.getSoundProfile(type);
@@ -480,6 +499,152 @@ export class SoundEngine {
       crack.start(t);
       crack.stop(t + 0.12);
     }
+
+    // Rebirth identity layer: class-unique spectral signature above main blast.
+    if (isRebirthClass) {
+      const sig = this.ctx.createOscillator();
+      const { gain: sigGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+      sig.type = (type === TankClass.CELESTIAL || type === TankClass.OBLITERATOR) ? 'triangle' : 'sawtooth';
+      const base =
+        type === TankClass.COLOSSAL ? 115 :
+        type === TankClass.LEVIATHAN ? 150 :
+        type === TankClass.WARLORD ? 128 :
+        type === TankClass.OBLITERATOR ? 102 : 190;
+      sig.frequency.setValueAtTime(base + Math.random() * 18, t);
+      sig.frequency.exponentialRampToValueAtTime(base * 0.55, t + 0.11);
+      sigGain.gain.setValueAtTime(0, t);
+      sigGain.gain.linearRampToValueAtTime(0.09 * spatial.gainMul, t + 0.006);
+      sigGain.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+      sig.connect(sigGain);
+      sig.start(t);
+      sig.stop(t + 0.14);
+    }
+
+    if (type === TankClass.OBLITERATOR) {
+      const crack = this.ctx.createOscillator();
+      const { gain: crackGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+      crack.type = 'square';
+      crack.frequency.setValueAtTime(96 + Math.random() * 14, t);
+      crack.frequency.exponentialRampToValueAtTime(34, t + 0.18);
+      crackGain.gain.setValueAtTime(0, t);
+      crackGain.gain.linearRampToValueAtTime(0.14 * spatial.gainMul, t + 0.01);
+      crackGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      crack.connect(crackGain);
+      crack.start(t);
+      crack.stop(t + 0.22);
+    }
+  }
+
+  playRestorationAura(options?: AudioSpatialOptions) {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (!this.shouldPlaySound(options, true)) return;
+    const spatial = this.getSpatialMix(options);
+    if (!this.throttle('restoration-aura', Math.round(180 * spatial.throttleMul))) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const { gain } = this.createPannedGain(spatial.panRange * 0.8, spatial.pan, spatial.lowpassHz);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(420 + Math.random() * 30, t);
+    osc.frequency.linearRampToValueAtTime(520 + Math.random() * 40, t + 0.09);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.06 * spatial.gainMul, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    osc.connect(gain);
+    osc.start(t);
+    osc.stop(t + 0.18);
+  }
+
+  playBloodDrainTick(options?: AudioSpatialOptions) {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (!this.shouldPlaySound(options, true)) return;
+    const spatial = this.getSpatialMix(options);
+    if (!this.throttle('blood-drain', Math.round(90 * spatial.throttleMul))) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(170 + Math.random() * 60, t);
+    osc.frequency.exponentialRampToValueAtTime(75, t + 0.07);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.1 * spatial.gainMul, t + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    osc.connect(gain);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  }
+
+  playBloodBurst(options?: AudioSpatialOptions) {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (!this.shouldPlaySound(options, true)) return;
+    const spatial = this.getSpatialMix(options);
+    if (!this.throttle('blood-burst', Math.round(350 * spatial.throttleMul))) return;
+    this.playExplosion(true, options);
+    const t = this.ctx.currentTime;
+    const sub = this.ctx.createOscillator();
+    const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(58, t);
+    sub.frequency.exponentialRampToValueAtTime(18, t + 0.25);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.24 * spatial.gainMul, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    sub.connect(gain);
+    sub.start(t);
+    sub.stop(t + 0.3);
+  }
+
+  playCelestialBoom(options?: AudioSpatialOptions) {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (!this.shouldPlaySound(options, true)) return;
+    const spatial = this.getSpatialMix(options);
+    if (!this.throttle('celestial-boom', Math.round(220 * spatial.throttleMul))) return;
+    this.playShoot(TankClass.ANNIHILATOR, options);
+    const t = this.ctx.currentTime;
+    const ring = this.ctx.createOscillator();
+    const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+    ring.type = 'triangle';
+    ring.frequency.setValueAtTime(115, t);
+    ring.frequency.exponentialRampToValueAtTime(42, t + 0.18);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.12 * spatial.gainMul, t + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    ring.connect(gain);
+    ring.start(t);
+    ring.stop(t + 0.22);
+  }
+
+  playBossDroneLaunch(options?: AudioSpatialOptions, sourceClass?: TankClass) {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (!this.shouldPlaySound(options, true)) return;
+    const spatial = this.getSpatialMix(options);
+    if (!this.throttle('boss-drone-launch', Math.round(120 * spatial.throttleMul))) return;
+    const t = this.ctx.currentTime;
+    const whirr = this.ctx.createOscillator();
+    const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+    const isColossal = sourceClass === TankClass.COLOSSAL;
+    const isLeviathan = sourceClass === TankClass.LEVIATHAN;
+    const isCelestial = sourceClass === TankClass.CELESTIAL;
+    whirr.type = isCelestial ? 'triangle' : 'square';
+    const startFreq = isColossal ? 240 : isLeviathan ? 330 : isCelestial ? 360 : 300;
+    const endFreq = isColossal ? 430 : isLeviathan ? 590 : isCelestial ? 680 : 510;
+    whirr.frequency.setValueAtTime(startFreq + Math.random() * 45, t);
+    whirr.frequency.linearRampToValueAtTime(endFreq + Math.random() * 70, t + 0.05);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.07 * spatial.gainMul, t + 0.007);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    whirr.connect(gain);
+    whirr.start(t);
+    whirr.stop(t + 0.09);
   }
 
   playHit(options?: AudioSpatialOptions) {

@@ -60,12 +60,26 @@ export enum AIState {
   COMBAT = 'COMBAT',
   FLEE = 'FLEE',
   HUNT = 'HUNT',
+  PROXIMAL_PORTAL_TRANSIT = 'PROXIMAL_PORTAL_TRANSIT',
   GREETING = 'GREETING',
   ESCORT = 'ESCORT',
   BODYGUARD = 'BODYGUARD',
   BASE_DEFENSE = 'BASE_DEFENSE',
   RETURNING = 'RETURNING',
   ORBIT_IDLE = 'ORBIT_IDLE',
+}
+
+export enum AISessionArchetype {
+  FARMER = 'FARMER',
+  RUSHER = 'RUSHER',
+  SUPPORT = 'SUPPORT',
+  EXPLORER = 'EXPLORER',
+}
+
+export enum AIBehaviorPhase {
+  PHASE_EARLY = 'PHASE_EARLY',
+  PHASE_MID = 'PHASE_MID',
+  PHASE_LATE = 'PHASE_LATE',
 }
 
 export enum StatType {
@@ -144,6 +158,7 @@ export enum TankClass {
   LEVIATHAN = 'Leviathan',
   WARLORD = 'Warlord',
   CELESTIAL = 'Celestial',
+  OBLITERATOR = 'Obliterator',
 }
 
 export interface Vector2 {
@@ -158,6 +173,12 @@ export interface AIComponent {
   decisionCooldownTicks: number;
   retreatUntilTick: number;
   wanderAngle: number;
+  wanderPhase?: number;
+  lookAngle?: number;
+  lastDecisionTick?: number;
+  stuckTicks?: number;
+  assistTargetId?: number | null;
+  huntTargetId?: number | null;
 }
 
 export interface PositionComponent {
@@ -376,6 +397,7 @@ export interface GameSettings {
   darkMode: boolean;
   showMinimap: boolean;
   showLeaderboard: boolean;
+  compactScoreNotation: boolean;
   shakeEnabled: boolean;
   shakeIntensity: number;
   particleDensity: number;

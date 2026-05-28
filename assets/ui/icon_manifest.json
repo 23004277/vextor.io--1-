@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-28",
+  "notes": "Sandbox icon audit manifest. TankPreview remains authoritative renderer for icon geometry.",
+  "rebirth": {
+    "Colossal": {
+      "hull": "rhombus-layered",
+      "aura": "blue",
+      "deckTurrets": 3,
+      "showArenaVfx": true
+    },
+    "Leviathan": {
+      "hull": "star-10pt-layered",
+      "aura": "blue",
+      "deckTurrets": 5,
+      "showArenaVfx": true
+    },
+    "Warlord": {
+      "hull": "triangle-layered",
+      "aura": "red",
+      "deckTurrets": 3,
+      "showArenaVfx": true
+    },
+    "Celestial": {
+      "hull": "pentagon-core",
+      "aura": "blue",
+      "deckTurrets": 6,
+      "showArenaVfx": true
+    }
+  }
+}

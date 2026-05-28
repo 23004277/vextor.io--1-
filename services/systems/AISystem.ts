@@ -1,4 +1,5 @@
 import { AIState, EntityType, GameMode, StatType, TankClass, Team, Vector2 } from '../../types';
+import { BASE_ZONE_WIDTH, SAFE_ZONE_WARNING_RADIUS } from '../../constants';
 import * as Vector from '../MathUtils';
 import { MovementSystem } from './MovementSystem';
 
@@ -6,6 +7,7 @@ type TankLike = {
   id: number;
   pos: Vector2;
   vel: Vector2;
+  radius: number;
   rotation: number;
   health: number;
   maxHealth: number;
@@ -25,12 +27,43 @@ type TankLike = {
 };
 
 type BotMemory = {
+  sessionArchetype: 'FARMER' | 'RUSHER' | 'SUPPORT' | 'EXPLORER';
   wanderAngle: number;
+  lookAngle: number;
+  lookPhase: number;
   fleeLatchUntilTick: number;
   stuckTicks: number;
+  strafeDir: 1 | -1;
+  strafeUntilTick: number;
   lastPos: Vector2;
   lastState: AIState;
   lastTargetId: number | null;
+  aggressionBias: number;
+  aimNoise: number;
+  lastDecisionTick: number;
+  teamFightTargetId: number | null;
+  teamFightUntilTick: number;
+  fleeHealthThreshold: number;
+  decisionStride: number;
+  discoveryDelayTicks: number;
+  intentDelayTicks: number;
+  targetLockUntilTick: number;
+  intentTargetId: number | null;
+  intentPromoteTick: number;
+  seenHostiles: Map<number, number>;
+  shootHesitancyTicks: number;
+  shootHesitancyCounter: number;
+  panicFleeAngleOffset: number;
+  postKillPauseUntilTick: number;
+  squadAnchor: Vector2 | null;
+  squadAnchorTick: number;
+  assistUrgencyUntilTick: number;
+  zoneScoutUntilTick: number;
+  orbitUntilTick: number;
+  firstTellLoggedTick: number;
+  sameFeelLogged: boolean;
+  latePhaseKills: number;
+  latePhaseDeaths: number;
 };
 
 type EngineLike = {
@@ -39,6 +72,7 @@ type EngineLike = {
   inVoid: boolean;
   width?: number;
   height?: number;
+  baseZoneWidth?: number;
   spatialGrid: { query: (pos: Vector2, radius: number) => any[] };
   getInterceptPoint: (pos: Vector2, speed: number, targetPos: Vector2, targetVel: Vector2) => Vector2;
   applyTankMovement: (tank: any, steering: Vector2) => void;
@@ -46,22 +80,94 @@ type EngineLike = {
   upgradeStat: (tank: any, stat: StatType) => void;
 };
 
+type ThinkResult = {
+  state: AIState;
+  target: any | null;
+  combatTarget: any | null;
+};
+
+type WorldInfo = {
+  width: number;
+  height: number;
+  baseZoneWidth: number;
+};
+
+const BASE_BULLET_SPEED = 5;
+
+const ZERO: Vector2 = { x: 0, y: 0 };
+
+const AI_TUNING = {
+  defaultDecisionStride: 10,
+  defaultWorldWidth: 6000,
+  defaultWorldHeight: 4000,
+
+  fleeEnterHpRatio: 0.32,
+  fleeExitHpRatio: 0.48,
+  fleeLatchTicks: 26,
+  pressureFleeThreshold: 1.15,
+  pressureCautionThreshold: 0.58,
+
+  stuckDistanceSq: 11 * 11,
+  stuckTargetDistanceSq: 95 * 95,
+  maxStuckTicks: 6,
+
+  allyCriticalHpRatio: 0.34,
+  assistRadius: 560,
+  assistThreatRadius: 760,
+  teamFightJoinRadius: 980,
+  teamFightFollowTicks: 54,
+  teamFightAllyHpThreshold: 0.82,
+  targetLockMinTicks: 15,
+  squadAnchorRadius: 500,
+  squadDriftDistance: 800,
+  assistCriticalHpRatio: 0.3,
+  assistUrgencyTicks: 30,
+  postKillPauseMinTicks: 5,
+  postKillPauseMaxTicks: 15,
+
+  rareShapeXpThreshold: 2600,
+  rareHuntTimerMs: 5200,
+
+  maxSteering: 4.5,
+  maxStatUpgradesPerDecision: 3,
+
+  combatMinRange: 280,
+  combatMaxRange: 520,
+  heavyMinRange: 410,
+  heavyMaxRange: 760,
+  farmMinRange: 260,
+  farmMaxRange: 430,
+  farmShapeAvoidRadiusPadding: 125,
+  farmEmergencyFleePadding: 90,
+
+  boundaryLookAhead: 220,
+  boundaryStrength: 120,
+  allySeparationRadius: 130,
+  ffaSeparationRadius: 95,
+  cohesionRadius: 380,
+  sameFeelThresholdTicks: 1800,
+  rusherLateRiskMinEngagements: 4,
+  portalTransitDetectionRadius: 1200,
+  portalTransitCommitRadius: 340,
+};
+
+const RARE_RARITIES = new Set(['Legendary', 'Mythical', 'Eternal', 'Transcendent', 'Godly', 'Divine']);
+
 export class AISystem {
-  private movement = new MovementSystem();
-  private tick = 0;
-  public debugDecisionsThisTick = 0;
-  private readonly baseSliceCount = 6;
+  private readonly movement = new MovementSystem();
   private readonly botMemory = new Map<number, BotMemory>();
-  private readonly defaultWorldWidth = 6000;
-  private readonly defaultWorldHeight = 4000;
+  private readonly lastHealthSnapshot = new Map<number, { health: number; lastDropTick: number }>();
+
   private readonly cachedAllies: Array<{ pos: Vector2 }> = [];
-  private readonly fleeEnterHpRatio = 0.32;
-  private readonly fleeExitHpRatio = 0.48;
-  private readonly fleeLatchTicks = 26;
-  private readonly stuckDistanceSq = 11 * 11;
-  private readonly maxStuckTicks = 6;
+  private readonly cachedAllyVels: Vector2[] = [];
+  private readonly cachedThreats: any[] = [];
+
+  private tick = 0;
+  private sessionStartTick = 0;
+  public debugDecisionsThisTick = 0;
 
   beginTick(simulationTick: number): void {
+    if (this.sessionStartTick === 0) this.sessionStartTick = simulationTick;
     this.tick = simulationTick;
     this.debugDecisionsThisTick = 0;
   }
@@ -69,241 +175,1292 @@ export class AISystem {
   updateBot(bot: TankLike, engine: EngineLike, dt: number, botStatPriorities: Record<TankClass, StatType[]>): void {
     if (bot.isDead) return;
 
-    // Cheap per-tick path: movement integration remains per fixed tick.
-    engine.applyTankMovement(bot, bot.lastSteering);
+    this.updateHuntTimer(bot, dt);
+
+    // Keep movement, rotation and shooting responsive every fixed tick.
+    engine.applyTankMovement(bot, bot.lastSteering || ZERO);
     this.applyRotation(bot, dt);
     this.handleShooting(bot, engine);
 
-    const activeBots = this.countActiveBots(engine);
-    const dynamicSlices = Math.max(this.baseSliceCount, Math.min(12, Math.floor(activeBots / 8) + this.baseSliceCount));
-    if ((bot.id % dynamicSlices) !== (this.tick % dynamicSlices)) return;
+    // Heavy AI is deliberately time-sliced so many bots do not spike the frame.
+    if (!this.shouldThink(bot)) return;
+
     this.debugDecisionsThisTick++;
+
+    const memory = this.getMemory(bot);
+    const neighbors = engine.spatialGrid.query(bot.pos, Math.max(80, bot.visionRange));
+    const world = this.getWorldInfo(engine);
+
+    memory.lastDecisionTick = this.tick;
+    this.captureHealthDeltas(neighbors);
+
+    let result = this.chooseBehavior(bot, engine, neighbors, memory);
+
+    if (this.shouldForceResourceRouting(bot, result.state, result.target, engine, world)) {
+      result = {
+        state: AIState.HUNT,
+        target: this.getResourceWaypoint(bot, world),
+        combatTarget: null,
+      };
+    }
+
+    result = this.applyStuckRecovery(bot, result, memory);
+    this.commitBehavior(bot, result);
+
+    const steering = this.computeSteering(bot, result.target, neighbors, result.state, engine.gameMode, world, memory);
+    bot.lastSteering = Vector.limit(steering, AI_TUNING.maxSteering);
+
+    memory.lastPos = { x: bot.pos.x, y: bot.pos.y };
+    memory.lastState = result.state;
+    memory.lastTargetId = result.target ? result.target.id : null;
+
+    this.allocateStats(bot, engine, botStatPriorities);
+  }
+
+  private shouldThink(bot: TankLike): boolean {
+    const memory = this.getMemory(bot);
+    return ((bot.id + this.tick) % memory.decisionStride) === 0;
+  }
+
+  private updateHuntTimer(bot: TankLike, dt: number): void {
+    if ((bot.aiHuntingTimer || 0) <= 0) return;
+
+    bot.aiHuntingTimer = Math.max(0, (bot.aiHuntingTimer || 0) - dt * 1000);
+    if (bot.aiHuntingTimer <= 0) {
+      bot.aiHuntingSpecialId = null;
+    }
+  }
+
+  private chooseBehavior(bot: TankLike, engine: EngineLike, neighbors: any[], memory: BotMemory): ThinkResult {
+    const hpRatio = this.getHpRatio(bot);
+    const phase = this.getBehaviorPhase(bot);
+    const projectilePressure = this.estimateProjectilePressure(bot, neighbors, engine.gameMode);
+    this.updateSightMemory(bot, neighbors, memory);
+    this.updateSquadAnchor(bot, neighbors, memory);
+    this.updateAssistUrgency(bot, neighbors, memory, engine.gameMode);
+    const postKillPaused = this.tick < memory.postKillPauseUntilTick;
+
+    const rare = this.resolveRareHuntTarget(bot, neighbors, engine);
+    const hostile = this.pickBestHostile(bot, neighbors, engine.gameMode, projectilePressure, memory);
+    const teamFightObjective = this.pickTeamFightObjective(bot, neighbors, engine.gameMode, memory);
+    const portalIntent = this.pickPortalTransitTarget(bot, neighbors, engine, hpRatio, projectilePressure);
+
+    if (hostile && this.shouldFlee(bot, hostile, hpRatio, projectilePressure, memory)) {
+      const flee = { state: AIState.FLEE, target: hostile, combatTarget: hostile };
+      this.trackArchetypeReadability(bot, memory, flee, neighbors);
+      return flee;
+    }
+
+    const assist = this.pickAssistScenario(bot, neighbors, engine.gameMode);
+    if (assist && !this.isUnderImmediateDanger(hpRatio, projectilePressure)) {
+      const bodyguard = {
+        state: AIState.BODYGUARD,
+        target: {
+          id: assist.threat.id,
+          pos: this.computeInterposePoint(assist.ally, assist.threat),
+          vel: assist.threat.vel || ZERO,
+          type: assist.threat.type,
+        },
+        combatTarget: assist.threat,
+      };
+      this.trackArchetypeReadability(bot, memory, bodyguard, neighbors);
+      return bodyguard;
+    }
+
+    if (teamFightObjective && !this.isUnderImmediateDanger(hpRatio, projectilePressure) && phase !== 'PHASE_EARLY') {
+      const teamFight = { state: AIState.COMBAT, target: teamFightObjective, combatTarget: teamFightObjective };
+      this.trackArchetypeReadability(bot, memory, teamFight, neighbors);
+      return teamFight;
+    }
+
+    const riskyLateRusher =
+      memory.sessionArchetype === 'RUSHER' &&
+      phase === 'PHASE_LATE' &&
+      memory.latePhaseDeaths > memory.latePhaseKills &&
+      (memory.latePhaseKills + memory.latePhaseDeaths) >= AI_TUNING.rusherLateRiskMinEngagements;
+
+    if (hostile && phase !== 'PHASE_EARLY' && !postKillPaused && !riskyLateRusher) {
+      const combat = { state: AIState.COMBAT, target: hostile, combatTarget: hostile };
+      this.trackArchetypeReadability(bot, memory, combat, neighbors);
+      return combat;
+    }
+    if (hostile && riskyLateRusher && hpRatio < 0.68) {
+      const regroup = { state: AIState.FLEE, target: hostile, combatTarget: hostile };
+      this.trackArchetypeReadability(bot, memory, regroup, neighbors);
+      return regroup;
+    }
+
+    if (portalIntent) {
+      const transit = { state: AIState.PROXIMAL_PORTAL_TRANSIT, target: portalIntent, combatTarget: hostile && this.isShootableTarget(hostile) ? hostile : null };
+      this.trackArchetypeReadability(bot, memory, transit, neighbors);
+      return transit;
+    }
+
+    if (rare) {
+      const hunt = { state: AIState.HUNT, target: rare, combatTarget: this.isShootableTarget(rare) ? rare : null };
+      this.trackArchetypeReadability(bot, memory, hunt, neighbors);
+      return hunt;
+    }
+
+    const farm = this.pickBestShape(bot, neighbors, projectilePressure, memory, phase);
+    if (farm) {
+      const farmResult = { state: AIState.FARM, target: farm, combatTarget: this.isShootableTarget(farm) ? farm : null };
+      this.trackArchetypeReadability(bot, memory, farmResult, neighbors);
+      return farmResult;
+    }
+
+    if (memory.squadAnchor && Vector.distSq(bot.pos, memory.squadAnchor) > AI_TUNING.squadDriftDistance * AI_TUNING.squadDriftDistance) {
+      const regroup = { state: AIState.HUNT, target: { id: -2, pos: memory.squadAnchor, vel: ZERO }, combatTarget: null };
+      this.trackArchetypeReadability(bot, memory, regroup, neighbors);
+      return regroup;
+    }
+
+    const idle = { state: AIState.IDLE, target: null, combatTarget: null };
+    this.trackArchetypeReadability(bot, memory, idle, neighbors);
+    return idle;
+  }
+
+  private shouldFlee(bot: TankLike, hostile: any, hpRatio: number, projectilePressure: number, memory: BotMemory): boolean {
+    const distanceSq = Vector.distSq(bot.pos, hostile.pos);
+    const closeThreat = distanceSq < 585 * 585;
+    const heavyThreat = this.classThreatScore(hostile.classType) >= 0.45;
+    const pressurePanic = projectilePressure >= AI_TUNING.pressureFleeThreshold && hpRatio < 0.56;
+    const outclassed = heavyThreat && hpRatio < 0.42 && closeThreat;
+
+    if ((hpRatio <= memory.fleeHealthThreshold && closeThreat) || pressurePanic || outclassed) {
+      memory.fleeLatchUntilTick = this.tick + AI_TUNING.fleeLatchTicks;
+      return true;
+    }
+
+    return (
+      memory.lastState === AIState.FLEE &&
+      hpRatio < Math.max(memory.fleeHealthThreshold + 0.12, AI_TUNING.fleeExitHpRatio) &&
+      this.tick <= memory.fleeLatchUntilTick
+    );
+  }
+
+  private isUnderImmediateDanger(hpRatio: number, projectilePressure: number): boolean {
+    return hpRatio < 0.28 || projectilePressure >= AI_TUNING.pressureFleeThreshold;
+  }
+
+  private commitBehavior(bot: TankLike, result: ThinkResult): void {
+    const shootTarget = result.combatTarget;
     const memory = this.getMemory(bot);
 
-    const hpRatio = bot.health / Math.max(1, bot.maxHealth);
-    const vision = bot.visionRange;
-    const neighbors = engine.spatialGrid.query(bot.pos, vision);
-
-    let target: any = null;
-    let state = AIState.IDLE;
-
-    // Hostile query with squared-distance scoring.
-    const hostile = this.pickBestHostile(bot, neighbors, engine.gameMode);
-    if (hostile) {
-      const d2 = Vector.distSq(bot.pos, hostile.pos);
-      if (hpRatio <= this.fleeEnterHpRatio && d2 < 560 * 560) {
-        state = AIState.FLEE;
-        memory.fleeLatchUntilTick = this.tick + this.fleeLatchTicks;
-      } else if (
-        memory.lastState === AIState.FLEE &&
-        hpRatio < this.fleeExitHpRatio &&
-        this.tick <= memory.fleeLatchUntilTick
-      ) {
-        state = AIState.FLEE;
-      } else {
-        state = AIState.COMBAT;
-      }
-      target = hostile;
+    bot.aiState = result.state;
+    bot.aiTargetId = shootTarget ? shootTarget.id : result.target ? result.target.id : null;
+    if (shootTarget && memoryNeedsIntentPromote(memory, shootTarget.id, this.tick)) {
+      bot.aiShooting = false;
     } else {
-      const farm = this.pickBestShape(bot, neighbors);
-      if (farm) {
-        state = AIState.FARM;
-        target = farm;
-      }
+      bot.aiShooting = !!shootTarget && this.stateAllowsShooting(result.state);
+    }
+  }
+
+  private stateAllowsShooting(state: AIState): boolean {
+    return (
+      state === AIState.COMBAT ||
+      state === AIState.FLEE ||
+      state === AIState.BODYGUARD ||
+      state === AIState.FARM ||
+      state === AIState.HUNT ||
+      state === AIState.PROXIMAL_PORTAL_TRANSIT
+    );
+  }
+
+  private applyStuckRecovery(bot: TankLike, result: ThinkResult, memory: BotMemory): ThinkResult {
+    if (!result.target || !this.stateWantsMovement(result.state)) {
+      memory.stuckTicks = Math.max(0, memory.stuckTicks - 1);
+      return result;
     }
 
-    const targetId = target ? target.id : null;
-    if (!target && memory.lastTargetId !== null) {
+    const movedSq = Vector.distSq(bot.pos, memory.lastPos);
+    const distanceSq = Vector.distSq(bot.pos, result.target.pos);
+    const needsMovement = distanceSq > AI_TUNING.stuckTargetDistanceSq;
+
+    if (needsMovement && movedSq < AI_TUNING.stuckDistanceSq) {
       memory.stuckTicks++;
-    }
-
-    // If movement keeps failing while we think we're in combat, drop into a roam recovery.
-    if (target && (state === AIState.COMBAT || state === AIState.FARM)) {
-      const movedSq = Vector.distSq(bot.pos, memory.lastPos);
-      const distanceSq = Vector.distSq(bot.pos, target.pos);
-      const needsMovement = distanceSq > 95 * 95;
-      if (needsMovement && movedSq < this.stuckDistanceSq) memory.stuckTicks++;
-      else memory.stuckTicks = Math.max(0, memory.stuckTicks - 1);
-      if (memory.stuckTicks >= this.maxStuckTicks) {
-        target = null;
-        state = AIState.IDLE;
-        memory.stuckTicks = 0;
-      }
     } else {
       memory.stuckTicks = Math.max(0, memory.stuckTicks - 1);
     }
 
-    bot.aiState = state;
-    bot.aiTargetId = target ? target.id : null;
+    if (memory.stuckTicks < AI_TUNING.maxStuckTicks) return result;
 
-    const steering = this.computeSteering(bot, target, neighbors, state, engine.gameMode, engine, memory);
-    bot.lastSteering = Vector.limit(steering, 4.5);
-    memory.lastPos = { x: bot.pos.x, y: bot.pos.y };
-    memory.lastState = state;
-    memory.lastTargetId = targetId;
-    this.allocateStats(bot, engine, botStatPriorities);
+    const impulseSeed = Vector.seededRandom01((bot.id * 1597334677) ^ (this.tick * 3812015801));
+    const impulseAngle = impulseSeed * Math.PI * 2;
+
+    bot.lastSteering = {
+      x: Math.cos(impulseAngle),
+      y: Math.sin(impulseAngle),
+    };
+
+    memory.stuckTicks = 0;
+    memory.strafeUntilTick = 0;
+
+    return { state: AIState.IDLE, target: null, combatTarget: null };
   }
 
-  private countActiveBots(engine: EngineLike): number {
-    let c = 0;
-    for (let i = 0; i < engine.entities.length; i++) {
-      const e = engine.entities[i];
-      if ((e.type === EntityType.ENEMY || e.type === EntityType.PLAYER) && !e.isDead) c++;
-    }
-    return c;
+  private stateWantsMovement(state: AIState): boolean {
+    return state === AIState.COMBAT || state === AIState.FARM || state === AIState.HUNT || state === AIState.BODYGUARD || state === AIState.PROXIMAL_PORTAL_TRANSIT;
   }
 
-  private pickBestHostile(bot: TankLike, neighbors: any[], mode: GameMode): any {
+  private pickBestHostile(
+    bot: TankLike,
+    neighbors: any[],
+    mode: GameMode,
+    projectilePressure: number,
+    memory: BotMemory
+  ): any | null {
     let best: any = null;
     let bestScore = -Infinity;
+
     for (let i = 0; i < neighbors.length; i++) {
       const e = neighbors[i];
-      if (!e || e.id === bot.id || e.isDead) continue;
-      const isTankLike = e.type === EntityType.PLAYER || e.type === EntityType.ENEMY || e.type === EntityType.ELITE_TANK || e.type === EntityType.GUARDIAN;
-      if (!isTankLike) continue;
-      if (mode !== GameMode.FFA && e.team === bot.team) continue;
-      const d2 = Vector.distSq(bot.pos, e.pos);
-      if (d2 <= 0.0001) continue;
-      const proximity = 1 / d2;
-      const hpRatio = (e.health || 1) / Math.max(1, e.maxHealth || 1);
-      const lowHpBonus = hpRatio < 0.5 ? (1 - hpRatio) * 0.6 : 0;
+      if (!this.isValidEntity(e) || e.id === bot.id || !this.isTankLike(e)) continue;
+      if (this.isFriendly(bot, e, mode)) continue;
+      const seenTick = memory.seenHostiles.get(e.id);
+      if (seenTick == null || this.tick - seenTick < memory.discoveryDelayTicks) continue;
+
+      const distanceSq = Vector.distSq(bot.pos, e.pos);
+      if (distanceSq <= 0.0001) continue;
+
+      const enemyHpRatio = this.getEntityHpRatio(e);
+      const proximityScore = 900000 / distanceSq;
+      const lowHpBonus = enemyHpRatio < 0.5 ? (1 - enemyHpRatio) * 1.05 : 0;
       const classThreat = this.classThreatScore(e.classType);
-      const score = proximity * 900000 + lowHpBonus + classThreat;
+      const finishBonus = this.canLikelyFinish(bot, e) ? 0.48 : 0;
+      const stickinessWeight = 0.8 + ((bot.id % 5) * 0.1);
+      const targetStickiness = memory.lastTargetId === e.id ? stickinessWeight : 0;
+      const dangerPenalty = projectilePressure >= AI_TUNING.pressureCautionThreshold ? classThreat * 0.18 : 0;
+      const aggression = memory.aggressionBias * 0.65;
+      const alliedFocus = this.getAlliedFocusWeight(bot, e, neighbors, mode);
+      const exposedEnemy = this.wasRecentlyDamaged(e.id, 12) ? 0.22 : 0;
+
+      const score =
+        proximityScore + lowHpBonus + classThreat + finishBonus + targetStickiness + aggression + alliedFocus + exposedEnemy - dangerPenalty;
+
+      if (this.tick < memory.targetLockUntilTick && memory.lastTargetId != null && e.id !== memory.lastTargetId) continue;
       if (score > bestScore) {
         bestScore = score;
         best = e;
       }
     }
+
     return best;
   }
 
-  private pickBestShape(bot: TankLike, neighbors: any[]): any {
+  private pickBestShape(bot: TankLike, neighbors: any[], projectilePressure: number, memory: BotMemory, phase: 'PHASE_EARLY' | 'PHASE_MID' | 'PHASE_LATE'): any | null {
     let best: any = null;
     let bestScore = -Infinity;
+    const hpRatio = this.getHpRatio(bot);
+
     for (let i = 0; i < neighbors.length; i++) {
       const e = neighbors[i];
-      if (!e || e.isDead) continue;
-      if (e.type !== EntityType.SHAPE && e.type !== EntityType.BOSS && e.type !== EntityType.CRASHER) continue;
-      const d2 = Vector.distSq(bot.pos, e.pos);
-      if (d2 <= 0.0001) continue;
-      let score = 700000 / d2;
-      if (e.type === EntityType.BOSS) score *= 2.6;
+      if (!this.isValidEntity(e) || !this.isFarmTarget(e)) continue;
+      if (phase === 'PHASE_EARLY' && e.type === EntityType.CRASHER) continue;
+
+      const distanceSq = Vector.distSq(bot.pos, e.pos);
+      if (distanceSq <= 0.0001) continue;
+
+      const xp = typeof e.xpValue === 'number' ? e.xpValue : 100;
+      const rarityBoost = this.isRareFarmTarget(e) ? 1.75 : 1;
+      const bossBoost = e.type === EntityType.BOSS ? 2.65 : 1;
+      const crasherRisk = e.type === EntityType.CRASHER && hpRatio < 0.58 ? 0.55 : 1;
+      const pressurePenalty = projectilePressure >= AI_TUNING.pressureCautionThreshold ? 0.78 : 1;
+
+      const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, e, neighbors) ? 0.75 : 1;
+      const score = ((xp * 8500 * rarityBoost * bossBoost * crasherRisk * pressurePenalty * antiOverlap) / distanceSq);
+
       if (score > bestScore) {
         bestScore = score;
         best = e;
       }
     }
+
     return best;
+  }
+
+  private resolveRareHuntTarget(bot: TankLike, neighbors: any[], engine: EngineLike): any | null {
+    if (bot.aiHuntingSpecialId != null) {
+      const pinned = this.findAliveEntityById(engine.entities, bot.aiHuntingSpecialId);
+      if (pinned && this.isRareFarmTarget(pinned)) return pinned;
+      bot.aiHuntingSpecialId = null;
+    }
+
+    const allyCall = this.findAllyRareHuntCall(bot, neighbors, engine);
+    if (allyCall) {
+      bot.aiHuntingSpecialId = allyCall.id;
+      bot.aiHuntingTimer = AI_TUNING.rareHuntTimerMs;
+      return allyCall;
+    }
+
+    let best: any = null;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || !this.isRareFarmTarget(e)) continue;
+
+      const distanceSq = Vector.distSq(bot.pos, e.pos);
+      if (distanceSq <= 0.0001) continue;
+
+      const xp = typeof e.xpValue === 'number' ? e.xpValue : 0;
+      const bossBonus = e.type === EntityType.BOSS ? 4000 : 0;
+      const sizeBonus = typeof e.radius === 'number' ? Math.max(0, e.radius - 55) * 18 : 0;
+      const score = (xp + bossBonus + sizeBonus) / distanceSq;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+
+    if (best) {
+      bot.aiHuntingSpecialId = best.id;
+      bot.aiHuntingTimer = AI_TUNING.rareHuntTimerMs;
+    }
+
+    return best;
+  }
+
+  private findAllyRareHuntCall(bot: TankLike, neighbors: any[], engine: EngineLike): any | null {
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (ally.team !== bot.team || ally.aiHuntingSpecialId == null) continue;
+
+      const target = this.findAliveEntityById(engine.entities, ally.aiHuntingSpecialId);
+      if (target && this.isRareFarmTarget(target)) return target;
+    }
+
+    return null;
+  }
+
+  private pickAssistScenario(bot: TankLike, neighbors: any[], mode: GameMode): { ally: any; threat: any } | null {
+    if (mode === GameMode.FFA || bot.team === Team.NONE) return null;
+
+    let bestAlly: any = null;
+    let bestThreat: any = null;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (ally.team !== bot.team) continue;
+
+      const allyDistanceSq = Vector.distSq(bot.pos, ally.pos);
+      if (allyDistanceSq > AI_TUNING.assistRadius * AI_TUNING.assistRadius) continue;
+
+      const allyHpRatio = this.getEntityHpRatio(ally);
+      const recentlyDamaged = this.wasRecentlyDamaged(ally.id, 12);
+      if (allyHpRatio > AI_TUNING.allyCriticalHpRatio && !recentlyDamaged) continue;
+
+      const threat = this.findNearestThreatToAlly(bot, ally, neighbors, mode);
+      if (!threat) continue;
+
+      const urgency = (1 - Math.min(1, allyHpRatio)) + (recentlyDamaged ? 0.45 : 0);
+      const distanceScore = 250000 / Math.max(1, allyDistanceSq);
+      const threatScore = this.classThreatScore(threat.classType) * 0.35;
+      const memory = this.getMemory(bot);
+      const urgencyBoost = this.tick < memory.assistUrgencyUntilTick ? 0.55 : 0;
+      const score = urgency * 2 + distanceScore + threatScore + urgencyBoost;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestAlly = ally;
+        bestThreat = threat;
+      }
+    }
+
+    return bestAlly && bestThreat ? { ally: bestAlly, threat: bestThreat } : null;
+  }
+
+  private findNearestThreatToAlly(bot: TankLike, ally: any, neighbors: any[], mode: GameMode): any | null {
+    let nearestThreat: any = null;
+    let nearestThreatDistanceSq = Infinity;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const threat = neighbors[i];
+      if (!this.isValidEntity(threat) || threat.id === ally.id || threat.id === bot.id || !this.isTankLike(threat)) continue;
+      if (this.isFriendly(bot, threat, mode)) continue;
+
+      const distanceSq = Vector.distSq(ally.pos, threat.pos);
+      if (distanceSq > AI_TUNING.assistThreatRadius * AI_TUNING.assistThreatRadius) continue;
+
+      if (distanceSq < nearestThreatDistanceSq) {
+        nearestThreatDistanceSq = distanceSq;
+        nearestThreat = threat;
+      }
+    }
+
+    return nearestThreat;
   }
 
   private computeSteering(
     bot: TankLike,
-    target: any,
+    target: any | null,
     neighbors: any[],
     state: AIState,
     mode: GameMode,
-    engine: EngineLike,
+    world: WorldInfo,
     memory: BotMemory
   ): Vector2 {
-    let goal = { x: 0, y: 0 };
-    if (target) {
-      if (state === AIState.FLEE) {
-        goal = this.movement.fleeForce(bot.pos, target.pos);
-      } else if (state === AIState.COMBAT || state === AIState.FARM) {
-        const d2 = Vector.distSq(bot.pos, target.pos);
-        const desiredMin = state === AIState.FARM ? 145 : 280;
-        const desiredMax = state === AIState.FARM ? 300 : 520;
-        if (d2 > desiredMax * desiredMax) {
-          goal = this.movement.seekForce(bot.pos, target.pos);
-        } else if (d2 < desiredMin * desiredMin) {
-          goal = this.movement.fleeForce(bot.pos, target.pos);
-        } else {
-          // Within ideal range: orbit/strafe with deterministic phase to avoid stopping dead.
-          const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
-          const sideSign = (((this.tick + bot.id) & 1) === 0) ? 1 : -1;
-          goal = { x: -toTarget.y * sideSign, y: toTarget.x * sideSign };
+    const goal = this.computeGoalForce(bot, target, neighbors, state, mode, memory);
+    const squad = this.computeSquadForce(bot, neighbors, mode, state, target);
+    const avoid = this.computeAvoidanceForce(bot, mode, world);
+    const farmAvoid = this.computeFarmShapeAvoidanceForce(bot, neighbors, state);
+    const blendedAvoid = this.movement.composeSteering([avoid, farmAvoid], [1.0, 1.25], 2.8);
+
+    const scoutSlow = this.tick < memory.zoneScoutUntilTick ? 0.72 : 1;
+    return Vector.mult(this.movement.composeSteeringWithPriority(blendedAvoid, squad, goal, AI_TUNING.maxSteering), scoutSlow);
+  }
+
+  private computeGoalForce(
+    bot: TankLike,
+    target: any | null,
+    neighbors: any[],
+    state: AIState,
+    mode: GameMode,
+    memory: BotMemory
+  ): Vector2 {
+    if (!target) {
+      if (mode === GameMode.TEAMS && bot.team !== Team.NONE) {
+        const regroup = this.computeTeamRegroupPoint(bot, neighbors);
+        if (regroup) {
+          return this.movement.arriveForce(bot.pos, regroup.pos, 360);
         }
       }
-    } else {
-      const jitter = Vector.seededRandom01((this.tick * 73856093) ^ (bot.id * 19349663));
-      const wander = this.movement.wanderForce(bot.pos, bot.vel, memory.wanderAngle, 52, 36, jitter);
-      memory.wanderAngle = wander.nextAngle;
-      goal = wander.force;
+      return this.computeIdleClusterForce(bot, neighbors, memory);
     }
 
-    this.cachedAllies.length = 0;
-    for (let i = 0; i < neighbors.length; i++) {
-      const e = neighbors[i];
-      if (!e || e.id === bot.id || e.isDead) continue;
-      if ((e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && e.team === bot.team) {
-        this.cachedAllies.push({ pos: e.pos });
+    if (state === AIState.FLEE) {
+      return this.computeFleeForce(bot, target, neighbors, mode, memory);
+    }
+
+    if (state === AIState.COMBAT || state === AIState.FARM) {
+      return this.computeRangeControlForce(bot, target, state, memory);
+    }
+
+    if (state === AIState.HUNT || state === AIState.BODYGUARD) {
+      return this.movement.arriveForce(bot.pos, target.pos, 320);
+    }
+    if (state === AIState.PROXIMAL_PORTAL_TRANSIT) {
+      return this.movement.arriveForce(bot.pos, target.pos, 280, AI_TUNING.portalTransitCommitRadius * 0.5);
+    }
+
+    return this.computeIdleClusterForce(bot, neighbors, memory);
+  }
+
+  private computeRangeControlForce(bot: TankLike, target: any, state: AIState, memory: BotMemory): Vector2 {
+    const range = this.getPreferredRange(bot, state, target);
+    const distanceSq = Vector.distSq(bot.pos, target.pos);
+    if (state === AIState.FARM && this.isFarmTarget(target)) {
+      const targetRadius = typeof target.radius === 'number' ? target.radius : 18;
+      const hardStop = bot.radius + targetRadius + AI_TUNING.farmEmergencyFleePadding;
+      if (distanceSq < hardStop * hardStop) {
+        return this.movement.fleeForce(bot.pos, target.pos);
       }
     }
-    const sep = this.movement.separationForce(bot.pos, this.cachedAllies, mode === GameMode.FFA ? 95 : 130);
-    const avoid = this.movement.boundaryAvoidanceForce(
+
+    if (distanceSq > range.max * range.max) {
+      return this.movement.arriveForce(bot.pos, target.pos, state === AIState.FARM ? 245 : 315);
+    }
+
+    if (distanceSq < range.min * range.min) {
+      return this.movement.fleeForce(bot.pos, target.pos);
+    }
+
+    const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
+
+    if (this.tick >= memory.strafeUntilTick) {
+      const dirSeed = Vector.seededRandom01((bot.id * 16807) ^ (this.tick * 48271));
+      memory.strafeDir = dirSeed > 0.5 ? 1 : -1;
+      memory.strafeUntilTick = this.tick + 24 + Math.floor(Vector.seededRandom01((bot.id * 69691) ^ this.tick) * 26);
+    }
+
+    const sideSign = memory.strafeDir;
+    const strafe = { x: -toTarget.y * sideSign, y: toTarget.x * sideSign };
+    const hold = this.movement.arriveForce(bot.pos, target.pos, state === AIState.FARM ? 220 : 265, range.min);
+    const dodgeBias = this.getSmallDodgeBias(bot, target, memory);
+
+    return this.movement.composeSteering([strafe, hold, dodgeBias], [0.74, 0.38, 0.18], 1.35);
+  }
+
+  private computeFleeForce(bot: TankLike, target: any, neighbors: any[], mode: GameMode, memory: BotMemory): Vector2 {
+    this.cachedThreats.length = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.id === bot.id || !this.isTankLike(e)) continue;
+      if (this.isFriendly(bot, e, mode)) continue;
+      this.cachedThreats.push(e);
+    }
+
+    if (this.cachedThreats.length <= 0) {
+      return this.applyPanicFleeOffset(this.movement.fleeForce(bot.pos, target.pos), memory.panicFleeAngleOffset);
+    }
+
+    let fleeX = 0;
+    let fleeY = 0;
+
+    for (let i = 0; i < this.cachedThreats.length; i++) {
+      const threat = this.cachedThreats[i];
+      const dx = bot.pos.x - threat.pos.x;
+      const dy = bot.pos.y - threat.pos.y;
+      const distanceSq = Math.max(1, dx * dx + dy * dy);
+      const threatWeight = 1 + this.classThreatScore(threat.classType);
+
+      fleeX += (dx / distanceSq) * threatWeight;
+      fleeY += (dy / distanceSq) * threatWeight;
+    }
+
+    return this.applyPanicFleeOffset(Vector.normalize({ x: fleeX, y: fleeY }), memory.panicFleeAngleOffset);
+  }
+
+  private computeWanderForce(bot: TankLike, memory: BotMemory): Vector2 {
+    const jitter = Vector.seededRandom01((this.tick * 73856093) ^ (bot.id * 19349663));
+    const wander = this.movement.wanderForce(bot.pos, bot.vel, memory.wanderAngle, 52, 36, jitter);
+    memory.wanderAngle = wander.nextAngle;
+    return wander.force;
+  }
+
+  private computeIdleClusterForce(bot: TankLike, neighbors: any[], memory: BotMemory): Vector2 {
+    let total = 0;
+    let wx = 0;
+    let wy = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || !this.isFarmTarget(e) || e.type === EntityType.CRASHER) continue;
+      const xp = Math.max(1, typeof e.xpValue === 'number' ? e.xpValue : 100);
+      const d = Math.max(40, Math.sqrt(Vector.distSq(bot.pos, e.pos)));
+      const w = xp / d;
+      total += w;
+      wx += e.pos.x * w;
+      wy += e.pos.y * w;
+    }
+    if (total > 0.001) {
+      const centroid = { x: wx / total, y: wy / total };
+      if (this.tick > memory.zoneScoutUntilTick) {
+        memory.zoneScoutUntilTick = this.tick + 10 + Math.floor(Vector.seededRandom01(bot.id * 991) * 20);
+        memory.orbitUntilTick = this.tick + 20 + Math.floor(Vector.seededRandom01(bot.id * 997) * 20);
+      }
+      if (this.tick < memory.orbitUntilTick) {
+        const to = Vector.normalize(Vector.sub(centroid, bot.pos));
+        return { x: -to.y, y: to.x };
+      }
+      return this.movement.arriveForce(bot.pos, centroid, 420);
+    }
+    return this.computeWanderForce(bot, memory);
+  }
+
+  private computeSquadForce(bot: TankLike, neighbors: any[], mode: GameMode, state: AIState, target: any | null): Vector2 {
+    this.cachedAllies.length = 0;
+    this.cachedAllyVels.length = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.id === bot.id || !this.isTankLike(e)) continue;
+      if (mode !== GameMode.FFA && e.team === bot.team) {
+        this.cachedAllies.push({ pos: e.pos });
+        if (e.vel) this.cachedAllyVels.push(e.vel);
+      }
+    }
+
+    const inPortalTransit = state === AIState.PROXIMAL_PORTAL_TRANSIT && target && target.type === EntityType.VOID_PORTAL;
+    const sep = this.movement.separationForce(
+      bot.pos,
+      this.cachedAllies,
+      inPortalTransit ? 64 : (mode === GameMode.FFA ? AI_TUNING.ffaSeparationRadius : AI_TUNING.allySeparationRadius)
+    );
+    const coh = this.movement.cohesionForce(bot.pos, this.cachedAllies, inPortalTransit ? 520 : AI_TUNING.cohesionRadius);
+    const align = this.movement.alignmentForce(bot.vel, this.cachedAllyVels);
+    const weights: [number, number, number] = inPortalTransit ? [0.74, 0.62, 0.28] : [1.25, 0.28, 0.28];
+    return this.movement.composeSteering([sep, coh, align], weights, 2.5);
+  }
+
+  private pickPortalTransitTarget(bot: TankLike, neighbors: any[], engine: EngineLike, hpRatio: number, projectilePressure: number): any | null {
+    if (engine.inVoid) return null;
+    if (hpRatio < 0.26 || projectilePressure > AI_TUNING.pressureFleeThreshold) return null;
+    let best: any | null = null;
+    let bestDistSq = Infinity;
+    const maxDistSq = AI_TUNING.portalTransitDetectionRadius * AI_TUNING.portalTransitDetectionRadius;
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.type !== EntityType.VOID_PORTAL) continue;
+      if (e.isExit) continue;
+      const d2 = Vector.distSq(bot.pos, e.pos);
+      if (d2 > maxDistSq) continue;
+      const phase = typeof e.phase === 'string' ? e.phase : 'BLACK_HOLE';
+      const phaseScore = phase === 'EXPANDING' ? 0 : phase === 'WHITE_HOLE' ? 1 : 2;
+      if (!best || phaseScore < (typeof best.phase === 'string' ? (best.phase === 'EXPANDING' ? 0 : best.phase === 'WHITE_HOLE' ? 1 : 2) : 2) || d2 < bestDistSq) {
+        best = e;
+        bestDistSq = d2;
+      }
+    }
+    return best;
+  }
+
+  private computeAvoidanceForce(bot: TankLike, mode: GameMode, world: WorldInfo): Vector2 {
+    const boundary = this.movement.boundaryAvoidanceForce(
       bot.pos,
       bot.vel,
-      engine.width || this.defaultWorldWidth,
-      engine.height || this.defaultWorldHeight,
-      220,
-      120
+      world.width,
+      world.height,
+      AI_TUNING.boundaryLookAhead,
+      AI_TUNING.boundaryStrength
     );
 
-    return this.movement.composeSteeringWithPriority(avoid, sep, goal, 4.5);
+    const hostileZoneAvoid = this.movement.safeZoneAvoidanceForce(
+      bot.pos,
+      bot.team,
+      mode,
+      world.width,
+      world.baseZoneWidth,
+      SAFE_ZONE_WARNING_RADIUS
+    );
+
+    const spawnDispersion = this.getOwnSpawnDispersionForce(bot.pos, bot.team, mode, world);
+
+    return this.movement.composeSteering([boundary, hostileZoneAvoid, spawnDispersion], [1.0, 0.95, 1.35], 2.6);
+  }
+
+  private getPreferredRange(bot: TankLike, state: AIState, target: any): { min: number; max: number } {
+    if (state === AIState.FARM) {
+      const crasherPadding = target?.type === EntityType.CRASHER ? 70 : 0;
+      return {
+        min: AI_TUNING.farmMinRange + crasherPadding,
+        max: AI_TUNING.farmMaxRange + crasherPadding,
+      };
+    }
+
+    if (this.isHeavySniperClass(bot.classType)) {
+      return { min: AI_TUNING.heavyMinRange, max: AI_TUNING.heavyMaxRange };
+    }
+
+    if (this.isSupportClass(bot.classType)) {
+      return { min: 340, max: 620 };
+    }
+
+    return { min: AI_TUNING.combatMinRange, max: AI_TUNING.combatMaxRange };
+  }
+
+  private getSmallDodgeBias(bot: TankLike, target: any, memory: BotMemory): Vector2 {
+    const seed = Vector.seededRandom01((bot.id * 2654435761) ^ (this.tick * 374761393));
+    const wobble = (seed - 0.5) * 0.28 + memory.aimNoise * 0.08;
+    const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
+    return { x: -toTarget.y * wobble, y: toTarget.x * wobble };
+  }
+
+  private computeFarmShapeAvoidanceForce(bot: TankLike, neighbors: any[], state: AIState): Vector2 {
+    if (state !== AIState.FARM) return ZERO;
+    let fx = 0;
+    let fy = 0;
+    let count = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || !this.isFarmTarget(e)) continue;
+      const er = typeof e.radius === 'number' ? e.radius : 14;
+      const avoidRadius = bot.radius + er + AI_TUNING.farmShapeAvoidRadiusPadding;
+      const dx = bot.pos.x - e.pos.x;
+      const dy = bot.pos.y - e.pos.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq <= 0.0001 || distSq > avoidRadius * avoidRadius) continue;
+      const dist = Math.sqrt(distSq);
+      const closeness = 1 - Math.min(1, dist / avoidRadius);
+      const typeMult = e.type === EntityType.CRASHER ? 1.7 : 1.15;
+      const w = (closeness * typeMult) / Math.max(24, dist);
+      fx += dx * w;
+      fy += dy * w;
+      count++;
+    }
+    if (count === 0) return ZERO;
+    return Vector.normalize({ x: fx, y: fy });
   }
 
   private classThreatScore(cls: TankClass): number {
-    if (cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.WARLORD || cls === TankClass.CELESTIAL) return 0.65;
-    if (cls === TankClass.ANNIHILATOR || cls === TankClass.DESTROYER || cls === TankClass.HYBRID) return 0.45;
-    if (cls === TankClass.NURSE || cls === TankClass.DOCTOR || cls === TankClass.PLAGUE_DOCTOR) return 0.4;
+    if (cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.WARLORD || cls === TankClass.CELESTIAL) return 0.88;
+    if (cls === TankClass.ANNIHILATOR || cls === TankClass.DESTROYER || cls === TankClass.HYBRID) return 0.35;
+    if (cls === TankClass.FIGHTER || cls === TankClass.BOOSTER || cls === TankClass.TRI_ANGLE) return 0.28;
+    if (cls === TankClass.NURSE || cls === TankClass.DOCTOR || cls === TankClass.PLAGUE_DOCTOR) return 0.42;
     return 0.2;
   }
 
+  private isHeavySniperClass(cls: TankClass): boolean {
+    return cls === TankClass.ANNIHILATOR || cls === TankClass.DESTROYER || cls === TankClass.HYBRID;
+  }
+
+  private isSupportClass(cls: TankClass): boolean {
+    return cls === TankClass.NURSE || cls === TankClass.DOCTOR || cls === TankClass.PLAGUE_DOCTOR;
+  }
+
   private applyRotation(bot: TankLike, dt: number): void {
-    let diff = bot.aiTargetRot - bot.rotation;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    bot.rotation += diff * Math.min(1, dt * 10.5);
+    const memory = this.getMemory(bot);
+
+    if (bot.aiTargetId == null) {
+      const scanSeed = Vector.seededRandom01((bot.id * 83492791) ^ (this.tick * 2971215073));
+      const scanBias = (scanSeed - 0.5) * 0.08;
+      const moveDir = Vector.magSq(bot.vel) > 0.0001 ? Math.atan2(bot.vel.y, bot.vel.x) : bot.rotation;
+
+      memory.lookAngle += dt * (0.6 + scanBias);
+      memory.lookPhase += dt * 0.85;
+
+      bot.aiTargetRot =
+        moveDir +
+        Math.sin(memory.lookAngle) * 0.38 +
+        Math.cos(memory.lookAngle * 0.57) * 0.16 +
+        Math.sin(memory.lookPhase) * 0.08;
+    } else {
+      const micro = Vector.seededRandom01((bot.id * 2654435761) ^ (this.tick * 805459861));
+      bot.aiTargetRot += (micro - 0.5) * 0.011;
+    }
+
+    const diff = this.normalizeAngle(bot.aiTargetRot - bot.rotation);
+    bot.rotation += diff * Math.min(1, dt * 8.2);
   }
 
   private handleShooting(bot: TankLike, engine: EngineLike): void {
     if (!bot.aiShooting || bot.aiTargetId == null) return;
-    const target = engine.entities.find(e => e.id === bot.aiTargetId && !e.isDead);
-    if (!target) return;
-    const bSpeed = BASE_BULLET_SPEED + bot.stats[StatType.BULLET_SPEED] * 0.8;
-    const aimPos = engine.getInterceptPoint(bot.pos, bSpeed, target.pos, target.vel || { x: 0, y: 0 });
-    bot.aiTargetRot = Math.atan2(aimPos.y - bot.pos.y, aimPos.x - bot.pos.x);
-    let angleDiff = bot.aiTargetRot - bot.rotation;
-    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-    if (Math.abs(angleDiff) < 0.22) engine.attemptShoot(bot);
+
+    const local = engine.spatialGrid.query(bot.pos, bot.visionRange + 280);
+    const target = this.findAliveEntityById(local, bot.aiTargetId);
+    if (!target || !this.isShootableTarget(target)) return;
+
+    const memory = this.getMemory(bot);
+    const bulletSpeed = BASE_BULLET_SPEED + (bot.stats[StatType.BULLET_SPEED] || 0) * 0.8;
+    const aimPos = engine.getInterceptPoint(bot.pos, bulletSpeed, target.pos, target.vel || ZERO);
+
+    const distanceSq = Vector.distSq(bot.pos, target.pos);
+    const distance = Math.sqrt(distanceSq);
+    const aimNoiseScale = this.getAimNoiseScale(bot, target, distance);
+    const aimNoise = (memory.aimNoise + this.deterministicNoise(bot.id, this.tick)) * aimNoiseScale;
+
+    bot.aiTargetRot = Math.atan2(aimPos.y - bot.pos.y, aimPos.x - bot.pos.x) + aimNoise;
+
+    const angleDiff = Math.abs(this.normalizeAngle(bot.aiTargetRot - bot.rotation));
+    const fireCone = this.getFireCone(bot, target, distance);
+
+    if (angleDiff < fireCone) {
+      if (memory.shootHesitancyCounter < memory.shootHesitancyTicks) {
+        memory.shootHesitancyCounter++;
+        return;
+      }
+      memory.shootHesitancyCounter = 0;
+      engine.attemptShoot(bot);
+    }
+  }
+
+  private getAimNoiseScale(bot: TankLike, target: any, distance: number): number {
+    if (target.type === EntityType.SHAPE || target.type === EntityType.BOSS) return 0.003;
+    const speedStat = bot.stats[StatType.BULLET_SPEED] || 0;
+    const hpRatio = this.getHpRatio(bot);
+    const speed = Math.sqrt(Vector.magSq(bot.vel));
+    const distancePenalty = Math.min(0.045, distance / 26000);
+    const panicPenalty = hpRatio < 0.4 ? (0.06 * (0.4 - hpRatio) / 0.4) : 0;
+    const movementPenalty = Math.min(0.03, speed * 0.0055);
+    return Math.max(0.002, 0.014 - speedStat * 0.001 + distancePenalty + panicPenalty + movementPenalty);
+  }
+
+  private getFireCone(bot: TankLike, target: any, distance: number): number {
+    if (target.type === EntityType.SHAPE || target.type === EntityType.BOSS || target.type === EntityType.CRASHER) return 0.26;
+    if (this.isHeavySniperClass(bot.classType)) return distance > 580 ? 0.12 : 0.16;
+    return 0.22;
   }
 
   private allocateStats(bot: TankLike, engine: EngineLike, priorities: Record<TankClass, StatType[]>): void {
     if (bot.availableStatPoints <= 0) return;
+
     const prio = priorities[bot.classType] || priorities[TankClass.BASIC] || [];
+    if (prio.length <= 0) return;
+
+    let upgrades = 0;
+
     for (let i = 0; i < prio.length && bot.availableStatPoints > 0; i++) {
-      const s = prio[i];
-      if ((bot.stats[s] || 0) < 8) {
-        engine.upgradeStat(bot, s);
-      }
+      if (upgrades >= AI_TUNING.maxStatUpgradesPerDecision) break;
+
+      const stat = prio[i];
+      if ((bot.stats[stat] || 0) >= 8) continue;
+
+      engine.upgradeStat(bot, stat);
+      upgrades++;
     }
   }
 
   private getMemory(bot: TankLike): BotMemory {
     let memory = this.botMemory.get(bot.id);
     if (memory) return memory;
+
+    const archetype = this.getArchetype(bot.id);
+    const fleeSeed = Vector.seededRandom01(bot.id * 10391);
+    const reactionSeed = Vector.seededRandom01(bot.id * 20389);
+    const panicSeed = Vector.seededRandom01(bot.id * 30859);
+    const strideSeed = Vector.seededRandom01(bot.id * 45053);
+    const shootSeed = Vector.seededRandom01(bot.id * 55049);
+    const delaySeed = Vector.seededRandom01(bot.id * 65011);
+    const archetypeAgg = archetype === 'RUSHER' ? 0.75 : archetype === 'FARMER' ? -0.6 : archetype === 'SUPPORT' ? -0.2 : 0.15;
+    const fleeThreshold =
+      archetype === 'FARMER' ? 0.45 + fleeSeed * 0.15 :
+      archetype === 'RUSHER' ? fleeSeed * 0.2 :
+      archetype === 'SUPPORT' ? 0.35 + fleeSeed * 0.18 :
+      0.22 + fleeSeed * 0.3;
+    const stride =
+      archetype === 'RUSHER' ? 7 + Math.floor(strideSeed * 2) :
+      archetype === 'FARMER' ? 13 + Math.floor(strideSeed * 3) :
+      archetype === 'EXPLORER' ? 12 + Math.floor(strideSeed * 3) :
+      AI_TUNING.defaultDecisionStride + Math.floor(strideSeed * 3);
+
     memory = {
+      sessionArchetype: archetype,
       wanderAngle: Vector.seededRandom01(bot.id * 92821) * Math.PI * 2,
+      lookAngle: Vector.seededRandom01(bot.id * 71933) * Math.PI * 2,
+      lookPhase: Vector.seededRandom01(bot.id * 41911) * Math.PI * 2,
       fleeLatchUntilTick: 0,
       stuckTicks: 0,
+      strafeDir: 1,
+      strafeUntilTick: 0,
       lastPos: { x: bot.pos.x, y: bot.pos.y },
       lastState: AIState.IDLE,
       lastTargetId: null,
+      aggressionBias: Math.max(-1, Math.min(1, archetypeAgg + (Vector.seededRandom01(bot.id * 49999) * 0.7 - 0.35))),
+      aimNoise: Vector.seededRandom01(bot.id * 81817) * 2 - 1,
+      lastDecisionTick: this.tick,
+      teamFightTargetId: null,
+      teamFightUntilTick: 0,
+      fleeHealthThreshold: fleeThreshold,
+      decisionStride: stride,
+      discoveryDelayTicks: Math.max(1, Math.round((archetype === 'RUSHER' ? 6 : archetype === 'SUPPORT' ? 15 : 17) + reactionSeed * 10)),
+      intentDelayTicks: Math.max(1, Math.round((archetype === 'RUSHER' ? 6 : 10) + delaySeed * 8)),
+      targetLockUntilTick: 0,
+      intentTargetId: null,
+      intentPromoteTick: 0,
+      seenHostiles: new Map<number, number>(),
+      shootHesitancyTicks: Math.floor(shootSeed * 4),
+      shootHesitancyCounter: 0,
+      panicFleeAngleOffset: (panicSeed * 2 - 1) * ((20 + Vector.seededRandom01(bot.id * 77713) * 10) * Math.PI / 180),
+      postKillPauseUntilTick: 0,
+      squadAnchor: null,
+      squadAnchorTick: 0,
+      assistUrgencyUntilTick: 0,
+      zoneScoutUntilTick: 0,
+      orbitUntilTick: 0,
+      firstTellLoggedTick: -1,
+      sameFeelLogged: false,
+      latePhaseKills: 0,
+      latePhaseDeaths: 0,
     };
+
     this.botMemory.set(bot.id, memory);
     return memory;
   }
+
+  private captureHealthDeltas(neighbors: any[]): void {
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!e || typeof e.id !== 'number' || e.isDead || typeof e.health !== 'number') continue;
+
+      const prev = this.lastHealthSnapshot.get(e.id);
+      if (!prev) {
+        this.lastHealthSnapshot.set(e.id, { health: e.health, lastDropTick: -999999 });
+        continue;
+      }
+
+      if (e.health < prev.health - 0.001) {
+        prev.lastDropTick = this.tick;
+        if (e.health <= 0) {
+          const killerId = typeof e.lastDamageSourceId === 'number' ? e.lastDamageSourceId : null;
+          if (killerId !== null) {
+            const killerMemory = this.botMemory.get(killerId);
+            if (killerMemory) killerMemory.latePhaseKills++;
+          }
+          const victimMemory = this.botMemory.get(e.id);
+          if (victimMemory) victimMemory.latePhaseDeaths++;
+          for (const m of this.botMemory.values()) {
+            const pause = AI_TUNING.postKillPauseMinTicks + Math.floor(Vector.seededRandom01((e.id * 379) ^ this.tick) * (AI_TUNING.postKillPauseMaxTicks - AI_TUNING.postKillPauseMinTicks + 1));
+            m.postKillPauseUntilTick = Math.max(m.postKillPauseUntilTick, this.tick + pause);
+          }
+        }
+      }
+
+      prev.health = e.health;
+    }
+  }
+
+  private wasRecentlyDamaged(id: number, withinTicks: number): boolean {
+    const snapshot = this.lastHealthSnapshot.get(id);
+    if (!snapshot) return false;
+    return this.tick - snapshot.lastDropTick <= withinTicks;
+  }
+
+  private shouldForceResourceRouting(bot: TankLike, state: AIState, target: any | null, engine: EngineLike, world: WorldInfo): boolean {
+    if (engine.gameMode !== GameMode.TEAMS) return false;
+    if (state === AIState.FLEE || state === AIState.COMBAT || state === AIState.BODYGUARD) return false;
+    if (target && (state === AIState.FARM || state === AIState.HUNT)) return false;
+
+    return this.isInsideOwnSafeZone(bot, world);
+  }
+
+  private isInsideOwnSafeZone(bot: TankLike, world: WorldInfo): boolean {
+    if (bot.team === Team.BLUE) return bot.pos.x < world.baseZoneWidth;
+    if (bot.team === Team.RED) return bot.pos.x > world.width - world.baseZoneWidth;
+    return false;
+  }
+
+  private getResourceWaypoint(bot: TankLike, world: WorldInfo): any {
+    const center = { x: world.width * 0.5, y: world.height * 0.5 };
+    const centerBias = Math.min(0.2, 0.15 + ((bot.id % 100) / 1000));
+    const useCenter = Vector.seededRandom01((bot.id * 31) ^ this.tick) < centerBias;
+    const lateral = useCenter
+      ? ((((bot.id + this.tick) & 1) === 0 ? 1 : -1) * (60 + ((bot.id * 11) % 100)))
+      : ((((bot.id + this.tick) & 1) === 0 ? 1 : -1) * (320 + ((bot.id * 17) % 260)));
+    const vertical = 80 + ((bot.id * 23) % 180);
+
+    return {
+      id: -1,
+      pos: {
+        x: center.x + lateral,
+        y: center.y + (bot.team === Team.BLUE ? vertical : -vertical),
+      },
+      vel: ZERO,
+    };
+  }
+
+  cleanupCaches(activeEntities: Array<{ id: number; isDead?: boolean }>): void {
+    const aliveIds = new Set<number>();
+
+    for (let i = 0; i < activeEntities.length; i++) {
+      const e = activeEntities[i];
+      if (!e || e.isDead || typeof e.id !== 'number') continue;
+      aliveIds.add(e.id);
+    }
+
+    for (const id of this.botMemory.keys()) {
+      if (!aliveIds.has(id)) this.botMemory.delete(id);
+    }
+
+    for (const id of this.lastHealthSnapshot.keys()) {
+      if (!aliveIds.has(id)) this.lastHealthSnapshot.delete(id);
+    }
+  }
+
+  private computeInterposePoint(ally: any, threat: any): Vector2 {
+    const allyPos = ally?.pos || ZERO;
+    const threatPos = threat?.pos || ZERO;
+    const threatVel = threat?.vel || ZERO;
+
+    const projectedThreat = {
+      x: threatPos.x + threatVel.x * 10,
+      y: threatPos.y + threatVel.y * 10,
+    };
+
+    return {
+      x: allyPos.x * 0.58 + projectedThreat.x * 0.42,
+      y: allyPos.y * 0.58 + projectedThreat.y * 0.42,
+    };
+  }
+
+  private estimateProjectilePressure(bot: TankLike, neighbors: any[], mode: GameMode): number {
+    let pressure = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.type !== EntityType.BULLET) continue;
+      if (this.isFriendly(bot, e, mode)) continue;
+
+      const rel = Vector.sub(bot.pos, e.pos);
+      const distanceSq = Math.max(1, Vector.magSq(rel));
+      const vel = e.vel || ZERO;
+      const movingTowardBot = rel.x * vel.x + rel.y * vel.y > 0;
+      const towardWeight = movingTowardBot ? 1.0 : 0.35;
+
+      pressure += (towardWeight / distanceSq) * 20000;
+    }
+
+    return pressure;
+  }
+
+  private getOwnSpawnDispersionForce(pos: Vector2, team: Team, mode: GameMode, world: WorldInfo): Vector2 {
+    if (mode !== GameMode.TEAMS || team === Team.NONE) return ZERO;
+
+    const centerY = world.height * 0.5;
+    const yDir = pos.y >= centerY ? 1 : -1;
+    const safeEdge = world.baseZoneWidth * 0.9;
+
+    if (team === Team.BLUE && pos.x < safeEdge) {
+      const edgePush = Math.min(1.4, (safeEdge - pos.x) / Math.max(1, safeEdge));
+      return Vector.normalize({ x: edgePush + 0.35, y: yDir * 0.35 });
+    }
+
+    if (team === Team.RED && pos.x > world.width - safeEdge) {
+      const edgePush = Math.min(1.4, (pos.x - (world.width - safeEdge)) / Math.max(1, safeEdge));
+      return Vector.normalize({ x: -(edgePush + 0.35), y: yDir * 0.35 });
+    }
+
+    return ZERO;
+  }
+
+  private pickTeamFightObjective(bot: TankLike, neighbors: any[], mode: GameMode, memory: BotMemory): any | null {
+    if (mode !== GameMode.TEAMS || bot.team === Team.NONE) return null;
+
+    if (memory.teamFightTargetId != null && this.tick <= memory.teamFightUntilTick) {
+      const pinned = this.findAliveEntityById(neighbors, memory.teamFightTargetId);
+      if (pinned && this.isTankLike(pinned) && !this.isFriendly(bot, pinned, mode)) return pinned;
+    }
+
+    let best: any = null;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (ally.team !== bot.team) continue;
+
+      const allyHpRatio = this.getEntityHpRatio(ally);
+      const allyDistSq = Vector.distSq(bot.pos, ally.pos);
+      if (allyDistSq > AI_TUNING.teamFightJoinRadius * AI_TUNING.teamFightJoinRadius) continue;
+      if (allyHpRatio > AI_TUNING.teamFightAllyHpThreshold && !this.wasRecentlyDamaged(ally.id, 10)) continue;
+
+      const threat = this.findNearestThreatToAlly(bot, ally, neighbors, mode);
+      if (!threat) continue;
+
+      const threatDistSq = Vector.distSq(ally.pos, threat.pos);
+      const urgency = (1 - allyHpRatio) + (this.wasRecentlyDamaged(ally.id, 10) ? 0.42 : 0);
+      const score = urgency * 2.2 + this.classThreatScore(threat.classType) + 220000 / Math.max(1, threatDistSq);
+      if (score > bestScore) {
+        bestScore = score;
+        best = threat;
+      }
+    }
+
+    if (best) {
+      memory.teamFightTargetId = best.id;
+      memory.teamFightUntilTick = this.tick + AI_TUNING.teamFightFollowTicks;
+    } else if (this.tick > memory.teamFightUntilTick) {
+      memory.teamFightTargetId = null;
+    }
+
+    return best;
+  }
+
+  private getAlliedFocusWeight(bot: TankLike, target: any, neighbors: any[], mode: GameMode): number {
+    if (mode !== GameMode.TEAMS || bot.team === Team.NONE) return 0;
+
+    let pressure = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (ally.team !== bot.team) continue;
+
+      const allyTargetId = typeof ally.aiTargetId === 'number' ? ally.aiTargetId : null;
+      if (allyTargetId === target.id) pressure += 0.28;
+
+      const allyDistSq = Vector.distSq(ally.pos, target.pos);
+      if (allyDistSq < 420 * 420) pressure += 0.07;
+    }
+
+    return Math.min(1.05, pressure);
+  }
+
+  private computeTeamRegroupPoint(bot: TankLike, neighbors: any[]): any | null {
+    let anchor: any = null;
+    let best = Infinity;
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (ally.team !== bot.team) continue;
+
+      const distSq = Vector.distSq(bot.pos, ally.pos);
+      if (distSq < best) {
+        best = distSq;
+        anchor = ally;
+      }
+    }
+
+    return anchor ? { id: anchor.id, pos: anchor.pos, vel: anchor.vel || ZERO } : null;
+  }
+
+  private canLikelyFinish(bot: TankLike, target: any): boolean {
+    const damageStat = bot.stats[StatType.BULLET_DAMAGE] || 0;
+    const estimatedBurst = 25 + damageStat * 8;
+    return (target.health || 0) <= estimatedBurst;
+  }
+
+  private isRareFarmTarget(e: any): boolean {
+    if (!e || e.isDead) return false;
+    if (e.type !== EntityType.SHAPE && e.type !== EntityType.BOSS) return false;
+
+    const xp = typeof e.xpValue === 'number' ? e.xpValue : 0;
+    const rarity = typeof e.rarity === 'string' ? e.rarity : '';
+    const rareByRarity = RARE_RARITIES.has(rarity);
+    const rareBySize = typeof e.radius === 'number' && e.radius >= 70;
+
+    return e.type === EntityType.BOSS || xp >= AI_TUNING.rareShapeXpThreshold || rareByRarity || rareBySize;
+  }
+
+  private isFarmTarget(e: any): boolean {
+    return e?.type === EntityType.SHAPE || e?.type === EntityType.BOSS || e?.type === EntityType.CRASHER;
+  }
+
+  private isShootableTarget(e: any): boolean {
+    return this.isTankLike(e) || this.isFarmTarget(e);
+  }
+
+  private isTankLike(e: any): boolean {
+    return (
+      e?.type === EntityType.PLAYER ||
+      e?.type === EntityType.ENEMY ||
+      e?.type === EntityType.ELITE_TANK ||
+      e?.type === EntityType.GUARDIAN
+    );
+  }
+
+  private isFriendly(bot: TankLike, entity: any, mode: GameMode): boolean {
+    if (!entity || mode === GameMode.FFA) return false;
+    return entity.team === bot.team && entity.team !== Team.NONE;
+  }
+
+  private isValidEntity(e: any): boolean {
+    return !!e && !e.isDead && typeof e.id === 'number' && !!e.pos;
+  }
+
+  private findAliveEntityById(entities: any[], id: number): any | null {
+    for (let i = 0; i < entities.length; i++) {
+      const e = entities[i];
+      if (e && !e.isDead && e.id === id) return e;
+    }
+    return null;
+  }
+
+  private getHpRatio(bot: TankLike): number {
+    return bot.health / Math.max(1, bot.maxHealth);
+  }
+
+  private getEntityHpRatio(e: any): number {
+    return (e.health || 1) / Math.max(1, e.maxHealth || 1);
+  }
+
+  private getWorldInfo(engine: EngineLike): WorldInfo {
+    return {
+      width: engine.width || AI_TUNING.defaultWorldWidth,
+      height: engine.height || AI_TUNING.defaultWorldHeight,
+      baseZoneWidth: engine.baseZoneWidth || BASE_ZONE_WIDTH,
+    };
+  }
+
+  private normalizeAngle(angle: number): number {
+    while (angle > Math.PI) angle -= Math.PI * 2;
+    while (angle < -Math.PI) angle += Math.PI * 2;
+    return angle;
+  }
+
+  private deterministicNoise(id: number, tick: number): number {
+    return Vector.seededRandom01((id * 1103515245) ^ (tick * 12345)) * 2 - 1;
+  }
+
+  private getArchetype(id: number): 'FARMER' | 'RUSHER' | 'SUPPORT' | 'EXPLORER' {
+    const r = id % 4;
+    if (r === 0) return 'FARMER';
+    if (r === 1) return 'RUSHER';
+    if (r === 2) return 'SUPPORT';
+    return 'EXPLORER';
+  }
+
+  private getBehaviorPhase(bot: TankLike): 'PHASE_EARLY' | 'PHASE_MID' | 'PHASE_LATE' {
+    const level = (bot as any).level ?? 1;
+    if (level < 20) return 'PHASE_EARLY';
+    if (level < 35) return 'PHASE_MID';
+    return 'PHASE_LATE';
+  }
+
+  private applyPanicFleeOffset(base: Vector2, offset: number): Vector2 {
+    const angle = Math.atan2(base.y, base.x) + offset;
+    return { x: Math.cos(angle), y: Math.sin(angle) };
+  }
+
+  private updateSightMemory(bot: TankLike, neighbors: any[], memory: BotMemory): void {
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || !this.isTankLike(e) || e.id === bot.id) continue;
+      if (e.team === bot.team && e.team !== Team.NONE) continue;
+      if (!memory.seenHostiles.has(e.id)) memory.seenHostiles.set(e.id, this.tick);
+    }
+  }
+
+  private updateSquadAnchor(bot: TankLike, neighbors: any[], memory: BotMemory): void {
+    let count = 0;
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (ally.team !== bot.team) continue;
+      if (Vector.distSq(bot.pos, ally.pos) > AI_TUNING.squadAnchorRadius * AI_TUNING.squadAnchorRadius) continue;
+      if (ally.aiState !== AIState.FARM) continue;
+      count++;
+      x += ally.pos.x;
+      y += ally.pos.y;
+    }
+    if (count >= 2) {
+      memory.squadAnchor = { x: x / count, y: y / count };
+      memory.squadAnchorTick = this.tick;
+    }
+  }
+
+  private updateAssistUrgency(bot: TankLike, neighbors: any[], memory: BotMemory, mode: GameMode): void {
+    if (mode === GameMode.FFA || bot.team === Team.NONE) return;
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || !this.isTankLike(ally) || ally.id === bot.id || ally.team !== bot.team) continue;
+      if (this.getEntityHpRatio(ally) > AI_TUNING.assistCriticalHpRatio) continue;
+      const threat = this.findNearestThreatToAlly(bot, ally, neighbors, mode);
+      if (threat) {
+        memory.assistUrgencyUntilTick = Math.max(memory.assistUrgencyUntilTick, this.tick + AI_TUNING.assistUrgencyTicks);
+      }
+    }
+  }
+
+  private isShapeTargetCrowdedByAlly(bot: TankLike, shape: any, neighbors: any[]): boolean {
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || !this.isTankLike(ally) || ally.id === bot.id || ally.team !== bot.team) continue;
+      if (ally.aiTargetId === shape.id && Vector.distSq(ally.pos, shape.pos) < 360 * 360) return true;
+    }
+    return false;
+  }
+
+  private trackArchetypeReadability(bot: TankLike, memory: BotMemory, result: ThinkResult, neighbors: any[]): void {
+    if (this.sessionStartTick <= 0) return;
+    const elapsed = this.tick - this.sessionStartTick;
+    const seconds = (elapsed / 60).toFixed(1);
+    const hostileInView = neighbors.some((e) => this.isValidEntity(e) && this.isTankLike(e) && e.id !== bot.id && e.team !== bot.team);
+    const supportTell =
+      memory.sessionArchetype === 'SUPPORT' &&
+      (result.state === AIState.BODYGUARD || (result.state === AIState.COMBAT && this.tick < memory.assistUrgencyUntilTick));
+    const archetypeTell =
+      (memory.sessionArchetype === 'RUSHER' && result.state === AIState.COMBAT && !!result.combatTarget) ||
+      (memory.sessionArchetype === 'FARMER' && result.state === AIState.FARM && hostileInView) ||
+      supportTell ||
+      (memory.sessionArchetype === 'EXPLORER' && result.state === AIState.HUNT && !result.combatTarget);
+
+    if (memory.firstTellLoggedTick < 0 && archetypeTell) {
+      memory.firstTellLoggedTick = this.tick;
+      console.info(`[AI-READ] t=${seconds}s bot=${bot.id} archetype=${memory.sessionArchetype} first_tell=${AIState[result.state]}`);
+    }
+
+    if (!memory.sameFeelLogged && elapsed >= AI_TUNING.sameFeelThresholdTicks && memory.firstTellLoggedTick < 0) {
+      memory.sameFeelLogged = true;
+      console.warn(`[AI-READ] t=${seconds}s bot=${bot.id} archetype=${memory.sessionArchetype} same_feel_candidate`);
+    }
+
+    if (supportTell) {
+      console.info(`[AI-READ] t=${seconds}s bot=${bot.id} archetype=SUPPORT support_tell=${AIState[result.state]}`);
+    }
+  }
 }
 
-const BASE_BULLET_SPEED = 5;
+function memoryNeedsIntentPromote(memory: BotMemory, targetId: number, tick: number): boolean {
+  if (memory.intentTargetId !== targetId) {
+    memory.intentTargetId = targetId;
+    memory.intentPromoteTick = tick + memory.intentDelayTicks;
+    memory.targetLockUntilTick = tick + AI_TUNING.targetLockMinTicks;
+    return true;
+  }
+  return tick < memory.intentPromoteTick;
+}

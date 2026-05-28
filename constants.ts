@@ -65,6 +65,7 @@ export const BOT_STAT_PRIORITIES: Record<TankClass, StatType[]> = {
   [TankClass.LEVIATHAN]: [StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.RELOAD, StatType.MAX_HEALTH, StatType.BODY_DAMAGE, StatType.MAX_SHIELD, StatType.REGEN],
   [TankClass.WARLORD]: [StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.REGEN, StatType.BODY_DAMAGE, StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION],
   [TankClass.CELESTIAL]: [StatType.BULLET_PENETRATION, StatType.RELOAD, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.BULLET_DAMAGE, StatType.BODY_DAMAGE, StatType.REGEN],
+  [TankClass.OBLITERATOR]: [StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.RELOAD, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.BODY_DAMAGE, StatType.REGEN],
   [TankClass.PACIFIST_TRAINEE]: [StatType.REGEN, StatType.MAX_HEALTH, StatType.BODY_DAMAGE, StatType.MOVEMENT_SPEED, StatType.HEALING_RADIUS, StatType.HEALING_EFFICIENCY],
   [TankClass.NURSE]: [StatType.HEALING_RADIUS, StatType.HEALING_EFFICIENCY, StatType.REGEN, StatType.MAX_HEALTH, StatType.MOVEMENT_SPEED, StatType.HEALING_BURST],
   [TankClass.DOCTOR]: [StatType.HEALING_RADIUS, StatType.HEALING_EFFICIENCY, StatType.HEALING_BURST, StatType.REGEN, StatType.MAX_HEALTH, StatType.SUPPORT_XP_MULT],
@@ -125,7 +126,7 @@ export const COLORS = {
   voidPortal: '#6e2cf2',
 };
 
-export const XP_CURVE_MULTIPLIER = 1.09; // Flattened curve to support 100 levels without extreme XP requirements
+export const XP_CURVE_MULTIPLIER = 1.06; // Slower tier gates, smoother recursive XP scaling.
 export const MAX_LEVEL = 100;
 export const REBIRTH_LEVEL = 60;
 export const REBIRTH_AREA_POS = { x: 20000, y: 20000 };
@@ -196,6 +197,7 @@ export const CLASS_TREE: Partial<Record<TankClass, TankClass[]>> = {
   [TankClass.OVERLORD]: [],
   [TankClass.MANAGER]: [],
   [TankClass.CELESTIAL]: [],
+  [TankClass.OBLITERATOR]: [],
 };
 
 // Barrel Configurations
@@ -356,34 +358,45 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
     [1.42, 0.62, -0.08, 0, 1.05, 0],
   ],
   [TankClass.COLOSSAL]: [
-    // 5 Massive flared cannons (Annihilator style)
-    [2.2, 1.2, 0, 0, 4.0, 0, 1.6],
-    [2.2, 1.2, 0, (2 * Math.PI) / 5, 4.0, 0, 1.6],
-    [2.2, 1.2, 0, (4 * Math.PI) / 5, 4.0, 0, 1.6],
-    [2.2, 1.2, 0, -(4 * Math.PI) / 5, 4.0, 0, 1.6],
-    [2.2, 1.2, 0, -(2 * Math.PI) / 5, 4.0, 0, 1.6],
+    // Rhombus layout: forward lance + upper/lower flank guns + rear 5 drone bays.
+    [1.48, 0.7, 0.05, 0, 2.35, 0, 1.06],
+    [1.38, 0.66, -0.1, Math.PI * 0.5, 2.45, 0.54, 1.0],
+    [1.38, 0.66, -0.1, -Math.PI * 0.5, 2.45, -0.54, 1.0],
+    [0.88, 0.46, -0.4, Math.PI * 0.92, 0.62, 0.68, 1.0],
+    [0.84, 0.44, -0.44, Math.PI * 1.02, 0.6, 0.34, 1.0],
+    [0.82, 0.42, -0.46, Math.PI, 0.56, 0, 1.0],
+    [0.84, 0.44, -0.44, -Math.PI * 1.02, 0.6, -0.34, 1.0],
+    [0.88, 0.46, -0.4, -Math.PI * 0.92, 0.62, -0.68, 1.0],
   ],
   [TankClass.LEVIATHAN]: [
-    // 4 Long tapered needle cannons
-    [2.8, 1.5, 0, 0, 3.0, 0, 0.3],
-    [2.8, 1.5, 0, Math.PI / 2, 3.0, 0, 0.3],
-    [2.8, 1.5, 0, Math.PI, 3.0, 0, 0.3],
-    [2.8, 1.5, 0, -Math.PI / 2, 3.0, 0, 0.3],
+    // Broadside behemoth: forward lance + port/starboard denial + rear suppressor + central manager spawner.
+    [1.76, 0.8, -0.04, 0, 1.95, 0, 0.4],
+    [1.58, 0.72, -0.12, Math.PI / 2, 1.62, 0.6, 0.58],
+    [1.58, 0.72, -0.12, -Math.PI / 2, 1.62, -0.6, 0.58],
+    [1.44, 0.66, -0.28, Math.PI * 0.72, 1.68, 0.42, 0.72],
+    [1.44, 0.66, -0.28, -Math.PI * 0.72, 1.68, -0.42, 0.72],
+    [1.16, 0.6, -0.42, Math.PI, 1.4, 0, 0.9],
+    [1.24, 0.64, -0.02, 0, 1.22, 0, 1.0],
   ],
   [TankClass.WARLORD]: [
-    // 2 massive wide wall-cannons (front and back)
-    [1.8, 2.5, 0, 0, 3.0, 0, 1.0],
-    [1.8, 2.5, 0, Math.PI, 3.0, 0, 1.0],
-    // 2 heavy side flared cannons
-    [1.5, 1.2, 0, Math.PI / 2, 2.0, 0, 1.2],
-    [1.5, 1.2, 0, -Math.PI / 2, 2.0, 0, 1.2],
+    // Tactical siege: dual frontal suppressors, wing burst nodes, compact stern kicker.
+    [1.72, 0.72, 0.06, 0.08, 1.55, 0.26, 0.96],
+    [1.72, 0.72, 0.06, -0.08, 1.55, -0.26, 0.96],
+    [1.34, 0.62, -0.24, Math.PI * 0.68, 1.02, 0.42, 0.9],
+    [1.34, 0.62, -0.24, -Math.PI * 0.68, 1.02, -0.42, 0.9],
+    [1.04, 0.54, -0.4, Math.PI, 1.35, 0, 1.0],
   ],
   [TankClass.CELESTIAL]: [
-    // Central gravitic lance + tri-point defense emitters
-    [2.45, 1.05, 0, 0, 1.7, 0, 0.65],
-    [1.55, 0.72, 0.05, Math.PI / 3, 0.55, 0.3, 1.35],
-    [1.55, 0.72, 0.05, -Math.PI / 3, 0.55, -0.3, 1.35],
-    [1.35, 0.65, 0.02, Math.PI, 0.55, 0, 1.2],
+    // Pentagon layout: primary lance + 4 symmetric emitters.
+    [1.62, 0.78, -0.02, 0, 1.55, 0, 0.62],
+    [1.2, 0.58, -0.14, Math.PI * 0.4, 0.62, 0, 1.16],
+    [1.2, 0.58, -0.14, -Math.PI * 0.4, 0.62, 0, 1.16],
+    [1.06, 0.54, -0.2, Math.PI * 0.8, 0.64, 0, 1.08],
+    [1.06, 0.54, -0.2, -Math.PI * 0.8, 0.64, 0, 1.08],
+  ],
+  [TankClass.OBLITERATOR]: [
+    // Single oversized annihilator-grade doom cannon.
+    [2.45, 2.95, 0.02, 0, 3.1, 0, 1.1],
   ],
   [TankClass.PACIFIST_TRAINEE]: [[1.4, 0.9, 0, 0, 1.0, 0]],
   [TankClass.NURSE]: [[1.5, 0.7, 0, 0.3, 1.0, 0.4], [1.5, 0.7, 0, -0.3, 1.0, -0.4]],
@@ -405,10 +418,11 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
     [1.6, 1.0, 0, 0, 1.0, 0]
   ],
   [TankClass.REAPER]: [
-    [2.4, 1.2, 0, 0, 1.0, 0], // Main Scythe Shaft (visual)
-    [1.4, 0.8, 0, Math.PI / 2, 1.0, 1.2], // Scythe Blade part 1
-    [1.4, 0.8, 0, -Math.PI / 2, 1.0, -1.2], // Scythe Blade part 2
-    [1.0, 1.5, 0, Math.PI, 1.0, 0] // Back heavy guard
+    // Asymmetric executioner layout: maw lance, upper sickle, lower injector, rear siphon barb.
+    [1.95, 0.82, 0.08, 0.02, 1.04, 0, 0.92],
+    [1.52, 0.56, -0.16, Math.PI * 0.38, 0.78, 0.52, 0.72],
+    [1.28, 0.48, -0.28, -Math.PI * 0.62, 0.66, -0.34, 0.86],
+    [1.1, 0.44, -0.42, Math.PI * 0.9, 1.15, 0.38, 1.0],
   ],
 };
 
@@ -432,16 +446,20 @@ export const CLASS_PROJECTILE_MODIFIERS: Partial<Record<TankClass, {
     penetrationMultiplier: 1.2,
     projectileHealthMultiplier: 1.12,
   },
+  [TankClass.OBLITERATOR]: {
+    penetrationMultiplier: 2.1,
+    projectileHealthMultiplier: 2.9,
+  },
 };
 
 // --- Shape Stats ---
 
 export const SHAPE_STATS: Record<ShapeType, { health: number; xp: number; damage: number; radius: number; color: string; sides: number }> = {
-    [ShapeType.SQUARE]: { health: 25, xp: 45, damage: 8, radius: 12.5, color: COLORS.square, sides: 4 },
-    [ShapeType.TRIANGLE]: { health: 80, xp: 300, damage: 14, radius: 18.75, color: COLORS.triangle, sides: 3 },
-    [ShapeType.PENTAGON]: { health: 300, xp: 1200, damage: 20, radius: 31.25, color: COLORS.pentagon, sides: 5 },
-    [ShapeType.HEXAGON]: { health: 800, xp: 4500, damage: 35, radius: 50, color: COLORS.hexagon, sides: 6 },
-    [ShapeType.OCTAGON]: { health: 2500, xp: 15000, damage: 60, radius: 110, color: COLORS.octagon, sides: 8 },
+    [ShapeType.SQUARE]: { health: 25, xp: 35, damage: 8, radius: 12.5, color: COLORS.square, sides: 4 },
+    [ShapeType.TRIANGLE]: { health: 80, xp: 110, damage: 14, radius: 18.75, color: COLORS.triangle, sides: 3 },
+    [ShapeType.PENTAGON]: { health: 300, xp: 360, damage: 20, radius: 31.25, color: COLORS.pentagon, sides: 5 },
+    [ShapeType.HEXAGON]: { health: 800, xp: 900, damage: 35, radius: 50, color: COLORS.hexagon, sides: 6 },
+    [ShapeType.OCTAGON]: { health: 2500, xp: 2200, damage: 60, radius: 110, color: COLORS.octagon, sides: 8 },
 };
 
 export const BOSS_STATS: Record<string, { id: string; name: string; health: number; xp: number; radius: number; color: string; sides: number; description: string }> = {
@@ -469,28 +487,28 @@ export const BOSS_STATS: Record<string, { id: string; name: string; health: numb
 
 export const RARITY_CONFIG: Record<ShapeRarity, { xpMult: number; hpMult: number; chance: number; color?: string; sizeMult: number }> = {
     [ShapeRarity.COMMON]: { xpMult: 1, hpMult: 1, chance: 0.72, sizeMult: 1.0 },
-    [ShapeRarity.UNCOMMON]: { xpMult: 2, hpMult: 1.5, chance: 0.18, sizeMult: 1.0 },
-    [ShapeRarity.RARE]: { xpMult: 5, hpMult: 3, chance: 0.06, color: '#50ef95', sizeMult: 1.3 },
-    [ShapeRarity.EPIC]: { xpMult: 20, hpMult: 10, chance: 0.015, color: '#ffd700', sizeMult: 1.7 },
-    [ShapeRarity.LEGENDARY]: { xpMult: 100, hpMult: 50, chance: 0.005, color: '#ff5e00', sizeMult: 2.2 },
-    [ShapeRarity.MYTHICAL]: { xpMult: 500, hpMult: 250, chance: 0.001, color: '#a200ff', sizeMult: 2.8 },
-    [ShapeRarity.ETERNAL]: { xpMult: 2500, hpMult: 1200, chance: 0.0004, color: '#00ffff', sizeMult: 3.5 },
-    [ShapeRarity.TRANSCENDENT]: { xpMult: 10000, hpMult: 5000, chance: 0.0002, color: '#ffffff', sizeMult: 5.0 },
-    [ShapeRarity.GODLY]: { xpMult: 50000, hpMult: 25000, chance: 0.00005, color: '#ff00ff', sizeMult: 7.0 },
-    [ShapeRarity.DIVINE]: { xpMult: 200000, hpMult: 100000, chance: 0.00001, color: '#6e2cf2', sizeMult: 10.0 },
+    [ShapeRarity.UNCOMMON]: { xpMult: 1.6, hpMult: 1.5, chance: 0.18, sizeMult: 1.0 },
+    [ShapeRarity.RARE]: { xpMult: 2.8, hpMult: 3, chance: 0.06, color: '#50ef95', sizeMult: 1.3 },
+    [ShapeRarity.EPIC]: { xpMult: 5, hpMult: 10, chance: 0.015, color: '#ffd700', sizeMult: 1.7 },
+    [ShapeRarity.LEGENDARY]: { xpMult: 9, hpMult: 50, chance: 0.005, color: '#ff5e00', sizeMult: 2.2 },
+    [ShapeRarity.MYTHICAL]: { xpMult: 15, hpMult: 250, chance: 0.001, color: '#a200ff', sizeMult: 2.8 },
+    [ShapeRarity.ETERNAL]: { xpMult: 24, hpMult: 1200, chance: 0.0004, color: '#00ffff', sizeMult: 3.5 },
+    [ShapeRarity.TRANSCENDENT]: { xpMult: 38, hpMult: 5000, chance: 0.0002, color: '#ffffff', sizeMult: 5.0 },
+    [ShapeRarity.GODLY]: { xpMult: 58, hpMult: 25000, chance: 0.00005, color: '#ff00ff', sizeMult: 7.0 },
+    [ShapeRarity.DIVINE]: { xpMult: 85, hpMult: 100000, chance: 0.00001, color: '#6e2cf2', sizeMult: 10.0 },
 };
 
 export const VOID_RARITY_CONFIG: Record<ShapeRarity, { xpMult: number; hpMult: number; chance: number; color?: string; sizeMult: number }> = {
     [ShapeRarity.COMMON]: { xpMult: 1, hpMult: 1, chance: 0.25, sizeMult: 1.0 },
-    [ShapeRarity.UNCOMMON]: { xpMult: 2, hpMult: 1.5, chance: 0.25, sizeMult: 1.0 },
-    [ShapeRarity.RARE]: { xpMult: 5, hpMult: 3, chance: 0.22, color: '#50ef95', sizeMult: 1.3 },
-    [ShapeRarity.EPIC]: { xpMult: 20, hpMult: 10, chance: 0.18, color: '#ffd700', sizeMult: 1.7 },
-    [ShapeRarity.LEGENDARY]: { xpMult: 100, hpMult: 50, chance: 0.06, color: '#ff5e00', sizeMult: 2.2 },
-    [ShapeRarity.MYTHICAL]: { xpMult: 500, hpMult: 250, chance: 0.025, color: '#a200ff', sizeMult: 2.8 },
-    [ShapeRarity.ETERNAL]: { xpMult: 2500, hpMult: 1200, chance: 0.008, color: '#00ffff', sizeMult: 3.5 },
-    [ShapeRarity.TRANSCENDENT]: { xpMult: 10000, hpMult: 5000, chance: 0.002, color: '#ffffff', sizeMult: 5.0 },
-    [ShapeRarity.GODLY]: { xpMult: 50000, hpMult: 25000, chance: 0.0008, color: '#ff00ff', sizeMult: 7.0 },
-    [ShapeRarity.DIVINE]: { xpMult: 200000, hpMult: 100000, chance: 0.0002, color: '#6e2cf2', sizeMult: 10.0 },
+    [ShapeRarity.UNCOMMON]: { xpMult: 1.7, hpMult: 1.5, chance: 0.25, sizeMult: 1.0 },
+    [ShapeRarity.RARE]: { xpMult: 3, hpMult: 3, chance: 0.22, color: '#50ef95', sizeMult: 1.3 },
+    [ShapeRarity.EPIC]: { xpMult: 5.5, hpMult: 10, chance: 0.18, color: '#ffd700', sizeMult: 1.7 },
+    [ShapeRarity.LEGENDARY]: { xpMult: 10, hpMult: 50, chance: 0.06, color: '#ff5e00', sizeMult: 2.2 },
+    [ShapeRarity.MYTHICAL]: { xpMult: 18, hpMult: 250, chance: 0.025, color: '#a200ff', sizeMult: 2.8 },
+    [ShapeRarity.ETERNAL]: { xpMult: 30, hpMult: 1200, chance: 0.008, color: '#00ffff', sizeMult: 3.5 },
+    [ShapeRarity.TRANSCENDENT]: { xpMult: 48, hpMult: 5000, chance: 0.002, color: '#ffffff', sizeMult: 5.0 },
+    [ShapeRarity.GODLY]: { xpMult: 72, hpMult: 25000, chance: 0.0008, color: '#ff00ff', sizeMult: 7.0 },
+    [ShapeRarity.DIVINE]: { xpMult: 110, hpMult: 100000, chance: 0.0002, color: '#6e2cf2', sizeMult: 10.0 },
 };
 
 // --- Shop Items ---
