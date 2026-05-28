@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global Safety Net (Catch-All Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Primitive Identity Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 3. Document/Entity Validators for Schema Enforcement
+    function isValidUser(data) {
+      return data.keys().hasAll(['username', 'createdAt', 'currency', 'inventory', 'equippedItem', 'unlockedEliteSkins', 'stats'])
+        && data.keys().size() == 7
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 32
+        && data.createdAt is string
+        && data.currency is int && data.currency >= 0
+        && data.inventory is list && data.inventory.size() > 0 && data.inventory[0] is string
+        && data.equippedItem is string
+        && data.unlockedEliteSkins is list
+        && data.stats is map
+        && isValidUserStats(data.stats);
+    }
+
+    function isValidUserStats(stats) {
+      return stats.keys().hasAll(['totalGames', 'totalScore', 'highScore', 'maxLevel', 'totalKills', 'totalDeaths', 'eliteKills', 'transformations', 'highestEliteDamage', 'achievementsUnlocked'])
+        && stats.keys().size() == 10
+        && stats.totalGames is int && stats.totalGames >= 0
+        && stats.totalScore is int && stats.totalScore >= 0
+        && stats.highScore is int && stats.highScore >= 0
+        && stats.maxLevel is int && stats.maxLevel >= 1
+        && stats.totalKills is int && stats.totalKills >= 0
+        && stats.totalDeaths is int && stats.totalDeaths >= 0
+        && stats.eliteKills is int && stats.eliteKills >= 0
+        && stats.transformations is int && stats.transformations >= 0
+        && stats.highestEliteDamage is int && stats.highestEliteDamage >= 0
+        && stats.achievementsUnlocked is list;
+    }
+
+    function isValidHighScore(data) {
+      return data.keys().hasAll(['name', 'score', 'level', 'classType', 'date'])
+        && data.keys().size() == 5
+        && data.name is string && data.name.size() >= 3 && data.name.size() <= 32
+        && data.score is int && data.score >= 0
+        && data.level is int && data.level >= 1
+        && data.classType is string
+        && data.date is string;
+    }
+
+    // 4. Collection Matches
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) 
+                    && isValidUser(request.resource.data) 
+                    && request.resource.data.createdAt == request.time.toString(); // Parse as server-time string representation
+      
+      allow update: if isOwner(userId) 
+                    && isValidUser(request.resource.data)
+                    && request.resource.data.username == resource.data.username // Username Immutable
+                    && request.resource.data.createdAt == resource.data.createdAt // Creation Date Immutable
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stats', 'currency', 'inventory', 'equippedItem', 'unlockedEliteSkins']);
+      
+      allow delete: if false; // Deny standard user deletion client-side
+    }
+
+    match /highScores/{scoreId} {
+      allow get, list: if true; // Public access for the leaderboard
+      
+      allow create: if isSignedIn() 
+                    && isValidHighScore(request.resource.data)
+                    && isValidId(scoreId)
+                    && request.resource.data.date == request.time.toString(); // Enforce actual server timestamp
+                    
+      allow update, delete: if false; // Real-time high scores are immortal and immutable
+    }
+  }
+}

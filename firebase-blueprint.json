@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "UserStats": {
+      "title": "UserStats",
+      "description": "Tactical metrics and milestones of a player",
+      "type": "object",
+      "properties": {
+        "totalGames": { "type": "integer" },
+        "totalScore": { "type": "integer" },
+        "highScore": { "type": "integer" },
+        "maxLevel": { "type": "integer" },
+        "totalKills": { "type": "integer" },
+        "totalDeaths": { "type": "integer" },
+        "eliteKills": { "type": "integer" },
+        "transformations": { "type": "integer" },
+        "highestEliteDamage": { "type": "integer" },
+        "achievementsUnlocked": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["totalGames", "totalScore", "highScore", "maxLevel", "totalKills", "totalDeaths"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Commander metadata and customization index",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "currency": { "type": "integer" },
+        "inventory": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "equippedItem": { "type": "string" },
+        "unlockedEliteSkins": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "stats": { "$ref": "UserStats" }
+      },
+      "required": ["username", "createdAt", "currency", "inventory", "equippedItem", "stats"]
+    },
+    "HighScoreEntry": {
+      "title": "HighScoreEntry",
+      "description": "Global public leaderboard entries for pilot combat score tracking",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "score": { "type": "integer" },
+        "level": { "type": "integer" },
+        "classType": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "score", "level", "classType", "date"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Core documents for authenticating officers, storing currency and credentials."
+    },
+    "highScores/{scoreId}": {
+      "schema": "HighScoreEntry",
+      "description": "Public records of the top battles fought by commanders."
+    }
+  }
+}
