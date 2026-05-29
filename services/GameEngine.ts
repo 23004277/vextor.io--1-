@@ -4838,7 +4838,7 @@ class Bullet extends Entity {
         p.vel = { x: Math.cos(backAngle) * speed, y: Math.sin(backAngle) * speed };
         engine.particles.push(p);
         if (Math.random() < 0.2) engine.particles.push(new Particle(this.pos.x, this.pos.y, 'rgba(125, 211, 252, 0.24)', this.radius * 0.45, 10, 'RING'));
-      } else if ((this.ownerClass === TankClass.DESTROYER || this.ownerClass === TankClass.HYBRID) && chance < 0.35) {
+      } else if (this.ownerClass === TankClass.DESTROYER && chance < 0.35) {
         // Heavy ember exhaust for Destroyer-class slugs
         const angle = this.rotation + Math.PI + (Math.random() - 0.5) * 0.6;
         const speed = Math.random() * 2.2 + 0.8;
@@ -5430,15 +5430,7 @@ class Bullet extends Entity {
 
   drawBasicCircleBullet(ctx: CanvasRenderingContext2D) {
     ctx.save();
-    const ring = ctx.createRadialGradient(0, 0, this.radius * 0.2, 0, 0, this.radius * 1.35);
-    ring.addColorStop(0, 'rgba(255,255,255,0.18)');
-    ring.addColorStop(0.55, this.color);
-    ring.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = ring;
-    ctx.beginPath();
-    ctx.arc(0, 0, this.radius * 1.35, 0, Math.PI * 2);
-    ctx.fill();
-
+    // Lightweight default projectile path for better performance under high bullet counts.
     ctx.beginPath();
     ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
     ctx.fillStyle = this.color;
@@ -5464,11 +5456,12 @@ class Bullet extends Entity {
     const isStalker = this.ownerClass === TankClass.STALKER;
     const isHunter = this.ownerClass === TankClass.HUNTER;
     const isXHunter = this.ownerClass === TankClass.X_HUNTER;
-    const isDestroyer = this.ownerClass === TankClass.DESTROYER || this.ownerClass === TankClass.HYBRID;
+    const isSniperFamily = isSniper || isAssassin || isRanger || isStalker || isHunter || isXHunter;
+    const isDestroyer = this.ownerClass === TankClass.DESTROYER;
     const isAnnihilator = this.ownerClass === TankClass.ANNIHILATOR;
     const isRebirthBoss = this.ownerClass === TankClass.COLOSSAL || this.ownerClass === TankClass.LEVIATHAN || this.ownerClass === TankClass.WARLORD || this.ownerClass === TankClass.CELESTIAL || this.ownerClass === TankClass.OBLITERATOR;
 
-    if (isSniper || isAssassin || isRanger || isStalker || isHunter || isXHunter) {
+    if (isSniperFamily) {
       this.drawCustomTacticalBullet(ctx);
     } else if (this.ownerClass === TankClass.OBLITERATOR) {
       // Obliterator always renders with true-circle projectile architecture.
@@ -5481,10 +5474,9 @@ class Bullet extends Entity {
       this.drawDestroyerBullet(ctx);
     } else if (isAnnihilator) {
       this.drawAnnihilatorBullet(ctx);
-    } else if (this.ownerClass === TankClass.BASIC) {
-      this.drawBasicCircleBullet(ctx);
     } else {
-      this.drawStandardBullet(ctx); 
+      // Default all other classes (including HYBRID) to simple circle bullets for lower render cost.
+      this.drawBasicCircleBullet(ctx);
     }
     
     ctx.globalAlpha = 1.0; 

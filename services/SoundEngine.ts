@@ -100,7 +100,7 @@ export class SoundEngine {
 
   // Global pitch variance per synthesized voice so tones naturally swing high/low.
   private createOscillatorVoice(): OscillatorNode {
-    const osc = this.createOscillatorVoice();
+    const osc = this.ctx.createOscillator();
     const detuneCents = (Math.random() * 2 - 1) * 260;
     osc.detune.setValueAtTime(detuneCents, this.ctx.currentTime);
     return osc;
