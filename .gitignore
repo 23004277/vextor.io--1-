@@ -7,16 +7,41 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
+.pnpm-store/
+
+# Build Outputs & Game Exports
 dist
 dist-ssr
-*.local
+build/
+out/
+*.zip
+*.tar.gz
 
-# Editor directories and files
+# Cloudflare Wrangler
+.wrangler/
+
+# Vite & Framework Caches
+.vite/
+.eslintcache
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Editor directories and OS files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj

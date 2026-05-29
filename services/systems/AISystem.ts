@@ -97,7 +97,7 @@ const BASE_BULLET_SPEED = 5;
 const ZERO: Vector2 = { x: 0, y: 0 };
 
 const AI_TUNING = {
-  defaultDecisionStride: 10,
+  defaultDecisionStride: 5,
   defaultWorldWidth: 6000,
   defaultWorldHeight: 4000,
 
@@ -118,8 +118,6 @@ const AI_TUNING = {
   teamFightFollowTicks: 54,
   teamFightAllyHpThreshold: 0.82,
   targetLockMinTicks: 15,
-  squadAnchorRadius: 500,
-  squadDriftDistance: 800,
   assistCriticalHpRatio: 0.3,
   assistUrgencyTicks: 30,
   postKillPauseMinTicks: 5,
@@ -307,12 +305,6 @@ export class AISystem {
       const farmResult = { state: AIState.FARM, target: farm, combatTarget: this.isShootableTarget(farm) ? farm : null };
       this.trackArchetypeReadability(bot, memory, farmResult, neighbors);
       return farmResult;
-    }
-
-    if (memory.squadAnchor && Vector.distSq(bot.pos, memory.squadAnchor) > AI_TUNING.squadDriftDistance * AI_TUNING.squadDriftDistance) {
-      const regroup = { state: AIState.HUNT, target: { id: -2, pos: memory.squadAnchor, vel: ZERO }, combatTarget: null };
-      this.trackArchetypeReadability(bot, memory, regroup, neighbors);
-      return regroup;
     }
 
     const idle = { state: AIState.IDLE, target: null, combatTarget: null };
@@ -623,12 +615,6 @@ export class AISystem {
     memory: BotMemory
   ): Vector2 {
     if (!target) {
-      if (mode === GameMode.TEAMS && bot.team !== Team.NONE) {
-        const regroup = this.computeTeamRegroupPoint(bot, neighbors);
-        if (regroup) {
-          return this.movement.arriveForce(bot.pos, regroup.pos, 360);
-        }
-      }
       return this.computeIdleClusterForce(bot, neighbors, memory);
     }
 
@@ -759,22 +745,48 @@ export class AISystem {
     for (let i = 0; i < neighbors.length; i++) {
       const e = neighbors[i];
       if (!this.isValidEntity(e) || e.id === bot.id || !this.isTankLike(e)) continue;
-      if (mode !== GameMode.FFA && e.team === bot.team) {
-        this.cachedAllies.push({ pos: e.pos });
-        if (e.vel) this.cachedAllyVels.push(e.vel);
-      }
+
+      const sameTeam =
+        mode !== GameMode.FFA &&
+        e.team === bot.team &&
+        e.team !== Team.NONE;
+
+      if (!sameTeam) continue;
+
+      this.cachedAllies.push({ pos: e.pos });
+      if (e.vel) this.cachedAllyVels.push(e.vel);
     }
 
     const inPortalTransit = state === AIState.PROXIMAL_PORTAL_TRANSIT && target && target.type === EntityType.VOID_PORTAL;
-    const sep = this.movement.separationForce(
-      bot.pos,
-      this.cachedAllies,
-      inPortalTransit ? 64 : (mode === GameMode.FFA ? AI_TUNING.ffaSeparationRadius : AI_TUNING.allySeparationRadius)
-    );
+    const separationRadius = inPortalTransit
+      ? 64
+      : mode === GameMode.FFA
+        ? AI_TUNING.ffaSeparationRadius
+        : AI_TUNING.allySeparationRadius * 1.75;
+
+    const sep = this.movement.separationForce(bot.pos, this.cachedAllies, separationRadius);
+
+    // Farming, hunting and idle exploration should spread bots across resources instead of forming team blobs.
+    if (state === AIState.IDLE || state === AIState.FARM || state === AIState.HUNT) {
+      return this.movement.composeSteering([sep], [1.8], 2.5);
+    }
+
     const coh = this.movement.cohesionForce(bot.pos, this.cachedAllies, inPortalTransit ? 520 : AI_TUNING.cohesionRadius);
     const align = this.movement.alignmentForce(bot.vel, this.cachedAllyVels);
-    const weights: [number, number, number] = inPortalTransit ? [0.74, 0.62, 0.28] : [1.25, 0.28, 0.28];
-    return this.movement.composeSteering([sep, coh, align], weights, 2.5);
+
+    if (state === AIState.BODYGUARD) {
+      return this.movement.composeSteering([sep, coh, align], [1.25, 0.35, 0.2], 2.5);
+    }
+
+    if (state === AIState.COMBAT || state === AIState.FLEE) {
+      return this.movement.composeSteering([sep, coh, align], [1.55, 0.08, 0.12], 2.5);
+    }
+
+    if (inPortalTransit) {
+      return this.movement.composeSteering([sep, coh, align], [0.74, 0.62, 0.28], 2.5);
+    }
+
+    return this.movement.composeSteering([sep], [1.6], 2.5);
   }
 
   private pickPortalTransitTarget(bot: TankLike, neighbors: any[], engine: EngineLike, hpRatio: number, projectilePressure: number): any | null {
@@ -990,11 +1002,9 @@ export class AISystem {
 
     const archetype = this.getArchetype(bot.id);
     const fleeSeed = Vector.seededRandom01(bot.id * 10391);
-    const reactionSeed = Vector.seededRandom01(bot.id * 20389);
     const panicSeed = Vector.seededRandom01(bot.id * 30859);
     const strideSeed = Vector.seededRandom01(bot.id * 45053);
     const shootSeed = Vector.seededRandom01(bot.id * 55049);
-    const delaySeed = Vector.seededRandom01(bot.id * 65011);
     const archetypeAgg = archetype === 'RUSHER' ? 0.75 : archetype === 'FARMER' ? -0.6 : archetype === 'SUPPORT' ? -0.2 : 0.15;
     const fleeThreshold =
       archetype === 'FARMER' ? 0.45 + fleeSeed * 0.15 :
@@ -1002,10 +1012,10 @@ export class AISystem {
       archetype === 'SUPPORT' ? 0.35 + fleeSeed * 0.18 :
       0.22 + fleeSeed * 0.3;
     const stride =
-      archetype === 'RUSHER' ? 7 + Math.floor(strideSeed * 2) :
-      archetype === 'FARMER' ? 13 + Math.floor(strideSeed * 3) :
-      archetype === 'EXPLORER' ? 12 + Math.floor(strideSeed * 3) :
-      AI_TUNING.defaultDecisionStride + Math.floor(strideSeed * 3);
+      archetype === 'RUSHER' ? 4 + Math.floor(strideSeed * 2) :
+      archetype === 'FARMER' ? 5 + Math.floor(strideSeed * 2) :
+      archetype === 'EXPLORER' ? 5 + Math.floor(strideSeed * 2) :
+      AI_TUNING.defaultDecisionStride + Math.floor(strideSeed * 2);
 
     memory = {
       sessionArchetype: archetype,
@@ -1026,8 +1036,8 @@ export class AISystem {
       teamFightUntilTick: 0,
       fleeHealthThreshold: fleeThreshold,
       decisionStride: stride,
-      discoveryDelayTicks: Math.max(1, Math.round((archetype === 'RUSHER' ? 6 : archetype === 'SUPPORT' ? 15 : 17) + reactionSeed * 10)),
-      intentDelayTicks: Math.max(1, Math.round((archetype === 'RUSHER' ? 6 : 10) + delaySeed * 8)),
+      discoveryDelayTicks: archetype === 'RUSHER' ? 1 : 2,
+      intentDelayTicks: archetype === 'RUSHER' ? 1 : 2,
       targetLockUntilTick: 0,
       intentTargetId: null,
       intentPromoteTick: 0,
@@ -1258,24 +1268,6 @@ export class AISystem {
     return Math.min(1.05, pressure);
   }
 
-  private computeTeamRegroupPoint(bot: TankLike, neighbors: any[]): any | null {
-    let anchor: any = null;
-    let best = Infinity;
-    for (let i = 0; i < neighbors.length; i++) {
-      const ally = neighbors[i];
-      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
-      if (ally.team !== bot.team) continue;
-
-      const distSq = Vector.distSq(bot.pos, ally.pos);
-      if (distSq < best) {
-        best = distSq;
-        anchor = ally;
-      }
-    }
-
-    return anchor ? { id: anchor.id, pos: anchor.pos, vel: anchor.vel || ZERO } : null;
-  }
-
   private canLikelyFinish(bot: TankLike, target: any): boolean {
     const damageStat = bot.stats[StatType.BULLET_DAMAGE] || 0;
     const estimatedBurst = 25 + damageStat * 8;
@@ -1384,23 +1376,8 @@ export class AISystem {
   }
 
   private updateSquadAnchor(bot: TankLike, neighbors: any[], memory: BotMemory): void {
-    let count = 0;
-    let x = 0;
-    let y = 0;
-    for (let i = 0; i < neighbors.length; i++) {
-      const ally = neighbors[i];
-      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
-      if (ally.team !== bot.team) continue;
-      if (Vector.distSq(bot.pos, ally.pos) > AI_TUNING.squadAnchorRadius * AI_TUNING.squadAnchorRadius) continue;
-      if (ally.aiState !== AIState.FARM) continue;
-      count++;
-      x += ally.pos.x;
-      y += ally.pos.y;
-    }
-    if (count >= 2) {
-      memory.squadAnchor = { x: x / count, y: y / count };
-      memory.squadAnchorTick = this.tick;
-    }
+    memory.squadAnchor = null;
+    memory.squadAnchorTick = 0;
   }
 
   private updateAssistUrgency(bot: TankLike, neighbors: any[], memory: BotMemory, mode: GameMode): void {

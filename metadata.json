@@ -1,8 +1,17 @@
 {
-  "name": "Vextor",
-  "description": "A high-fidelity tactical tank combat game inspired by the evolution of the .io genre. Feature-rich evolution, dimensional shifts, and elite boss encounters.",
-  "requestFramePermissions": [],
+  "name": "Vextor.io",
+  "version": "1.0.0",
+  "description": "A single-player tactical arcade shooter merging deep .io upgrade paths with multidimensional chaos. Features strict 30-level progression thresholds, complex Rebirth tier classes, cosmic anomalies, and an evolving AI-driven bot network.",
+  "requestFramePermissions": [
+    "FULLSCREEN",
+    "POINTER_LOCK",
+    "CLIPBOARD_WRITE"
+  ],
   "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API",
+    "MAJOR_CAPABILITY_WEBGL_RENDERING",
+    "MAJOR_CAPABILITY_LOCAL_STORAGE"
+  ],
+  "environment": "production",
+  "entryPoint": "./index.html"
 }
