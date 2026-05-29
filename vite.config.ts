@@ -7,7 +7,10 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     const configuredBase = (env.VITE_ASSET_BASE || '').trim();
-    const resolvedBase = mode === 'development' ? '/' : (configuredBase || './');
+    const isCloudflarePages = env.CF_PAGES === '1';
+    const resolvedBase = mode === 'development'
+      ? '/'
+      : (configuredBase || (isCloudflarePages ? '/' : './'));
     return {
       base: resolvedBase,
       server: {
