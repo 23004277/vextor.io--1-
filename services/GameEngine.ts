@@ -8247,7 +8247,55 @@ export class GameEngine {
         return;
     }
 
+    const CLASS_FIRE_RATE_MULT: Record<TankClass, number> = {
+        [TankClass.BASIC]: 1.0,
+        [TankClass.PACIFIST_TRAINEE]: 1.0,
+        [TankClass.NURSE]: 1.04,
+        [TankClass.TWIN]: 0.92,
+        [TankClass.SNIPER]: 1.26,
+        [TankClass.MACHINE_GUN]: 0.64,
+        [TankClass.FLANK_GUARD]: 0.96,
+        [TankClass.TRIPLE_SHOT]: 0.9,
+        [TankClass.QUAD_TANK]: 0.95,
+        [TankClass.TWIN_FLANK]: 0.9,
+        [TankClass.ASSASSIN]: 1.2,
+        [TankClass.DESTROYER]: 1.58,
+        [TankClass.SPRAYER]: 0.7,
+        [TankClass.TRI_ANGLE]: 0.84,
+        [TankClass.HUNTER]: 1.08,
+        [TankClass.GUNNER]: 0.72,
+        [TankClass.DOCTOR]: 1.0,
+        [TankClass.OVERSEER]: 0.9,
+        [TankClass.TRIPLE_TWIN]: 0.92,
+        [TankClass.OCTO_TANK]: 0.9,
+        [TankClass.TRIPLE_TANK]: 0.88,
+        [TankClass.PENTA_SHOT]: 0.85,
+        [TankClass.SPREAD_SHOT]: 0.78,
+        [TankClass.RANGER]: 1.4,
+        [TankClass.STALKER]: 1.34,
+        [TankClass.ANNIHILATOR]: 1.85,
+        [TankClass.HYBRID]: 1.28,
+        [TankClass.BOOSTER]: 0.86,
+        [TankClass.FIGHTER]: 0.86,
+        [TankClass.STREAMLINER]: 0.58,
+        [TankClass.X_HUNTER]: 1.02,
+        [TankClass.AUTO_GUNNER]: 0.64,
+        [TankClass.OVERLORD]: 0.94,
+        [TankClass.MANAGER]: 0.92,
+        [TankClass.PLAGUE_DOCTOR]: 1.04,
+        [TankClass.DRAINER_TRAINEE]: 0.98,
+        [TankClass.LEECH]: 0.96,
+        [TankClass.VAMPIRE]: 0.92,
+        [TankClass.REAPER]: 0.88,
+        [TankClass.COLOSSAL]: 1.4,
+        [TankClass.LEVIATHAN]: 1.22,
+        [TankClass.WARLORD]: 1.3,
+        [TankClass.CELESTIAL]: 1.18,
+        [TankClass.OBLITERATOR]: 1.54,
+    };
+
     let baseReloadTimeMs = (BASE_STATS.reload - (tank.stats[StatType.RELOAD] * 2.5)) * 16.67; 
+    baseReloadTimeMs *= CLASS_FIRE_RATE_MULT[tank.classType] ?? 1.0;
     
     // SACRIFICIAL GOAT BUFF: Fire Rate increased
     if (tank.isSacrificing) {
@@ -8834,7 +8882,8 @@ export class GameEngine {
         const [length, width, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const widthScale = width / 0.8;
         
-        const isDestroyer = tank.classType === TankClass.DESTROYER || tank.classType === TankClass.HYBRID;
+        const isDestroyer = tank.classType === TankClass.DESTROYER;
+        const isHybrid = tank.classType === TankClass.HYBRID;
         const isAnnihilator = tank.classType === TankClass.ANNIHILATOR;
         const isMachineGun = tank.classType === TankClass.MACHINE_GUN;
         const isSprayer = tank.classType === TankClass.SPRAYER;
@@ -8850,14 +8899,31 @@ export class GameEngine {
         // Default to medium size for all tanks
         bulletSizeMult = 1.0;
         
-        if (tank.classType === TankClass.SNIPER) { bulletSpeedMult = 1.5; bulletDamageMult = 1.65; bulletLifeMult = 1.3; }
-        else if (tank.classType === TankClass.ASSASSIN) { bulletSpeedMult = 1.85; bulletDamageMult = 2.25; bulletLifeMult = 1.7; }
-        else if (tank.classType === TankClass.RANGER || tank.classType === TankClass.STALKER) { bulletSpeedMult = 2.4; bulletDamageMult = 3.20; bulletLifeMult = 2.4; }
+        // Class-specialized projectile identity + anti-power-creep buffs for weaker classes.
+        if (tank.classType === TankClass.BASIC) { bulletSpeedMult = 1.02; bulletDamageMult = 1.02; bulletLifeMult = 1.03; bulletSizeMult = 1.0; }
+        else if (tank.classType === TankClass.TWIN) { bulletSpeedMult = 1.06; bulletDamageMult = 0.96; bulletLifeMult = 1.0; bulletSizeMult = 0.94; }
+        else if (tank.classType === TankClass.TRIPLE_SHOT) { bulletSpeedMult = 1.08; bulletDamageMult = 0.92; bulletLifeMult = 1.03; bulletSizeMult = 0.9; }
+        else if (tank.classType === TankClass.QUAD_TANK) { bulletSpeedMult = 1.04; bulletDamageMult = 0.9; bulletLifeMult = 1.02; bulletSizeMult = 0.9; }
+        else if (tank.classType === TankClass.TWIN_FLANK) { bulletSpeedMult = 1.08; bulletDamageMult = 0.94; bulletLifeMult = 1.05; bulletSizeMult = 0.92; }
+        else if (tank.classType === TankClass.TRIPLE_TWIN) { bulletSpeedMult = 1.1; bulletDamageMult = 0.9; bulletLifeMult = 1.08; bulletSizeMult = 0.88; }
+        else if (tank.classType === TankClass.TRIPLE_TANK) { bulletSpeedMult = 1.06; bulletDamageMult = 1.04; bulletLifeMult = 1.08; bulletSizeMult = 0.97; }
+        else if (tank.classType === TankClass.PENTA_SHOT) { bulletSpeedMult = 1.1; bulletDamageMult = 0.88; bulletLifeMult = 1.12; bulletSizeMult = 0.85; }
+        else if (tank.classType === TankClass.SPREAD_SHOT) { bulletSpeedMult = 1.18; bulletDamageMult = 0.76; bulletLifeMult = 0.95; bulletSizeMult = 0.76; }
+        else if (tank.classType === TankClass.SNIPER) { bulletSpeedMult = 1.5; bulletDamageMult = 1.65; bulletLifeMult = 1.3; bulletSizeMult = 0.9; }
+        else if (tank.classType === TankClass.ASSASSIN) { bulletSpeedMult = 1.85; bulletDamageMult = 2.25; bulletLifeMult = 1.7; bulletSizeMult = 0.88; }
+        else if (tank.classType === TankClass.RANGER || tank.classType === TankClass.STALKER) { bulletSpeedMult = 2.4; bulletDamageMult = 3.20; bulletLifeMult = 2.4; bulletSizeMult = 0.92; }
         else if (isDestroyer) { 
             bulletSizeMult = this.sandboxConfig?.spawningEnabled ? 2.5 : 2.2; 
             bulletDamageMult = 6.0; 
             bulletLifeMult = 1.8; 
             bulletSpeedMult = 2.1; 
+        }
+        else if (isHybrid) {
+            // HYBRID: no longer treated like destroyer shell spam; distinct "siege-support" bullet profile.
+            bulletSizeMult = 1.28;
+            bulletDamageMult = 2.75;
+            bulletLifeMult = 1.38;
+            bulletSpeedMult = 1.42;
         }
         else if (isAnnihilator) { 
             bulletSizeMult = this.sandboxConfig?.spawningEnabled ? 3.2 : 3.0; 
@@ -8866,6 +8932,13 @@ export class GameEngine {
             bulletLifeMult = 1.75; 
             bulletSpeedMult = 1.62; 
         }
+        else if (tank.classType === TankClass.FLANK_GUARD) { bulletSpeedMult = 1.06; bulletDamageMult = 1.0; bulletLifeMult = 1.02; bulletSizeMult = 0.94; }
+        else if (tank.classType === TankClass.TRI_ANGLE) { bulletSpeedMult = 1.18; bulletDamageMult = 0.9; bulletLifeMult = 0.94; bulletSizeMult = 0.86; }
+        else if (tank.classType === TankClass.BOOSTER) { bulletSpeedMult = 1.24; bulletDamageMult = 0.94; bulletLifeMult = 0.96; bulletSizeMult = 0.86; }
+        else if (tank.classType === TankClass.FIGHTER) { bulletSpeedMult = 1.18; bulletDamageMult = 0.98; bulletLifeMult = 1.0; bulletSizeMult = 0.9; }
+        else if (tank.classType === TankClass.OVERSEER) { bulletSizeMult = 0.84; bulletDamageMult = 0.92; bulletSpeedMult = 1.16; bulletLifeMult = 1.28; }
+        else if (tank.classType === TankClass.OVERLORD) { bulletSizeMult = 0.84; bulletDamageMult = 0.9; bulletSpeedMult = 1.14; bulletLifeMult = 1.28; }
+        else if (tank.classType === TankClass.MANAGER) { bulletSizeMult = 0.86; bulletDamageMult = 0.96; bulletSpeedMult = 1.18; bulletLifeMult = 1.32; }
         else if (isPacifistClass) {
             // Support identity: reliable utility damage, lower than DPS classes
             bulletSizeMult = 0.95;
@@ -8876,9 +8949,9 @@ export class GameEngine {
         else if (isDrainingClass) {
             // Sustain-offense hybrid: consistent but controlled offensive profile
             bulletSizeMult = 1.0;
-            bulletDamageMult = 0.95;
-            bulletLifeMult = 1.2;
-            bulletSpeedMult = 1.15;
+            bulletDamageMult = 1.08; // slight class-wide uplift for blood line
+            bulletLifeMult = 1.26;
+            bulletSpeedMult = 1.22;
         }
         else if (isMachineGun) {
             // Sustained suppression identity with spin-up overdrive
@@ -8898,18 +8971,18 @@ export class GameEngine {
                 bulletSpeedMult = 1.12;
             } else {
                 bulletSizeMult = 0.82;
-                bulletDamageMult = 0.78;
+                bulletDamageMult = 0.86; // modest anti-power-creep buff
                 bulletLifeMult = 0.96;
                 bulletSpeedMult = 1.34;
             }
         }
         else if (tank.classType === TankClass.GUNNER || tank.classType === TankClass.AUTO_GUNNER) {
-            bulletSizeMult = 0.68;
-            bulletDamageMult = 0.76;
+            bulletSizeMult = tank.classType === TankClass.GUNNER ? 0.82 : 0.72;
+            bulletDamageMult = tank.classType === TankClass.GUNNER ? 0.86 : 0.82;
             bulletSpeedMult = 1.82;
-            bulletLifeMult = 1.18;
+            bulletLifeMult = tank.classType === TankClass.GUNNER ? 1.3 : 1.24;
         }
-        else if (tank.classType === TankClass.STREAMLINER) { bulletDamageMult = 0.45; bulletSizeMult = 0.6; bulletSpeedMult = 1.8; }
+        else if (tank.classType === TankClass.STREAMLINER) { bulletDamageMult = 0.58; bulletSizeMult = 0.62; bulletSpeedMult = 1.95; bulletLifeMult = 1.08; }
 
         // EXCLUSION LOGIC: Only apply width scale to bullet properties if not a Destroyer, Annihilator, or Hybrid main gun.
         if (!isSpecialLarge) {
