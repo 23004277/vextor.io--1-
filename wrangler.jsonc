@@ -1,15 +1,22 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Worker identity
   "name": "vextorio",
+  "workers_dev": true,
+
+  // Runtime compatibility pin (update intentionally, not automatically).
   "compatibility_date": "2026-05-29",
-  "observability": {
-    "enabled": true
-  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+
+  // Static site output from Vite build.
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"
   },
-  "compatibility_flags": [
-    "nodejs_compat"
-  ]
+
+  // Keep platform telemetry for operational visibility.
+  "observability": {
+    "enabled": true
+  }
 }
