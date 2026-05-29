@@ -139,6 +139,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   activeColor,
   canJoinTeam,
 }) => {
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showTos, setShowTos] = useState(false);
   const stats = user?.stats ?? { maxLevel: 1, totalKills: 0, totalDeaths: 0, totalScore: 0 };
   const tankColor = gameMode === GameMode.TEAMS
     ? (selectedTeam === Team.BLUE ? COLORS.player : COLORS.enemy)
@@ -306,6 +308,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   { label: 'Records_DB', sub: 'Achievements', icon: Trophy, action: () => setShowAchievements(true), accent: 'rgba(255,200,0,0.8)' },
                   { label: 'Data_Logs', sub: 'Update history', icon: ScrollText, action: () => setShowUpdateHistory(true), accent: 'rgba(180,140,255,0.85)' },
                   { label: 'Settings', sub: 'Configure env', icon: SlidersHorizontal, action: () => setShowSettings(true), accent: 'rgba(52,211,153,0.85)' },
+                  { label: 'Privacy', sub: 'Policy & data usage', icon: ScrollText, action: () => setShowPrivacy(true), accent: 'rgba(96,165,250,0.85)' },
+                  { label: 'Terms', sub: 'TOS & fair play', icon: ScrollText, action: () => setShowTos(true), accent: 'rgba(244,114,182,0.85)' },
                 ].map(link => (
                   <button
                     key={link.label}
@@ -600,6 +604,39 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               <div style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.35em', color: 'rgba(0,210,255,0.2)', textTransform: 'uppercase' }}>
                 SECURE_PROTOCOL_v4.2.8 // ENC_ACTIVE
               </div>
+              <div className="flex items-center gap-3 mt-2">
+                <button
+                  type="button"
+                  onClick={() => { playClick(); setShowPrivacy(true); }}
+                  style={{
+                    fontFamily: '"Courier New", monospace',
+                    fontSize: 9,
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    color: 'rgba(147,197,253,0.85)',
+                    borderBottom: '1px solid rgba(147,197,253,0.35)',
+                    paddingBottom: 2,
+                  }}
+                >
+                  Privacy
+                </button>
+                <span style={{ color: 'rgba(255,255,255,0.2)', fontFamily: '"Courier New", monospace', fontSize: 9 }}>/</span>
+                <button
+                  type="button"
+                  onClick={() => { playClick(); setShowTos(true); }}
+                  style={{
+                    fontFamily: '"Courier New", monospace',
+                    fontSize: 9,
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    color: 'rgba(251,113,133,0.88)',
+                    borderBottom: '1px solid rgba(251,113,133,0.35)',
+                    paddingBottom: 2,
+                  }}
+                >
+                  Terms
+                </button>
+              </div>
             </motion.main>
 
             <motion.aside
@@ -741,6 +778,90 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             .engage-sweep { animation: sweep 2.8s ease-in-out infinite; }
             button:focus-visible { outline: 1px solid rgba(0,210,255,0.4); outline-offset: 2px; }
           `}</style>
+
+          <AnimatePresence>
+            {showPrivacy && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-[100] flex items-center justify-center p-4"
+                style={{ background: 'rgba(0,0,0,0.72)' }}
+                onClick={() => setShowPrivacy(false)}
+              >
+                <motion.div
+                  initial={{ opacity: 0, y: 16, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                  transition={{ duration: 0.22 }}
+                  className="w-full max-w-2xl rounded-xl p-5 md:p-6"
+                  style={{ background: 'rgba(6,12,24,0.96)', border: '1px solid rgba(0,180,255,0.24)' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#dbeafe' }}>Privacy Policy</h3>
+                  <div className="mt-3 space-y-2" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(219,234,254,0.86)', lineHeight: 1.65 }}>
+                    <p>We collect only data required to operate the game, including account identifiers, profile settings, gameplay progression, and leaderboard records.</p>
+                    <p>Security and abuse-prevention telemetry may be processed to protect service integrity, detect exploits, and enforce fair-play rules.</p>
+                    <p>We do not sell personal information. Third-party providers may process authentication, storage, analytics, and delivery under their own policies.</p>
+                    <p>By using online features, you consent to processing required for live matchmaking, persistence, moderation, and platform security operations.</p>
+                    <p>Support requests for data access, correction, or deletion can be submitted through official support channels and are handled within reasonable timeframes.</p>
+                    <p>Policy terms may be updated as features or legal requirements change; continued use after updates constitutes acceptance of the revised policy.</p>
+                  </div>
+                  <div className="mt-5 flex justify-end">
+                    <button
+                      onClick={() => setShowPrivacy(false)}
+                      className="rounded-lg px-4 py-2"
+                      style={{ background: 'rgba(0,160,255,0.16)', border: '1px solid rgba(0,160,255,0.35)', color: '#dbeafe', fontFamily: '"Courier New", monospace', fontSize: 11, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showTos && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-[100] flex items-center justify-center p-4"
+                style={{ background: 'rgba(0,0,0,0.72)' }}
+                onClick={() => setShowTos(false)}
+              >
+                <motion.div
+                  initial={{ opacity: 0, y: 16, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                  transition={{ duration: 0.22 }}
+                  className="w-full max-w-2xl rounded-xl p-5 md:p-6"
+                  style={{ background: 'rgba(18,8,24,0.96)', border: '1px solid rgba(236,72,153,0.24)' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#fce7f3' }}>Terms Of Service</h3>
+                  <div className="mt-3 space-y-2" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(252,231,243,0.86)', lineHeight: 1.65 }}>
+                    <p>Use of cheats, automation, macros, exploit abuse, reverse-engineering attempts, or service disruption is strictly prohibited.</p>
+                    <p>Players must not impersonate others, abuse chat or naming systems, or engage in targeted harassment, hate content, or malicious behavior.</p>
+                    <p>The service may issue warnings, suspensions, stat resets, leaderboard removals, or permanent bans when violations are detected.</p>
+                    <p>Live systems, balance values, and content may be changed, limited, or reset at any time for technical, security, or operational reasons.</p>
+                    <p>Accounts are responsible for actions performed through their credentials, including multiplayer conduct and any unauthorized automation.</p>
+                    <p>By continuing to play, you agree to these terms and acknowledge that enforcement decisions are final for competitive integrity and safety.</p>
+                  </div>
+                  <div className="mt-5 flex justify-end">
+                    <button
+                      onClick={() => setShowTos(false)}
+                      className="rounded-lg px-4 py-2"
+                      style={{ background: 'rgba(236,72,153,0.16)', border: '1px solid rgba(236,72,153,0.35)', color: '#fce7f3', fontFamily: '"Courier New", monospace', fontSize: 11, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
       )}
     </AnimatePresence>

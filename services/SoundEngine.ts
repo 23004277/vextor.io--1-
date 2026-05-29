@@ -98,6 +98,14 @@ export class SoundEngine {
     return center * (1 - amount + Math.random() * amount * 2);
   }
 
+  // Global pitch variance per synthesized voice so tones naturally swing high/low.
+  private createOscillatorVoice(): OscillatorNode {
+    const osc = this.createOscillatorVoice();
+    const detuneCents = (Math.random() * 2 - 1) * 260;
+    osc.detune.setValueAtTime(detuneCents, this.ctx.currentTime);
+    return osc;
+  }
+
   // Small helper: create a panned gain node
   private createPannedGain(
     panRange = 0.4,
@@ -171,7 +179,7 @@ export class SoundEngine {
 
     // --- LAYER 1: THE SUB-SLAM (Chest punch) ---
     {
-        const osc = this.ctx.createOscillator();
+        const osc = this.createOscillatorVoice();
         const { gain: g } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
         osc.type = 'sine';
         osc.frequency.setValueAtTime(50, t);
@@ -188,8 +196,8 @@ export class SoundEngine {
 
     // --- LAYER 2: THE "GRIT" (Mechanical Rattle) ---
     {
-        const osc1 = this.ctx.createOscillator();
-        const osc2 = this.ctx.createOscillator();
+        const osc1 = this.createOscillatorVoice();
+        const osc2 = this.createOscillatorVoice();
         const { gain: g } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
         const lp = this.ctx.createBiquadFilter();
         
@@ -322,7 +330,7 @@ export class SoundEngine {
 
     // --- LAYER 1: MECHANICAL CLICK (Firing Pin) ---
     {
-      const pinOsc = this.ctx.createOscillator();
+      const pinOsc = this.createOscillatorVoice();
       const { gain: pinG } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       pinOsc.type = 'square';
       pinOsc.frequency.setValueAtTime(finalBaseFreq * 4, t);
@@ -336,7 +344,7 @@ export class SoundEngine {
 
     // Rapid-fire rotor/mechanical loop layer
     if (isRapidFireClass) {
-      const rotor = this.ctx.createOscillator();
+      const rotor = this.createOscillatorVoice();
       const { gain: rotorGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       rotor.type = 'square';
       const rpm = Math.min(1, streak / 16);
@@ -352,7 +360,7 @@ export class SoundEngine {
 
     // --- LAYER 2: BORE BLAST (The main tone) ---
     {
-      const bodyOsc = this.ctx.createOscillator();
+      const bodyOsc = this.createOscillatorVoice();
       const { gain: bodyGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       bodyOsc.type = profile.waveType;
       bodyOsc.frequency.setValueAtTime(finalBaseFreq, t);
@@ -397,7 +405,7 @@ export class SoundEngine {
 
     // --- LAYER 4: SUB-THUMP ---
     if (profile.addSub) {
-      const sub = this.ctx.createOscillator();
+      const sub = this.createOscillatorVoice();
       const { gain: subG } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       sub.type = 'sine';
       sub.frequency.setValueAtTime(45 * pitchVariance, t);
@@ -414,7 +422,7 @@ export class SoundEngine {
 
     // --- LAYER 5: MACHINE GUN SERVO WHINE (sustained fire identity) ---
     if (type === TankClass.MACHINE_GUN && streak > 3) {
-      const servo = this.ctx.createOscillator();
+      const servo = this.createOscillatorVoice();
       const { gain: servoGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       servo.type = 'triangle';
       const lift = Math.min(1, streak / 14);
@@ -429,7 +437,7 @@ export class SoundEngine {
     }
 
     if (type === TankClass.GUNNER) {
-      const coreHum = this.ctx.createOscillator();
+      const coreHum = this.createOscillatorVoice();
       const { gain: humGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       coreHum.type = 'sine';
       const lift = Math.min(1, streak / 14);
@@ -445,7 +453,7 @@ export class SoundEngine {
 
     // Distinct turret chatter layer for Auto-Gunner secondary fire
     if (type === TankClass.AUTO_GUNNER) {
-      const tracker = this.ctx.createOscillator();
+      const tracker = this.createOscillatorVoice();
       const { gain: trackerGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       tracker.type = 'square';
       tracker.frequency.setValueAtTime(320 + Math.random() * 70, t);
@@ -457,7 +465,7 @@ export class SoundEngine {
       tracker.start(t);
       tracker.stop(t + 0.05);
 
-      const staticHum = this.ctx.createOscillator();
+      const staticHum = this.createOscillatorVoice();
       const { gain: staticGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       staticHum.type = 'triangle';
       staticHum.frequency.setValueAtTime(180 + Math.random() * 30, t);
@@ -472,7 +480,7 @@ export class SoundEngine {
 
     // Hybrid fusion layer: telemetry chirp blended with heavy blast
     if (type === TankClass.HYBRID) {
-      const chirp = this.ctx.createOscillator();
+      const chirp = this.createOscillatorVoice();
       const { gain: chirpGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       chirp.type = 'triangle';
       chirp.frequency.setValueAtTime(380 + Math.random() * 40, t);
@@ -487,7 +495,7 @@ export class SoundEngine {
 
     // Annihilator pressure crack layer
     if (type === TankClass.ANNIHILATOR) {
-      const crack = this.ctx.createOscillator();
+      const crack = this.createOscillatorVoice();
       const { gain: crackGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       crack.type = 'sawtooth';
       crack.frequency.setValueAtTime(190, t);
@@ -502,7 +510,7 @@ export class SoundEngine {
 
     // Rebirth identity layer: class-unique spectral signature above main blast.
     if (isRebirthClass) {
-      const sig = this.ctx.createOscillator();
+      const sig = this.createOscillatorVoice();
       const { gain: sigGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       sig.type = (type === TankClass.CELESTIAL || type === TankClass.OBLITERATOR) ? 'triangle' : 'sawtooth';
       const base =
@@ -521,7 +529,7 @@ export class SoundEngine {
     }
 
     if (type === TankClass.OBLITERATOR) {
-      const crack = this.ctx.createOscillator();
+      const crack = this.createOscillatorVoice();
       const { gain: crackGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       crack.type = 'square';
       crack.frequency.setValueAtTime(96 + Math.random() * 14, t);
@@ -543,7 +551,7 @@ export class SoundEngine {
     const spatial = this.getSpatialMix(options);
     if (!this.throttle('restoration-aura', Math.round(180 * spatial.throttleMul))) return;
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange * 0.8, spatial.pan, spatial.lowpassHz);
     osc.type = 'sine';
     osc.frequency.setValueAtTime(420 + Math.random() * 30, t);
@@ -564,7 +572,7 @@ export class SoundEngine {
     const spatial = this.getSpatialMix(options);
     if (!this.throttle('blood-drain', Math.round(90 * spatial.throttleMul))) return;
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(170 + Math.random() * 60, t);
@@ -586,7 +594,7 @@ export class SoundEngine {
     if (!this.throttle('blood-burst', Math.round(350 * spatial.throttleMul))) return;
     this.playExplosion(true, options);
     const t = this.ctx.currentTime;
-    const sub = this.ctx.createOscillator();
+    const sub = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
     sub.type = 'sine';
     sub.frequency.setValueAtTime(58, t);
@@ -608,7 +616,7 @@ export class SoundEngine {
     if (!this.throttle('celestial-boom', Math.round(220 * spatial.throttleMul))) return;
     this.playShoot(TankClass.ANNIHILATOR, options);
     const t = this.ctx.currentTime;
-    const ring = this.ctx.createOscillator();
+    const ring = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
     ring.type = 'triangle';
     ring.frequency.setValueAtTime(115, t);
@@ -629,7 +637,7 @@ export class SoundEngine {
     const spatial = this.getSpatialMix(options);
     if (!this.throttle('boss-drone-launch', Math.round(120 * spatial.throttleMul))) return;
     const t = this.ctx.currentTime;
-    const whirr = this.ctx.createOscillator();
+    const whirr = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
     const isColossal = sourceClass === TankClass.COLOSSAL;
     const isLeviathan = sourceClass === TankClass.LEVIATHAN;
@@ -659,7 +667,7 @@ export class SoundEngine {
     const t = this.ctx.currentTime;
     const pitch = 0.7 + Math.random() * 0.5;
 
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(140 * pitch, t);
@@ -734,7 +742,7 @@ export class SoundEngine {
 
     // Shockwave Rumble
     if (isLarge) {
-      const rumble = this.ctx.createOscillator();
+      const rumble = this.createOscillatorVoice();
       const { gain: rumbleG } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
       rumble.type = 'sine';
       rumble.frequency.setValueAtTime(60, t);
@@ -759,7 +767,7 @@ export class SoundEngine {
     const notes = [523.25, 659.25, 783.99, 1046.50];
 
     notes.forEach((freq, i) => {
-      const osc = this.ctx.createOscillator();
+      const osc = this.createOscillatorVoice();
       const { gain } = this.createPannedGain(0.2);
       const start = t + i * 0.06;
 
@@ -785,7 +793,7 @@ export class SoundEngine {
     if (!this.throttle('ui-hover', 45)) return;
 
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(0.1);
     osc.type = 'sine';
     osc.frequency.setValueAtTime(1100, t);
@@ -802,7 +810,7 @@ export class SoundEngine {
     this.resume();
     if (this.volume <= 0.001) return;
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(0.15);
     osc.type = 'triangle';
     osc.frequency.setValueAtTime(330, t);
@@ -820,8 +828,8 @@ export class SoundEngine {
     if (this.volume <= 0.001) return;
     if (!this.shouldPlaySound(undefined, true)) return;
     const t = this.ctx.currentTime;
-    const osc1 = this.ctx.createOscillator();
-    const osc2 = this.ctx.createOscillator();
+    const osc1 = this.createOscillatorVoice();
+    const osc2 = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(0.1);
     
     osc1.frequency.setValueAtTime(880, t);
@@ -847,7 +855,7 @@ export class SoundEngine {
     if (!this.throttle('shape-spawn', 150)) return;
 
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(0.6);
     osc.type = 'sine';
     osc.frequency.setValueAtTime(400 + Math.random() * 200, t);
@@ -870,7 +878,7 @@ export class SoundEngine {
     if (!this.throttle('shape-death', 50)) return;
 
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(0.4);
     
     let baseFreq = 180;
@@ -904,13 +912,13 @@ export class SoundEngine {
     const t = this.ctx.currentTime;
     
     // Low rumble
-    const osc1 = this.ctx.createOscillator();
+    const osc1 = this.createOscillatorVoice();
     osc1.type = 'sine';
     osc1.frequency.setValueAtTime(80, t);
     osc1.frequency.exponentialRampToValueAtTime(20, t + 1.5);
     
     // Screeching fall
-    const osc2 = this.ctx.createOscillator();
+    const osc2 = this.createOscillatorVoice();
     osc2.type = 'sawtooth';
     osc2.frequency.setValueAtTime(440, t);
     osc2.frequency.exponentialRampToValueAtTime(40, t + 1.0);
@@ -937,7 +945,7 @@ export class SoundEngine {
     const notes = [587.33, 739.99, 880.00, 1174.66]; // D Major Arpeggio
 
     notes.forEach((f, i) => {
-      const o = this.ctx.createOscillator();
+      const o = this.createOscillatorVoice();
       const { gain } = this.createPannedGain(0.2);
       const s = t + i * 0.12;
       o.type = 'sine';
@@ -957,7 +965,7 @@ export class SoundEngine {
     if (!this.shouldPlaySound(undefined, true)) return;
     if (!this.throttle('shield-hit', 80)) return;
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
+    const osc = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(0.2);
     osc.type = 'sine';
     osc.frequency.setValueAtTime(800, t);
@@ -976,7 +984,7 @@ export class SoundEngine {
     if (!this.shouldPlaySound(undefined, false)) return;
     const t = this.ctx.currentTime;
     [1046.50, 1318.51].forEach((f, i) => {
-      const o = this.ctx.createOscillator();
+      const o = this.createOscillatorVoice();
       const { gain } = this.createPannedGain(0.15);
       const s = t + i * 0.04;
       o.type = 'sine';
@@ -998,7 +1006,7 @@ export class SoundEngine {
     const t = this.ctx.currentTime;
     const notes = [440, 554.37, 659.25];
     notes.forEach((f) => {
-      const o = this.ctx.createOscillator();
+      const o = this.createOscillatorVoice();
       const { gain } = this.createPannedGain(0.2);
       o.type = 'triangle';
       o.frequency.setValueAtTime(f, t);
