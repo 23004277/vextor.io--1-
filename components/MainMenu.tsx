@@ -795,25 +795,50 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   exit={{ opacity: 0, y: 12, scale: 0.98 }}
                   transition={{ duration: 0.22 }}
                   className="w-full max-w-2xl rounded-xl p-5 md:p-6"
-                  style={{ background: 'rgba(6,12,24,0.96)', border: '1px solid rgba(0,180,255,0.24)' }}
+                  style={{ background: 'rgba(6,12,24,0.97)', border: '1px solid rgba(0,180,255,0.26)', boxShadow: '0 22px 60px rgba(0,0,0,0.55)' }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#dbeafe' }}>Privacy Policy</h3>
-                  <div className="mt-3 space-y-2" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(219,234,254,0.86)', lineHeight: 1.65 }}>
-                    <p>We collect only data required to operate the game, including account identifiers, profile settings, gameplay progression, and leaderboard records.</p>
-                    <p>Security and abuse-prevention telemetry may be processed to protect service integrity, detect exploits, and enforce fair-play rules.</p>
-                    <p>We do not sell personal information. Third-party providers may process authentication, storage, analytics, and delivery under their own policies.</p>
-                    <p>By using online features, you consent to processing required for live matchmaking, persistence, moderation, and platform security operations.</p>
-                    <p>Support requests for data access, correction, or deletion can be submitted through official support channels and are handled within reasonable timeframes.</p>
-                    <p>Policy terms may be updated as features or legal requirements change; continued use after updates constitutes acceptance of the revised policy.</p>
+                  <div className="flex items-center justify-between gap-3 pb-3" style={{ borderBottom: '1px solid rgba(148,163,184,0.2)' }}>
+                    <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#dbeafe' }}>Privacy Policy</h3>
+                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(147,197,253,0.75)' }}>Effective: May 29, 2026</span>
                   </div>
-                  <div className="mt-5 flex justify-end">
+
+                  <div className="mt-4 space-y-3" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(219,234,254,0.88)', lineHeight: 1.65 }}>
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(30,64,175,0.14)', border: '1px solid rgba(96,165,250,0.28)' }}>
+                      <p style={{ fontWeight: 700, color: '#bfdbfe', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>What We Collect</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>Account and profile identifiers needed for login and persistence.</li>
+                        <li>Gameplay progression, match stats, and leaderboard records.</li>
+                        <li>Security telemetry used to detect exploit or abuse activity.</li>
+                      </ul>
+                    </div>
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(15,23,42,0.62)', border: '1px solid rgba(148,163,184,0.24)' }}>
+                      <p style={{ fontWeight: 700, color: '#bfdbfe', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>How Data Is Used</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>Operating matchmaking, progression, moderation, and anti-cheat systems.</li>
+                        <li>Maintaining service reliability, security, and fair competitive play.</li>
+                        <li>Supporting account requests such as access, correction, or deletion.</li>
+                      </ul>
+                    </div>
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(15,23,42,0.62)', border: '1px solid rgba(148,163,184,0.24)' }}>
+                      <p style={{ fontWeight: 700, color: '#bfdbfe', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Important Notes</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>We do not sell personal information.</li>
+                        <li>Third-party auth/storage providers process some data under their own policies.</li>
+                        <li>Policy updates may occur for legal, security, or feature changes.</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-between items-center gap-3">
+                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.08em', color: 'rgba(191,219,254,0.65)' }}>
+                      Questions: contact in-game support.
+                    </span>
                     <button
                       onClick={() => setShowPrivacy(false)}
                       className="rounded-lg px-4 py-2"
                       style={{ background: 'rgba(0,160,255,0.16)', border: '1px solid rgba(0,160,255,0.35)', color: '#dbeafe', fontFamily: '"Courier New", monospace', fontSize: 11, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}
                     >
-                      Close
+                      Got It
                     </button>
                   </div>
                 </motion.div>
@@ -837,25 +862,49 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   exit={{ opacity: 0, y: 12, scale: 0.98 }}
                   transition={{ duration: 0.22 }}
                   className="w-full max-w-2xl rounded-xl p-5 md:p-6"
-                  style={{ background: 'rgba(18,8,24,0.96)', border: '1px solid rgba(236,72,153,0.24)' }}
+                  style={{ background: 'rgba(18,8,24,0.97)', border: '1px solid rgba(236,72,153,0.26)', boxShadow: '0 22px 60px rgba(0,0,0,0.55)' }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#fce7f3' }}>Terms Of Service</h3>
-                  <div className="mt-3 space-y-2" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(252,231,243,0.86)', lineHeight: 1.65 }}>
-                    <p>Use of cheats, automation, macros, exploit abuse, reverse-engineering attempts, or service disruption is strictly prohibited.</p>
-                    <p>Players must not impersonate others, abuse chat or naming systems, or engage in targeted harassment, hate content, or malicious behavior.</p>
-                    <p>The service may issue warnings, suspensions, stat resets, leaderboard removals, or permanent bans when violations are detected.</p>
-                    <p>Live systems, balance values, and content may be changed, limited, or reset at any time for technical, security, or operational reasons.</p>
-                    <p>Accounts are responsible for actions performed through their credentials, including multiplayer conduct and any unauthorized automation.</p>
-                    <p>By continuing to play, you agree to these terms and acknowledge that enforcement decisions are final for competitive integrity and safety.</p>
+                  <div className="flex items-center justify-between gap-3 pb-3" style={{ borderBottom: '1px solid rgba(251,113,133,0.24)' }}>
+                    <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#fce7f3' }}>Terms Of Service</h3>
+                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(251,113,133,0.78)' }}>Fair Play Required</span>
                   </div>
-                  <div className="mt-5 flex justify-end">
+
+                  <div className="mt-4 space-y-3" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(252,231,243,0.88)', lineHeight: 1.65 }}>
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(131,24,67,0.18)', border: '1px solid rgba(244,114,182,0.3)' }}>
+                      <p style={{ fontWeight: 700, color: '#fbcfe8', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Prohibited Behavior</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>Cheats, bots, macros, packet manipulation, exploit chaining, or service disruption.</li>
+                        <li>Harassment, impersonation, hate content, or abusive profile/chat behavior.</li>
+                        <li>Unauthorized reverse-engineering or bypass attempts against live systems.</li>
+                      </ul>
+                    </div>
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(30,41,59,0.62)', border: '1px solid rgba(251,113,133,0.24)' }}>
+                      <p style={{ fontWeight: 700, color: '#fbcfe8', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Enforcement</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>Violations may result in warnings, suspensions, stat resets, or permanent bans.</li>
+                        <li>Leaderboard or progression actions may be rolled back to preserve integrity.</li>
+                        <li>Accounts are responsible for all activity performed under their credentials.</li>
+                      </ul>
+                    </div>
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(30,41,59,0.62)', border: '1px solid rgba(251,113,133,0.24)' }}>
+                      <p style={{ fontWeight: 700, color: '#fbcfe8', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Service Changes</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>Balance, progression, and online services may change for operational needs.</li>
+                        <li>By continuing to play, you accept these rules and enforcement decisions.</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-between items-center gap-3">
+                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.08em', color: 'rgba(251,207,232,0.66)' }}>
+                      Keep matches fair and respectful.
+                    </span>
                     <button
                       onClick={() => setShowTos(false)}
                       className="rounded-lg px-4 py-2"
                       style={{ background: 'rgba(236,72,153,0.16)', border: '1px solid rgba(236,72,153,0.35)', color: '#fce7f3', fontFamily: '"Courier New", monospace', fontSize: 11, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}
                     >
-                      Close
+                      Understood
                     </button>
                   </div>
                 </motion.div>
