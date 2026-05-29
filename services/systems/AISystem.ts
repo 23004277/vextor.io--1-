@@ -3,6 +3,21 @@ import { BASE_ZONE_WIDTH, SAFE_ZONE_WARNING_RADIUS } from '../../constants';
 import * as Vector from '../MathUtils';
 import { MovementSystem } from './MovementSystem';
 
+export type BotArchetype =
+  | 'FARMER'
+  | 'RUSHER'
+  | 'DUELIST'
+  | 'SNIPER'
+  | 'SUPPORT'
+  | 'EXPLORER'
+  | 'BULLY'
+  | 'SURVIVOR'
+  | 'BOSS_HUNTER'
+  | 'DRONE_COMMANDER';
+
+export type ThreatLevel = 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'PANIC';
+export type DebugColor = 'WHITE' | 'RED' | 'ORANGE' | 'YELLOW' | 'GREEN' | 'BLUE' | 'PURPLE' | 'CYAN';
+
 type TankLike = {
   id: number;
   pos: Vector2;
@@ -24,10 +39,20 @@ type TankLike = {
   lastSteering: Vector2;
   availableStatPoints: number;
   isDead: boolean;
+  lastDamageSourceId?: number | null;
+};
+
+type RecentContact = {
+  id: number;
+  firstSeenTick: number;
+  lastSeenTick: number;
+  lastKnownPos: Vector2;
+  lastKnownVel: Vector2;
+  timesTargeted: number;
 };
 
 type BotMemory = {
-  sessionArchetype: 'FARMER' | 'RUSHER' | 'SUPPORT' | 'EXPLORER';
+  sessionArchetype: BotArchetype;
   wanderAngle: number;
   lookAngle: number;
   lookPhase: number;
@@ -38,9 +63,15 @@ type BotMemory = {
   lastPos: Vector2;
   lastState: AIState;
   lastTargetId: number | null;
+  lastShootTargetId: number | null;
   aggressionBias: number;
+  cautionBias: number;
+  accuracyBias: number;
+  farmBias: number;
+  supportBias: number;
   aimNoise: number;
   lastDecisionTick: number;
+  lastThinkTick: number;
   teamFightTargetId: number | null;
   teamFightUntilTick: number;
   fleeHealthThreshold: number;
@@ -51,6 +82,7 @@ type BotMemory = {
   intentTargetId: number | null;
   intentPromoteTick: number;
   seenHostiles: Map<number, number>;
+  recentContacts: Map<number, RecentContact>;
   shootHesitancyTicks: number;
   shootHesitancyCounter: number;
   panicFleeAngleOffset: number;
@@ -64,6 +96,7 @@ type BotMemory = {
   sameFeelLogged: boolean;
   latePhaseKills: number;
   latePhaseDeaths: number;
+  debug: AIDebugSnapshot | null;
 };
 
 type EngineLike = {
@@ -90,6 +123,47 @@ type WorldInfo = {
   width: number;
   height: number;
   baseZoneWidth: number;
+  center: Vector2;
+};
+
+type SensorFrame = {
+  neighbors: any[];
+  hostiles: any[];
+  allies: any[];
+  farmTargets: any[];
+  rareTargets: any[];
+  bullets: any[];
+  crashers: any[];
+  portals: any[];
+  closestHostile: any | null;
+  closestFarm: any | null;
+  closestBullet: any | null;
+  projectilePressure: number;
+  allyPressure: number;
+  safeDirection: Vector2;
+  resourceCentroid: Vector2 | null;
+  hostileCentroid: Vector2 | null;
+};
+
+export type AIDebugRay = {
+  origin: Vector2;
+  direction: Vector2;
+  length: number;
+  color: DebugColor;
+  label?: string;
+};
+
+export type AIDebugSnapshot = {
+  botId: number;
+  state: AIState;
+  archetype: BotArchetype;
+  targetId: number | null;
+  shootTargetId: number | null;
+  reason: string;
+  steering: Vector2;
+  projectilePressure: number;
+  threatLevel: ThreatLevel;
+  rays: AIDebugRay[];
 };
 
 const BASE_BULLET_SPEED = 5;
@@ -98,6 +172,9 @@ const ZERO: Vector2 = { x: 0, y: 0 };
 
 const AI_TUNING = {
   defaultDecisionStride: 5,
+  combatDecisionStride: 3,
+  fleeDecisionStride: 2,
+  idleDecisionStride: 6,
   defaultWorldWidth: 6000,
   defaultWorldHeight: 4000,
 
@@ -106,6 +183,10 @@ const AI_TUNING = {
   fleeLatchTicks: 26,
   pressureFleeThreshold: 1.15,
   pressureCautionThreshold: 0.58,
+  steeringSmoothing: 0.38,
+  emergencySteeringSmoothing: 0.72,
+  visionMin: 160,
+  visionPaddingProjectile: 300,
 
   stuckDistanceSq: 11 * 11,
   stuckTargetDistanceSq: 95 * 95,
@@ -133,8 +214,11 @@ const AI_TUNING = {
   combatMaxRange: 520,
   heavyMinRange: 410,
   heavyMaxRange: 760,
+  supportMinRange: 340,
+  supportMaxRange: 650,
   farmMinRange: 260,
   farmMaxRange: 430,
+  crasherRangeBonus: 80,
   farmShapeAvoidRadiusPadding: 125,
   farmEmergencyFleePadding: 90,
 
@@ -147,6 +231,8 @@ const AI_TUNING = {
   rusherLateRiskMinEngagements: 4,
   portalTransitDetectionRadius: 1200,
   portalTransitCommitRadius: 340,
+  contactForgetTicks: 600,
+  dodgeForceMax: 1.5,
 };
 
 const RARE_RARITIES = new Set(['Legendary', 'Mythical', 'Eternal', 'Transcendent', 'Godly', 'Divine']);
@@ -155,6 +241,7 @@ export class AISystem {
   private readonly movement = new MovementSystem();
   private readonly botMemory = new Map<number, BotMemory>();
   private readonly lastHealthSnapshot = new Map<number, { health: number; lastDropTick: number }>();
+  private readonly debugSnapshots = new Map<number, AIDebugSnapshot>();
 
   private readonly cachedAllies: Array<{ pos: Vector2 }> = [];
   private readonly cachedAllyVels: Vector2[] = [];
@@ -173,6 +260,7 @@ export class AISystem {
   updateBot(bot: TankLike, engine: EngineLike, dt: number, botStatPriorities: Record<TankClass, StatType[]>): void {
     if (bot.isDead) return;
 
+    const memory = this.getMemory(bot);
     this.updateHuntTimer(bot, dt);
 
     // Keep movement, rotation and shooting responsive every fixed tick.
@@ -185,14 +273,15 @@ export class AISystem {
 
     this.debugDecisionsThisTick++;
 
-    const memory = this.getMemory(bot);
-    const neighbors = engine.spatialGrid.query(bot.pos, Math.max(80, bot.visionRange));
     const world = this.getWorldInfo(engine);
+    const frame = this.scan(bot, engine, world);
 
     memory.lastDecisionTick = this.tick;
-    this.captureHealthDeltas(neighbors);
+    memory.lastThinkTick = this.tick;
+    this.updateMemoryFromSensors(bot, frame, memory);
+    this.captureHealthDeltas(frame.neighbors);
 
-    let result = this.chooseBehavior(bot, engine, neighbors, memory);
+    let result = this.chooseBehavior(bot, engine, frame, memory);
 
     if (this.shouldForceResourceRouting(bot, result.state, result.target, engine, world)) {
       result = {
@@ -205,19 +294,25 @@ export class AISystem {
     result = this.applyStuckRecovery(bot, result, memory);
     this.commitBehavior(bot, result);
 
-    const steering = this.computeSteering(bot, result.target, neighbors, result.state, engine.gameMode, world, memory);
-    bot.lastSteering = Vector.limit(steering, AI_TUNING.maxSteering);
+    const steering = this.computeSteering(bot, result.target, frame, result.state, engine.gameMode, world, memory);
+    bot.lastSteering = this.smoothSteering(bot, steering, result.state);
 
     memory.lastPos = { x: bot.pos.x, y: bot.pos.y };
     memory.lastState = result.state;
     memory.lastTargetId = result.target ? result.target.id : null;
+    memory.lastShootTargetId = result.combatTarget ? result.combatTarget.id : null;
 
     this.allocateStats(bot, engine, botStatPriorities);
+    this.writeDebug(bot, memory, frame, result, steering);
   }
 
   private shouldThink(bot: TankLike): boolean {
     const memory = this.getMemory(bot);
-    return ((bot.id + this.tick) % memory.decisionStride) === 0;
+    let stride = memory.decisionStride;
+    if (bot.aiState === AIState.COMBAT) stride = AI_TUNING.combatDecisionStride;
+    else if (bot.aiState === AIState.FLEE) stride = AI_TUNING.fleeDecisionStride;
+    else if (bot.aiState === AIState.IDLE) stride = AI_TUNING.idleDecisionStride;
+    return ((bot.id + this.tick) % Math.max(1, stride)) === 0;
   }
 
   private updateHuntTimer(bot: TankLike, dt: number): void {
@@ -229,11 +324,159 @@ export class AISystem {
     }
   }
 
-  private chooseBehavior(bot: TankLike, engine: EngineLike, neighbors: any[], memory: BotMemory): ThinkResult {
+  private scan(bot: TankLike, engine: EngineLike, world: WorldInfo): SensorFrame {
+    const radius = Math.max(AI_TUNING.visionMin, bot.visionRange + AI_TUNING.visionPaddingProjectile);
+    const neighbors = engine.spatialGrid.query(bot.pos, radius);
+
+    const hostiles: any[] = [];
+    const allies: any[] = [];
+    const farmTargets: any[] = [];
+    const rareTargets: any[] = [];
+    const bullets: any[] = [];
+    const crashers: any[] = [];
+    const portals: any[] = [];
+
+    let closestHostile: any | null = null;
+    let closestFarm: any | null = null;
+    let closestBullet: any | null = null;
+    let closestHostileD2 = Infinity;
+    let closestFarmD2 = Infinity;
+    let closestBulletD2 = Infinity;
+
+    let hostileX = 0;
+    let hostileY = 0;
+    let hostileCount = 0;
+    let farmX = 0;
+    let farmY = 0;
+    let farmWeight = 0;
+    let pressure = 0;
+    let allyPressure = 0;
+    let safeX = 0;
+    let safeY = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.id === bot.id) continue;
+
+      const distanceSq = Math.max(1, Vector.distSq(bot.pos, e.pos));
+
+      if (e.type === EntityType.BULLET) {
+        if (!this.isFriendly(bot, e, engine.gameMode)) {
+          bullets.push(e);
+          if (distanceSq < closestBulletD2) {
+            closestBulletD2 = distanceSq;
+            closestBullet = e;
+          }
+
+          const rel = Vector.sub(bot.pos, e.pos);
+          const vel = e.vel || ZERO;
+          const incoming = Vector.dot(rel, vel) > 0;
+          const weight = ((incoming ? 1.0 : 0.25) * 20000) / distanceSq;
+          pressure += weight;
+
+          const away = Vector.normalize(rel);
+          safeX += away.x * weight;
+          safeY += away.y * weight;
+        }
+        continue;
+      }
+
+      if (this.isTankLike(e)) {
+        if (this.isFriendly(bot, e, engine.gameMode)) {
+          allies.push(e);
+          allyPressure += 1 / distanceSq;
+        } else {
+          hostiles.push(e);
+          hostileX += e.pos.x;
+          hostileY += e.pos.y;
+          hostileCount++;
+          if (distanceSq < closestHostileD2) {
+            closestHostileD2 = distanceSq;
+            closestHostile = e;
+          }
+        }
+        continue;
+      }
+
+      if (this.isFarmTarget(e)) {
+        farmTargets.push(e);
+        if (e.type === EntityType.CRASHER) crashers.push(e);
+        if (this.isRareFarmTarget(e)) rareTargets.push(e);
+
+        const xp = Math.max(1, typeof e.xpValue === 'number' ? e.xpValue : 100);
+        const rarityBoost = this.getRarityScore(e);
+        const weight = (xp * (1 + rarityBoost * 0.08)) / Math.max(64, Math.sqrt(distanceSq));
+        farmX += e.pos.x * weight;
+        farmY += e.pos.y * weight;
+        farmWeight += weight;
+
+        if (distanceSq < closestFarmD2) {
+          closestFarmD2 = distanceSq;
+          closestFarm = e;
+        }
+        continue;
+      }
+
+      if (e.type === EntityType.VOID_PORTAL) {
+        portals.push(e);
+      }
+    }
+
+    return {
+      neighbors,
+      hostiles,
+      allies,
+      farmTargets,
+      rareTargets,
+      bullets,
+      crashers,
+      portals,
+      closestHostile,
+      closestFarm,
+      closestBullet,
+      projectilePressure: pressure,
+      allyPressure,
+      safeDirection: Vector.normalize({ x: safeX, y: safeY }),
+      resourceCentroid: farmWeight > 0 ? { x: farmX / farmWeight, y: farmY / farmWeight } : null,
+      hostileCentroid: hostileCount > 0 ? { x: hostileX / hostileCount, y: hostileY / hostileCount } : null,
+    };
+  }
+
+  private updateMemoryFromSensors(bot: TankLike, frame: SensorFrame, memory: BotMemory): void {
+    for (let i = 0; i < frame.hostiles.length; i++) {
+      const hostile = frame.hostiles[i];
+      if (!memory.seenHostiles.has(hostile.id)) memory.seenHostiles.set(hostile.id, this.tick);
+
+      const existing = memory.recentContacts.get(hostile.id);
+      if (existing) {
+        existing.lastSeenTick = this.tick;
+        existing.lastKnownPos = { x: hostile.pos.x, y: hostile.pos.y };
+        existing.lastKnownVel = hostile.vel || ZERO;
+      } else {
+        memory.recentContacts.set(hostile.id, {
+          id: hostile.id,
+          firstSeenTick: this.tick,
+          lastSeenTick: this.tick,
+          lastKnownPos: { x: hostile.pos.x, y: hostile.pos.y },
+          lastKnownVel: hostile.vel || ZERO,
+          timesTargeted: 0,
+        });
+      }
+    }
+
+    for (const [id, contact] of memory.recentContacts.entries()) {
+      if (this.tick - contact.lastSeenTick > AI_TUNING.contactForgetTicks) {
+        memory.recentContacts.delete(id);
+        memory.seenHostiles.delete(id);
+      }
+    }
+  }
+
+  private chooseBehavior(bot: TankLike, engine: EngineLike, frame: SensorFrame, memory: BotMemory): ThinkResult {
+    const neighbors = frame.neighbors;
     const hpRatio = this.getHpRatio(bot);
     const phase = this.getBehaviorPhase(bot);
-    const projectilePressure = this.estimateProjectilePressure(bot, neighbors, engine.gameMode);
-    this.updateSightMemory(bot, neighbors, memory);
+    const projectilePressure = frame.projectilePressure;
     this.updateSquadAnchor(bot, neighbors, memory);
     this.updateAssistUrgency(bot, neighbors, memory, engine.gameMode);
     const postKillPaused = this.tick < memory.postKillPauseUntilTick;
@@ -319,7 +562,9 @@ export class AISystem {
     const pressurePanic = projectilePressure >= AI_TUNING.pressureFleeThreshold && hpRatio < 0.56;
     const outclassed = heavyThreat && hpRatio < 0.42 && closeThreat;
 
-    if ((hpRatio <= memory.fleeHealthThreshold && closeThreat) || pressurePanic || outclassed) {
+    const threshold = memory.fleeHealthThreshold + Math.max(0, memory.cautionBias) * 0.1 - Math.max(0, memory.aggressionBias) * 0.06;
+
+    if ((hpRatio <= threshold && closeThreat) || pressurePanic || outclassed) {
       memory.fleeLatchUntilTick = this.tick + AI_TUNING.fleeLatchTicks;
       return true;
     }
@@ -409,11 +654,13 @@ export class AISystem {
       const e = neighbors[i];
       if (!this.isValidEntity(e) || e.id === bot.id || !this.isTankLike(e)) continue;
       if (this.isFriendly(bot, e, mode)) continue;
-      const seenTick = memory.seenHostiles.get(e.id);
+      const contact = memory.recentContacts.get(e.id);
+      const seenTick = contact?.firstSeenTick ?? memory.seenHostiles.get(e.id);
       if (seenTick == null || this.tick - seenTick < memory.discoveryDelayTicks) continue;
 
       const distanceSq = Vector.distSq(bot.pos, e.pos);
       if (distanceSq <= 0.0001) continue;
+      const distance = Math.sqrt(distanceSq);
 
       const enemyHpRatio = this.getEntityHpRatio(e);
       const proximityScore = 900000 / distanceSq;
@@ -422,13 +669,31 @@ export class AISystem {
       const finishBonus = this.canLikelyFinish(bot, e) ? 0.48 : 0;
       const stickinessWeight = 0.8 + ((bot.id % 5) * 0.1);
       const targetStickiness = memory.lastTargetId === e.id ? stickinessWeight : 0;
-      const dangerPenalty = projectilePressure >= AI_TUNING.pressureCautionThreshold ? classThreat * 0.18 : 0;
+      const dangerPenalty = projectilePressure >= AI_TUNING.pressureCautionThreshold ? classThreat * (0.18 + Math.max(0, memory.cautionBias) * 0.2) : 0;
       const aggression = memory.aggressionBias * 0.65;
       const alliedFocus = this.getAlliedFocusWeight(bot, e, neighbors, mode);
       const exposedEnemy = this.wasRecentlyDamaged(e.id, 12) ? 0.22 : 0;
+      const supportPriority = this.isSupportClass(e.classType) ? 0.24 : 0;
+      const revenge = bot.lastDamageSourceId === e.id ? 0.35 : 0;
+      const bossHunter = memory.sessionArchetype === 'BOSS_HUNTER' && this.isBossClass(e.classType) ? 1.2 : 0;
+      const sniperClosePenalty = memory.sessionArchetype === 'SNIPER' && distance < AI_TUNING.heavyMinRange ? 0.45 : 0;
+      const rusherPressure = memory.sessionArchetype === 'RUSHER' && distance < 620 ? 0.32 : 0;
 
       const score =
-        proximityScore + lowHpBonus + classThreat + finishBonus + targetStickiness + aggression + alliedFocus + exposedEnemy - dangerPenalty;
+        proximityScore +
+        lowHpBonus +
+        classThreat +
+        finishBonus +
+        targetStickiness +
+        aggression +
+        alliedFocus +
+        exposedEnemy +
+        supportPriority +
+        revenge +
+        bossHunter +
+        rusherPressure -
+        dangerPenalty -
+        sniperClosePenalty;
 
       if (this.tick < memory.targetLockUntilTick && memory.lastTargetId != null && e.id !== memory.lastTargetId) continue;
       if (score > bestScore) {
@@ -443,7 +708,6 @@ export class AISystem {
   private pickBestShape(bot: TankLike, neighbors: any[], projectilePressure: number, memory: BotMemory, phase: 'PHASE_EARLY' | 'PHASE_MID' | 'PHASE_LATE'): any | null {
     let best: any = null;
     let bestScore = -Infinity;
-    const hpRatio = this.getHpRatio(bot);
 
     for (let i = 0; i < neighbors.length; i++) {
       const e = neighbors[i];
@@ -456,11 +720,12 @@ export class AISystem {
       const xp = typeof e.xpValue === 'number' ? e.xpValue : 100;
       const rarityBoost = this.isRareFarmTarget(e) ? 1.75 : 1;
       const bossBoost = e.type === EntityType.BOSS ? 2.65 : 1;
-      const crasherRisk = e.type === EntityType.CRASHER && hpRatio < 0.58 ? 0.55 : 1;
+      const crasherRisk = e.type === EntityType.CRASHER ? this.getCrasherRiskPenalty(bot, e) : 1;
       const pressurePenalty = projectilePressure >= AI_TUNING.pressureCautionThreshold ? 0.78 : 1;
+      const farmBias = 1 + memory.farmBias * 0.35;
 
       const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, e, neighbors) ? 0.75 : 1;
-      const score = ((xp * 8500 * rarityBoost * bossBoost * crasherRisk * pressurePenalty * antiOverlap) / distanceSq);
+      const score = ((xp * 8500 * rarityBoost * bossBoost * crasherRisk * pressurePenalty * antiOverlap * farmBias) / distanceSq);
 
       if (score > bestScore) {
         bestScore = score;
@@ -590,17 +855,19 @@ export class AISystem {
   private computeSteering(
     bot: TankLike,
     target: any | null,
-    neighbors: any[],
+    frame: SensorFrame,
     state: AIState,
     mode: GameMode,
     world: WorldInfo,
     memory: BotMemory
   ): Vector2 {
+    const neighbors = frame.neighbors;
     const goal = this.computeGoalForce(bot, target, neighbors, state, mode, memory);
     const squad = this.computeSquadForce(bot, neighbors, mode, state, target);
     const avoid = this.computeAvoidanceForce(bot, mode, world);
     const farmAvoid = this.computeFarmShapeAvoidanceForce(bot, neighbors, state);
-    const blendedAvoid = this.movement.composeSteering([avoid, farmAvoid], [1.0, 1.25], 2.8);
+    const dodge = this.computeDodgeForce(bot, frame);
+    const blendedAvoid = this.movement.composeSteering([avoid, farmAvoid, dodge], [1.0, 1.25, 1.2], 2.8);
 
     const scoutSlow = this.tick < memory.zoneScoutUntilTick ? 0.72 : 1;
     return Vector.mult(this.movement.composeSteeringWithPriority(blendedAvoid, squad, goal, AI_TUNING.maxSteering), scoutSlow);
@@ -837,7 +1104,7 @@ export class AISystem {
 
   private getPreferredRange(bot: TankLike, state: AIState, target: any): { min: number; max: number } {
     if (state === AIState.FARM) {
-      const crasherPadding = target?.type === EntityType.CRASHER ? 70 : 0;
+      const crasherPadding = target?.type === EntityType.CRASHER ? AI_TUNING.crasherRangeBonus : 0;
       return {
         min: AI_TUNING.farmMinRange + crasherPadding,
         max: AI_TUNING.farmMaxRange + crasherPadding,
@@ -849,7 +1116,7 @@ export class AISystem {
     }
 
     if (this.isSupportClass(bot.classType)) {
-      return { min: 340, max: 620 };
+      return { min: AI_TUNING.supportMinRange, max: AI_TUNING.supportMaxRange };
     }
 
     return { min: AI_TUNING.combatMinRange, max: AI_TUNING.combatMaxRange };
@@ -863,7 +1130,7 @@ export class AISystem {
   }
 
   private computeFarmShapeAvoidanceForce(bot: TankLike, neighbors: any[], state: AIState): Vector2 {
-    if (state !== AIState.FARM) return ZERO;
+    if (state !== AIState.FARM && state !== AIState.HUNT) return ZERO;
     let fx = 0;
     let fy = 0;
     let count = 0;
@@ -888,7 +1155,42 @@ export class AISystem {
     return Vector.normalize({ x: fx, y: fy });
   }
 
-  private classThreatScore(cls: TankClass): number {
+  private computeDodgeForce(bot: TankLike, frame: SensorFrame): Vector2 {
+    let fx = 0;
+    let fy = 0;
+
+    for (let i = 0; i < frame.bullets.length; i++) {
+      const bullet = frame.bullets[i];
+      if (!bullet?.pos || !bullet.vel) continue;
+
+      const rel = Vector.sub(bot.pos, bullet.pos);
+      const vel = bullet.vel || ZERO;
+      const distanceSq = Math.max(1, Vector.magSq(rel));
+      const incoming = Vector.dot(rel, vel) > 0;
+      if (!incoming) continue;
+
+      const perpendicular = { x: -vel.y, y: vel.x };
+      const dir = Vector.normalize(perpendicular);
+      const side = Vector.dot(dir, rel) >= 0 ? 1 : -1;
+      const weight = 25000 / distanceSq;
+
+      fx += dir.x * side * weight;
+      fy += dir.y * side * weight;
+    }
+
+    return Vector.limit({ x: fx, y: fy }, AI_TUNING.dodgeForceMax);
+  }
+
+  private smoothSteering(bot: TankLike, targetSteering: Vector2, state: AIState): Vector2 {
+    const current = bot.lastSteering || ZERO;
+    const t = state === AIState.FLEE ? AI_TUNING.emergencySteeringSmoothing : AI_TUNING.steeringSmoothing;
+    return Vector.limit({
+      x: current.x + (targetSteering.x - current.x) * t,
+      y: current.y + (targetSteering.y - current.y) * t,
+    }, AI_TUNING.maxSteering);
+  }
+
+  private classThreatScore(cls?: TankClass): number {
     if (cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.WARLORD || cls === TankClass.CELESTIAL) return 0.88;
     if (cls === TankClass.ANNIHILATOR || cls === TankClass.DESTROYER || cls === TankClass.HYBRID) return 0.35;
     if (cls === TankClass.FIGHTER || cls === TankClass.BOOSTER || cls === TankClass.TRI_ANGLE) return 0.28;
@@ -896,12 +1198,20 @@ export class AISystem {
     return 0.2;
   }
 
-  private isHeavySniperClass(cls: TankClass): boolean {
-    return cls === TankClass.ANNIHILATOR || cls === TankClass.DESTROYER || cls === TankClass.HYBRID;
+  private isHeavySniperClass(cls?: TankClass): boolean {
+    return cls === TankClass.ANNIHILATOR || cls === TankClass.DESTROYER || cls === TankClass.HYBRID || cls === TankClass.SNIPER || cls === TankClass.RANGER;
   }
 
-  private isSupportClass(cls: TankClass): boolean {
+  private isSupportClass(cls?: TankClass): boolean {
     return cls === TankClass.NURSE || cls === TankClass.DOCTOR || cls === TankClass.PLAGUE_DOCTOR;
+  }
+
+  private isDroneClass(cls?: TankClass): boolean {
+    return cls === TankClass.OVERSEER || cls === TankClass.OVERLORD || cls === TankClass.MANAGER || cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.CELESTIAL;
+  }
+
+  private isBossClass(cls?: TankClass): boolean {
+    return cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.WARLORD || cls === TankClass.CELESTIAL || cls === TankClass.OBLITERATOR;
   }
 
   private applyRotation(bot: TankLike, dt: number): void {
@@ -942,7 +1252,7 @@ export class AISystem {
 
     const distanceSq = Vector.distSq(bot.pos, target.pos);
     const distance = Math.sqrt(distanceSq);
-    const aimNoiseScale = this.getAimNoiseScale(bot, target, distance);
+    const aimNoiseScale = this.getAimNoiseScale(bot, target, distance, memory);
     const aimNoise = (memory.aimNoise + this.deterministicNoise(bot.id, this.tick)) * aimNoiseScale;
 
     bot.aiTargetRot = Math.atan2(aimPos.y - bot.pos.y, aimPos.x - bot.pos.x) + aimNoise;
@@ -960,7 +1270,7 @@ export class AISystem {
     }
   }
 
-  private getAimNoiseScale(bot: TankLike, target: any, distance: number): number {
+  private getAimNoiseScale(bot: TankLike, target: any, distance: number, memory: BotMemory): number {
     if (target.type === EntityType.SHAPE || target.type === EntityType.BOSS) return 0.003;
     const speedStat = bot.stats[StatType.BULLET_SPEED] || 0;
     const hpRatio = this.getHpRatio(bot);
@@ -968,12 +1278,13 @@ export class AISystem {
     const distancePenalty = Math.min(0.045, distance / 26000);
     const panicPenalty = hpRatio < 0.4 ? (0.06 * (0.4 - hpRatio) / 0.4) : 0;
     const movementPenalty = Math.min(0.03, speed * 0.0055);
-    return Math.max(0.002, 0.014 - speedStat * 0.001 + distancePenalty + panicPenalty + movementPenalty);
+    return Math.max(0.002, 0.018 - memory.accuracyBias * 0.01 - speedStat * 0.001 + distancePenalty + panicPenalty + movementPenalty);
   }
 
   private getFireCone(bot: TankLike, target: any, distance: number): number {
     if (target.type === EntityType.SHAPE || target.type === EntityType.BOSS || target.type === EntityType.CRASHER) return 0.26;
     if (this.isHeavySniperClass(bot.classType)) return distance > 580 ? 0.12 : 0.16;
+    if (this.isDroneClass(bot.classType)) return 0.24;
     return 0.22;
   }
 
@@ -1000,19 +1311,42 @@ export class AISystem {
     let memory = this.botMemory.get(bot.id);
     if (memory) return memory;
 
-    const archetype = this.getArchetype(bot.id);
+    const archetype = this.getArchetype(bot);
     const fleeSeed = Vector.seededRandom01(bot.id * 10391);
     const panicSeed = Vector.seededRandom01(bot.id * 30859);
     const strideSeed = Vector.seededRandom01(bot.id * 45053);
     const shootSeed = Vector.seededRandom01(bot.id * 55049);
-    const archetypeAgg = archetype === 'RUSHER' ? 0.75 : archetype === 'FARMER' ? -0.6 : archetype === 'SUPPORT' ? -0.2 : 0.15;
+    const archetypeAgg =
+      archetype === 'RUSHER' ? 0.75 :
+      archetype === 'BULLY' ? 0.55 :
+      archetype === 'DUELIST' ? 0.35 :
+      archetype === 'SNIPER' ? 0.1 :
+      archetype === 'SUPPORT' ? -0.1 :
+      archetype === 'FARMER' ? -0.35 :
+      archetype === 'SURVIVOR' ? -0.55 :
+      0.0;
+    const cautionBase =
+      archetype === 'SURVIVOR' ? 0.8 :
+      archetype === 'FARMER' ? 0.45 :
+      archetype === 'SUPPORT' ? 0.35 :
+      archetype === 'SNIPER' ? 0.25 :
+      archetype === 'RUSHER' ? -0.2 :
+      0.0;
+    const accuracyBase =
+      archetype === 'SNIPER' ? 0.85 :
+      archetype === 'DUELIST' ? 0.55 :
+      archetype === 'BOSS_HUNTER' ? 0.4 :
+      archetype === 'RUSHER' ? 0.2 :
+      0.25;
     const fleeThreshold =
       archetype === 'FARMER' ? 0.45 + fleeSeed * 0.15 :
       archetype === 'RUSHER' ? fleeSeed * 0.2 :
+      archetype === 'SURVIVOR' ? 0.42 + fleeSeed * 0.18 :
       archetype === 'SUPPORT' ? 0.35 + fleeSeed * 0.18 :
       0.22 + fleeSeed * 0.3;
     const stride =
-      archetype === 'RUSHER' ? 4 + Math.floor(strideSeed * 2) :
+      archetype === 'RUSHER' || archetype === 'DUELIST' ? 3 + Math.floor(strideSeed * 2) :
+      archetype === 'SNIPER' || archetype === 'SUPPORT' || archetype === 'SURVIVOR' ? 4 + Math.floor(strideSeed * 2) :
       archetype === 'FARMER' ? 5 + Math.floor(strideSeed * 2) :
       archetype === 'EXPLORER' ? 5 + Math.floor(strideSeed * 2) :
       AI_TUNING.defaultDecisionStride + Math.floor(strideSeed * 2);
@@ -1029,9 +1363,15 @@ export class AISystem {
       lastPos: { x: bot.pos.x, y: bot.pos.y },
       lastState: AIState.IDLE,
       lastTargetId: null,
+      lastShootTargetId: null,
       aggressionBias: Math.max(-1, Math.min(1, archetypeAgg + (Vector.seededRandom01(bot.id * 49999) * 0.7 - 0.35))),
+      cautionBias: Math.max(-1, Math.min(1, cautionBase + (Vector.seededRandom01(bot.id * 59999) * 0.25 - 0.125))),
+      accuracyBias: Math.max(0, Math.min(1, accuracyBase + (Vector.seededRandom01(bot.id * 69999) * 0.2 - 0.1))),
+      farmBias: archetype === 'FARMER' ? 0.75 : archetype === 'EXPLORER' ? 0.3 : archetype === 'BOSS_HUNTER' ? 0.15 : 0,
+      supportBias: archetype === 'SUPPORT' ? 0.8 : 0,
       aimNoise: Vector.seededRandom01(bot.id * 81817) * 2 - 1,
       lastDecisionTick: this.tick,
+      lastThinkTick: this.tick,
       teamFightTargetId: null,
       teamFightUntilTick: 0,
       fleeHealthThreshold: fleeThreshold,
@@ -1042,6 +1382,7 @@ export class AISystem {
       intentTargetId: null,
       intentPromoteTick: 0,
       seenHostiles: new Map<number, number>(),
+      recentContacts: new Map<number, RecentContact>(),
       shootHesitancyTicks: Math.floor(shootSeed * 4),
       shootHesitancyCounter: 0,
       panicFleeAngleOffset: (panicSeed * 2 - 1) * ((20 + Vector.seededRandom01(bot.id * 77713) * 10) * Math.PI / 180),
@@ -1055,6 +1396,7 @@ export class AISystem {
       sameFeelLogged: false,
       latePhaseKills: 0,
       latePhaseDeaths: 0,
+      debug: null,
     };
 
     this.botMemory.set(bot.id, memory);
@@ -1132,6 +1474,47 @@ export class AISystem {
     };
   }
 
+  private getThreatLevel(bot: TankLike, frame: SensorFrame): ThreatLevel {
+    const hpRatio = this.getHpRatio(bot);
+    if (frame.projectilePressure >= AI_TUNING.pressureFleeThreshold && hpRatio < 0.5) return 'PANIC';
+    if (frame.closestHostile && hpRatio < 0.32 && Vector.distSq(bot.pos, frame.closestHostile.pos) < 520 * 520) return 'HIGH';
+    if (frame.projectilePressure >= AI_TUNING.pressureCautionThreshold) return 'MEDIUM';
+    if (frame.hostiles.length > 0) return 'LOW';
+    return 'NONE';
+  }
+
+  private writeDebug(bot: TankLike, memory: BotMemory, frame: SensorFrame, result: ThinkResult, steering: Vector2): void {
+    const target = result.target || result.combatTarget;
+    const targetDir = target ? Vector.normalize(Vector.sub(target.pos, bot.pos)) : ZERO;
+    const avoidDir = Vector.normalize(Vector.add(frame.safeDirection, this.computeFarmShapeAvoidanceForce(bot, frame.neighbors, result.state)));
+    const dodgeDir = this.computeDodgeForce(bot, frame);
+
+    const snapshot: AIDebugSnapshot = {
+      botId: bot.id,
+      state: result.state,
+      archetype: memory.sessionArchetype,
+      targetId: result.target ? result.target.id : null,
+      shootTargetId: result.combatTarget ? result.combatTarget.id : null,
+      reason: `${result.state}${target ? ` target=${target.id}` : ''}`,
+      steering,
+      projectilePressure: frame.projectilePressure,
+      threatLevel: this.getThreatLevel(bot, frame),
+      rays: [
+        { origin: bot.pos, direction: targetDir, length: 95, color: 'GREEN', label: 'goal' },
+        { origin: bot.pos, direction: avoidDir, length: 80, color: 'RED', label: 'avoid' },
+        { origin: bot.pos, direction: Vector.normalize(dodgeDir), length: 80, color: 'ORANGE', label: 'dodge' },
+        { origin: bot.pos, direction: Vector.normalize(steering), length: 110, color: 'CYAN', label: 'final' },
+      ],
+    };
+
+    memory.debug = snapshot;
+    this.debugSnapshots.set(bot.id, snapshot);
+  }
+
+  getDebugSnapshots(): AIDebugSnapshot[] {
+    return Array.from(this.debugSnapshots.values());
+  }
+
   cleanupCaches(activeEntities: Array<{ id: number; isDead?: boolean }>): void {
     const aliveIds = new Set<number>();
 
@@ -1147,6 +1530,10 @@ export class AISystem {
 
     for (const id of this.lastHealthSnapshot.keys()) {
       if (!aliveIds.has(id)) this.lastHealthSnapshot.delete(id);
+    }
+
+    for (const id of this.debugSnapshots.keys()) {
+      if (!aliveIds.has(id)) this.debugSnapshots.delete(id);
     }
   }
 
@@ -1270,8 +1657,17 @@ export class AISystem {
 
   private canLikelyFinish(bot: TankLike, target: any): boolean {
     const damageStat = bot.stats[StatType.BULLET_DAMAGE] || 0;
-    const estimatedBurst = 25 + damageStat * 8;
+    const reloadStat = bot.stats[StatType.RELOAD] || 0;
+    const estimatedBurst = 22 + damageStat * 7.5 + reloadStat * 2.5;
     return (target.health || 0) <= estimatedBurst;
+  }
+
+  private getCrasherRiskPenalty(bot: TankLike, target: any): number {
+    const hpRatio = this.getHpRatio(bot);
+    const radius = typeof target.radius === 'number' ? target.radius : 20;
+    if (hpRatio < 0.45) return 0.4;
+    if (radius > 40 && hpRatio < 0.7) return 0.6;
+    return 0.85;
   }
 
   private isRareFarmTarget(e: any): boolean {
@@ -1283,7 +1679,23 @@ export class AISystem {
     const rareByRarity = RARE_RARITIES.has(rarity);
     const rareBySize = typeof e.radius === 'number' && e.radius >= 70;
 
-    return e.type === EntityType.BOSS || xp >= AI_TUNING.rareShapeXpThreshold || rareByRarity || rareBySize;
+    return e.type === EntityType.BOSS || xp >= AI_TUNING.rareShapeXpThreshold || rareByRarity || rareBySize || this.getRarityScore(e) >= 5;
+  }
+
+  private getRarityScore(e: any): number {
+    const rarity = typeof e?.rarity === 'string' ? e.rarity : '';
+    switch (rarity) {
+      case 'Divine': return 9;
+      case 'Godly': return 8;
+      case 'Transcendent': return 7;
+      case 'Eternal': return 6;
+      case 'Mythical': return 5;
+      case 'Legendary': return 4;
+      case 'Epic': return 3;
+      case 'Rare': return 2;
+      case 'Uncommon': return 1;
+      default: return 0;
+    }
   }
 
   private isFarmTarget(e: any): boolean {
@@ -1329,10 +1741,13 @@ export class AISystem {
   }
 
   private getWorldInfo(engine: EngineLike): WorldInfo {
+    const width = engine.width || AI_TUNING.defaultWorldWidth;
+    const height = engine.height || AI_TUNING.defaultWorldHeight;
     return {
-      width: engine.width || AI_TUNING.defaultWorldWidth,
-      height: engine.height || AI_TUNING.defaultWorldHeight,
+      width,
+      height,
       baseZoneWidth: engine.baseZoneWidth || BASE_ZONE_WIDTH,
+      center: { x: width * 0.5, y: height * 0.5 },
     };
   }
 
@@ -1346,12 +1761,22 @@ export class AISystem {
     return Vector.seededRandom01((id * 1103515245) ^ (tick * 12345)) * 2 - 1;
   }
 
-  private getArchetype(id: number): 'FARMER' | 'RUSHER' | 'SUPPORT' | 'EXPLORER' {
-    const r = id % 4;
+  private getArchetype(bot: TankLike): BotArchetype {
+    if (this.isSupportClass(bot.classType)) return 'SUPPORT';
+    if (this.isHeavySniperClass(bot.classType)) return 'SNIPER';
+    if (this.isDroneClass(bot.classType)) return 'DRONE_COMMANDER';
+
+    const r = bot.id % 10;
     if (r === 0) return 'FARMER';
     if (r === 1) return 'RUSHER';
-    if (r === 2) return 'SUPPORT';
-    return 'EXPLORER';
+    if (r === 2) return 'DUELIST';
+    if (r === 3) return 'EXPLORER';
+    if (r === 4) return 'SURVIVOR';
+    if (r === 5) return 'BULLY';
+    if (r === 6) return 'BOSS_HUNTER';
+    if (r === 7) return 'SNIPER';
+    if (r === 8) return 'DRONE_COMMANDER';
+    return 'FARMER';
   }
 
   private getBehaviorPhase(bot: TankLike): 'PHASE_EARLY' | 'PHASE_MID' | 'PHASE_LATE' {
