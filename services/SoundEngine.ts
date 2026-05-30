@@ -41,6 +41,7 @@ export class SoundEngine {
   volume: number = 0.15;
   muteGameSounds: boolean = false;
   private enabled: boolean = false;
+  private readonly masterLoudnessBoost = 2.35;
 
   // Throttle tracking to prevent audio clipping during high fire rates
   private lastPlayed: Record<string, number> = {};
@@ -50,7 +51,7 @@ export class SoundEngine {
     const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
     this.ctx = new AudioContextClass();
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = this.volume;
+    this.masterGain.gain.value = this.getEffectiveMasterGain(this.volume);
 
     // Add a master limiter to prevent clipping when many sounds play simultaneously
     const limiter = this.ctx.createDynamicsCompressor();
@@ -89,8 +90,14 @@ export class SoundEngine {
   setVolume(value: number) {
     this.volume = Math.max(0, Math.min(1, value));
     if (this.masterGain) {
-      this.masterGain.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.05);
+      this.masterGain.gain.setTargetAtTime(this.getEffectiveMasterGain(this.volume), this.ctx.currentTime, 0.05);
     }
+  }
+
+  private getEffectiveMasterGain(volume: number): number {
+    // Lift overall loudness so "max volume" is truly audible on low-output devices.
+    // We keep a limiter on the master chain to reduce clipping risk.
+    return Math.max(0, Math.min(2.5, volume * this.masterLoudnessBoost));
   }
 
   // Small helper: random factor around 1.0
@@ -820,6 +827,51 @@ export class SoundEngine {
     osc.connect(gain);
     osc.start(t);
     osc.stop(t + 0.08);
+  }
+
+  playUISelect() {
+    if (!this.enabled) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    const t = this.ctx.currentTime;
+    const oscA = this.createOscillatorVoice();
+    const oscB = this.createOscillatorVoice();
+    const { gain } = this.createPannedGain(0.12);
+    oscA.type = 'triangle';
+    oscB.type = 'sine';
+    oscA.frequency.setValueAtTime(520 + Math.random() * 35, t);
+    oscA.frequency.exponentialRampToValueAtTime(880 + Math.random() * 45, t + 0.06);
+    oscB.frequency.setValueAtTime(390 + Math.random() * 20, t);
+    oscB.frequency.exponentialRampToValueAtTime(640 + Math.random() * 30, t + 0.07);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.11, t + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    oscA.connect(gain);
+    oscB.connect(gain);
+    oscA.start(t);
+    oscB.start(t);
+    oscA.stop(t + 0.13);
+    oscB.stop(t + 0.13);
+  }
+
+  playUIToggle(enabledState: boolean) {
+    if (!this.enabled) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    const t = this.ctx.currentTime;
+    const osc = this.createOscillatorVoice();
+    const { gain } = this.createPannedGain(0.08);
+    osc.type = enabledState ? 'triangle' : 'square';
+    const start = enabledState ? 260 : 420;
+    const end = enabledState ? 520 : 180;
+    osc.frequency.setValueAtTime(start + Math.random() * 18, t);
+    osc.frequency.exponentialRampToValueAtTime(end + Math.random() * 18, t + 0.08);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.12, t + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    osc.connect(gain);
+    osc.start(t);
+    osc.stop(t + 0.12);
   }
 
   playNotification() {

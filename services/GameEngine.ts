@@ -5,6 +5,7 @@ import { SoundEngine } from './SoundEngine';
 import type { AudioSpatialOptions } from './SoundEngine';
 import { EnemyAITanks } from './EnemyAITanks';
 import { AISystem } from './systems/AISystem';
+import { TDMAISystem, type Player as TDMPlayer } from '../systems/TDM-ai';
 
 // Define FloatingTextType for type safety
 type FloatingTextType = 'DAMAGE' | 'SCORE';
@@ -431,7 +432,7 @@ class MiniTank extends Entity {
         this.variant = variant;
         this.team = owner.team;
         this.friction = 0.94;
-        this.mass = 15;
+        this.mass = owner.classType === TankClass.MANAGER ? 22 : 15;
         this.orbitAngle = Math.random() * Math.PI * 2;
         
         // Stats scaled based on "Drone Health" and "Drone Damage" (Bullet Pen/Dmg)
@@ -609,11 +610,12 @@ class MiniTank extends Entity {
     }
 
     override drawBody(ctx: CanvasRenderingContext2D) {
+        const isManagerUnit = this.owner.classType === TankClass.MANAGER;
         const bLen = this.radius * 1.8;
         const bWid = this.radius * 0.7;
         
         ctx.save();
-        const easedProg = Math.pow(Math.max(0, this.cooldown / 400), 1.3);
+        const easedProg = isManagerUnit ? 0 : Math.pow(Math.max(0, this.cooldown / 400), 1.3);
         ctx.translate(-easedProg * 5, 0);
         ctx.scale(1 - easedProg * 0.1, 1 + easedProg * 0.1);
         
@@ -637,13 +639,34 @@ class MiniTank extends Entity {
         ctx.fillRect(bLen * 0.18, -bWid * 0.28, bLen * 0.45, bWid * 0.18);
         ctx.restore();
 
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-        ctx.fillStyle = this.color;
-        ctx.fill();
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = COLORS.border;
-        ctx.stroke();
+        if (isManagerUnit) {
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const a = (Math.PI * 2 * i) / 6 + Math.PI / 6;
+                const px = Math.cos(a) * this.radius;
+                const py = Math.sin(a) * this.radius;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = COLORS.border;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius * 0.42, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(170,255,230,0.75)';
+            ctx.fill();
+        } else {
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = COLORS.border;
+            ctx.stroke();
+        }
     }
 }
 
@@ -1263,6 +1286,7 @@ class Tank extends Entity {
   drainLifestealEfficiency: number = 0;
   drainBurstCooldown: number = 0;
   totalDrainedThisSession: number = 0;
+  drainHistory: { time: number; amount: number }[] = [];
   bloodPactActiveTimer: number = 0;
   regenOverchargeTimer: number = 0;
   regenOverchargeRate: number = 0;
@@ -3516,6 +3540,7 @@ class Tank extends Entity {
 
   updateStats() {
     const powerTokenBuff = this.activeBuffs?.find(b => b.type === 'POWER_TOKEN');
+    const bossOverrideBuff = this.activeBuffs?.find(b => b.type === 'BOSS_OVERRIDE');
     const statBonus = powerTokenBuff ? 2 : 0;
     
     // Store old max health for smooth health ratio scaling
@@ -3640,6 +3665,19 @@ class Tank extends Entity {
         this.damage = Math.round((BASE_STATS.bodyDamage + (this.stats[StatType.BODY_DAMAGE] + statBonus) * 26) * inertiaFactor * levelFactor);
     }
 
+    // Temporary boss reward form (not rebirth class): high-pressure power spike for a short window.
+    if (bossOverrideBuff && !isBoss) {
+        this.maxHealth *= 2.35;
+        this.maxShield *= 2.1;
+        this.damage *= 1.75;
+        this.radius *= 1.42;
+        this.mass *= 1.85;
+        this.stats[StatType.RELOAD] = Math.min(8, (this.stats[StatType.RELOAD] || 0) + 2);
+        this.stats[StatType.BULLET_DAMAGE] = Math.min(8, (this.stats[StatType.BULLET_DAMAGE] || 0) + 2);
+        this.stats[StatType.BULLET_PENETRATION] = Math.min(8, (this.stats[StatType.BULLET_PENETRATION] || 0) + 1);
+        this.color = '#c084fc';
+    }
+
     // Handle smooth health ratio preservation upon maximum HP growth
     if (this.health !== undefined && this.maxHealth !== oldMaxHealth) {
         const ratio = this.health / oldMaxHealth;
@@ -3656,6 +3694,7 @@ class Tank extends Entity {
     else if (this.classType === TankClass.RANGER) this.fov = 0.62;
     else if (this.classType === TankClass.STALKER) this.fov = 0.68;
     else if (isBoss) this.fov = 0.55;
+    else if (bossOverrideBuff) this.fov = 0.72;
     else this.fov = 1.0;
   }
 
@@ -3975,10 +4014,14 @@ class Tank extends Entity {
         this.health = Math.min(this.health + dt * 20, this.maxHealth);
     }
 
+    const buffCountBefore = this.activeBuffs.length;
     this.activeBuffs = this.activeBuffs.filter(buff => {
         buff.timeLeft -= dt;
         return buff.timeLeft > 0;
     });
+    if (this.activeBuffs.length !== buffCountBefore) {
+        this.updateStats();
+    }
   }
 
   override drawBody(ctx: CanvasRenderingContext2D) {
@@ -4115,20 +4158,30 @@ class Guardian extends Entity {
 }
 
 class Boss extends Entity {
+    archetype: 'SINGULARITY' | 'SIEGEBREAKER' | 'SWARMLORD';
     damageDealtBy: Map<number, number> = new Map();
     spawnTimer: number = 0;
     phaseTimer: number = 0;
+    pulseCooldown: number = 0;
+    summonCooldown: number = 0;
+    volleyCooldown: number = 0;
     xpValue: number = 500000;
 
-    constructor(id: number) {
-        super(id, EntityType.BOSS, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, 180, '#0055ff');
-        this.maxHealth = 150000;
-        this.health = 150000;
-        this.displayHealth = 150000;
-        this.damage = 150;
-        this.mass = 15000;
+    constructor(id: number, archetype?: 'SINGULARITY' | 'SIEGEBREAKER' | 'SWARMLORD') {
+        const resolved = archetype ?? (Math.random() < 0.33 ? 'SIEGEBREAKER' : Math.random() < 0.5 ? 'SWARMLORD' : 'SINGULARITY');
+        super(id, EntityType.BOSS, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, resolved === 'SIEGEBREAKER' ? 152 : resolved === 'SWARMLORD' ? 138 : 148, '#0055ff');
+        this.archetype = resolved;
+        this.maxHealth = resolved === 'SIEGEBREAKER' ? 165000 : resolved === 'SWARMLORD' ? 142000 : 152000;
+        this.health = this.maxHealth;
+        this.displayHealth = this.maxHealth;
+        this.damage = resolved === 'SIEGEBREAKER' ? 185 : resolved === 'SWARMLORD' ? 120 : 150;
+        this.mass = resolved === 'SIEGEBREAKER' ? 17000 : 13000;
         this.friction = 0.99;
-        this.name = "GRAND SINGULARITY";
+        this.name = resolved === 'SIEGEBREAKER' ? "GRAND SIEGEBREAKER" : resolved === 'SWARMLORD' ? "GRAND SWARMLORD" : "GRAND SINGULARITY";
+        this.color = resolved === 'SIEGEBREAKER' ? '#a855f7' : resolved === 'SWARMLORD' ? '#14b8a6' : '#0055ff';
+        this.pulseCooldown = resolved === 'SIEGEBREAKER' ? 3.6 : resolved === 'SWARMLORD' ? 4.8 : 4.2;
+        this.summonCooldown = resolved === 'SWARMLORD' ? 6.4 : 8.5;
+        this.volleyCooldown = resolved === 'SIEGEBREAKER' ? 2.8 : 3.6;
         this.pos.x += Vector.randomRange(-100, 100);
         this.pos.y += Vector.randomRange(-100, 100);
     }
@@ -4140,6 +4193,9 @@ class Boss extends Entity {
     
     override update(dt: number) { 
         this.phaseTimer += dt;
+        this.pulseCooldown = Math.max(0, this.pulseCooldown - dt);
+        this.summonCooldown = Math.max(0, this.summonCooldown - dt);
+        this.volleyCooldown = Math.max(0, this.volleyCooldown - dt);
         const hpRatio = this.health / this.maxHealth;
         this.rotation += (0.8 + (1 - hpRatio) * 1.2) * dt; 
         
@@ -5430,14 +5486,134 @@ class Bullet extends Entity {
 
   drawBasicCircleBullet(ctx: CanvasRenderingContext2D) {
     ctx.save();
-    // Lightweight default projectile path for better performance under high bullet counts.
+    // Lightweight but class-distinct projectile looks for non-specialized bullet classes.
+    let coreColor = this.color;
+    let strokeColor = COLORS.border;
+    let innerMark = 'none';
+
+    switch (this.ownerClass) {
+      case TankClass.BASIC:
+        coreColor = '#6dd8ff';
+        innerMark = 'dot';
+        break;
+      case TankClass.TWIN:
+      case TankClass.TWIN_FLANK:
+      case TankClass.TRIPLE_TWIN:
+        coreColor = '#8be9ff';
+        innerMark = 'ring';
+        break;
+      case TankClass.TRIPLE_SHOT:
+      case TankClass.TRIPLE_TANK:
+      case TankClass.PENTA_SHOT:
+      case TankClass.QUAD_TANK:
+      case TankClass.OCTO_TANK:
+        coreColor = '#9bc8ff';
+        innerMark = 'bar';
+        break;
+      case TankClass.SPREAD_SHOT:
+        coreColor = '#c7b8ff';
+        innerMark = 'cross';
+        break;
+      case TankClass.FLANK_GUARD:
+      case TankClass.TRI_ANGLE:
+      case TankClass.BOOSTER:
+      case TankClass.FIGHTER:
+        coreColor = '#7cf7e1';
+        innerMark = 'chevron';
+        break;
+      case TankClass.GUNNER:
+      case TankClass.AUTO_GUNNER:
+      case TankClass.STREAMLINER:
+      case TankClass.MACHINE_GUN:
+      case TankClass.SPRAYER:
+        coreColor = '#b7ffb0';
+        strokeColor = '#30443a';
+        innerMark = 'tick';
+        break;
+      case TankClass.OVERSEER:
+      case TankClass.OVERLORD:
+      case TankClass.MANAGER:
+        coreColor = '#b5d2ff';
+        innerMark = 'ring';
+        break;
+      case TankClass.PACIFIST_TRAINEE:
+      case TankClass.NURSE:
+      case TankClass.DOCTOR:
+      case TankClass.PLAGUE_DOCTOR:
+        coreColor = '#86efac';
+        innerMark = 'plus';
+        break;
+      case TankClass.DRAINER_TRAINEE:
+      case TankClass.LEECH:
+      case TankClass.VAMPIRE:
+      case TankClass.REAPER:
+        coreColor = '#f87171';
+        innerMark = 'slash';
+        break;
+      default:
+        coreColor = this.color;
+        innerMark = 'none';
+        break;
+    }
+
     ctx.beginPath();
     ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-    ctx.fillStyle = this.color;
+    ctx.fillStyle = coreColor;
     ctx.fill();
-    ctx.lineWidth = Math.max(1.4, this.radius * 0.24);
-    ctx.strokeStyle = COLORS.border;
+    ctx.lineWidth = Math.max(1.3, this.radius * 0.2);
+    ctx.strokeStyle = strokeColor;
     ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = Math.max(0.8, this.radius * 0.1);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    const r = this.radius * 0.45;
+    if (innerMark === 'dot') {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius * 0.16, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (innerMark === 'ring') {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius * 0.22, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (innerMark === 'bar') {
+      ctx.beginPath();
+      ctx.moveTo(-r, 0);
+      ctx.lineTo(r, 0);
+      ctx.stroke();
+    } else if (innerMark === 'cross') {
+      ctx.beginPath();
+      ctx.moveTo(-r, 0);
+      ctx.lineTo(r, 0);
+      ctx.moveTo(0, -r);
+      ctx.lineTo(0, r);
+      ctx.stroke();
+    } else if (innerMark === 'chevron') {
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.8, -r * 0.4);
+      ctx.lineTo(0, 0);
+      ctx.lineTo(-r * 0.8, r * 0.4);
+      ctx.stroke();
+    } else if (innerMark === 'tick') {
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.6, 0);
+      ctx.lineTo(r * 0.6, 0);
+      ctx.moveTo(0, -r * 0.5);
+      ctx.lineTo(0, -r * 0.1);
+      ctx.stroke();
+    } else if (innerMark === 'plus') {
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.55, 0);
+      ctx.lineTo(r * 0.55, 0);
+      ctx.moveTo(0, -r * 0.55);
+      ctx.lineTo(0, r * 0.55);
+      ctx.stroke();
+    } else if (innerMark === 'slash') {
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.55, r * 0.55);
+      ctx.lineTo(r * 0.55, -r * 0.55);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -5933,6 +6109,7 @@ export class GameEngine {
   private readonly maxSimulationSubsteps: number = 5;
   private simulationTick: number = 0;
   private aiSystem: AISystem = new AISystem();
+  private tdmAiSystem: TDMAISystem = new TDMAISystem();
   private perfSampleAccumulator: number = 0;
   private perfSampleFrames: number = 0;
   private perfBucketMsTotal: number = 0;
@@ -6208,10 +6385,10 @@ export class GameEngine {
 
     if (this.gameMode === GameMode.TEAMS) {
       const midBias = 1 - distNorm;
-      const octThresh = 0.002 + midBias * 0.012;
-      const hexThresh = octThresh + (0.012 + midBias * 0.035);
-      const pentThresh = hexThresh + (0.07 + midBias * 0.1);
-      const triThresh = pentThresh + 0.34;
+      const octThresh = 0.0012 + midBias * 0.008;
+      const hexThresh = octThresh + (0.009 + midBias * 0.024);
+      const pentThresh = hexThresh + (0.048 + midBias * 0.07);
+      const triThresh = pentThresh + 0.52;
       if (roll < octThresh) return ShapeType.OCTAGON;
       if (roll < hexThresh) return ShapeType.HEXAGON;
       if (roll < pentThresh) return ShapeType.PENTAGON;
@@ -6219,10 +6396,10 @@ export class GameEngine {
       return ShapeType.SQUARE;
     }
 
-    if (roll < 0.0025) return ShapeType.OCTAGON;
-    if (roll < 0.014) return ShapeType.HEXAGON;
-    if (roll < 0.055) return ShapeType.PENTAGON;
-    if (roll < 0.28) return ShapeType.TRIANGLE;
+    if (roll < 0.0018) return ShapeType.OCTAGON;
+    if (roll < 0.01) return ShapeType.HEXAGON;
+    if (roll < 0.038) return ShapeType.PENTAGON;
+    if (roll < 0.46) return ShapeType.TRIANGLE;
     return ShapeType.SQUARE;
   }
 
@@ -6634,8 +6811,9 @@ export class GameEngine {
 
   spawnBoss() {
     if (this.entities?.find(e => e.type === EntityType.BOSS)) return;
-    this.entities.push(new Boss(this.nextId()));
-    this.addNotification("⚠️ THE GRAND SINGULARITY HAS ARRIVED ⚠️", "#00ffff");
+    const boss = new Boss(this.nextId());
+    this.entities.push(boss);
+    this.addNotification(`⚠️ ${boss.name} HAS ARRIVED ⚠️`, "#00ffff");
     this.sound.playRoar();
   }
 
@@ -7418,6 +7596,7 @@ export class GameEngine {
                 const healAmount = totalDamageDealt * drainer.drainLifestealEfficiency * lifestealMult;
                 drainer.health = Math.min(drainer.health + healAmount, drainer.maxHealth);
                 drainer.totalDrainedThisSession += totalDamageDealt;
+                drainer.drainHistory.push({ time: Date.now(), amount: totalDamageDealt });
                 drainer.markDrainingStatus();
                 if (this.isOnScreen(drainer.pos)) this.sound.playBloodDrainTick(this.getAudioSpatialOptions(drainer.pos, false));
                  
@@ -7575,13 +7754,13 @@ export class GameEngine {
     this.refreshSpawnHeatmap(dt);
       this.shapeSpawnTimer += dt;
       const activePlayers = this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && !e.isDead).length;
-      const modeBaseInterval = this.gameMode === GameMode.TEAMS ? 0.1 : 0.13;
+      const modeBaseInterval = this.gameMode === GameMode.TEAMS ? 0.082 : 0.105;
       const populationScale = Math.max(0.75, Math.min(1.45, 1.2 - activePlayers * 0.01));
       const spawnInterval = modeBaseInterval * populationScale;
     if (this.currentShapeCount < (this.sandboxConfig?.shapeMaxCount || 400) && this.shapeSpawnTimer >= spawnInterval) {
         if (this.gameMode !== GameMode.SANDBOX || (this.sandboxConfig?.spawningEnabled)) {
             const fillPercent = this.currentShapeCount / (this.sandboxConfig?.shapeMaxCount || 400);
-            const modeBaseProb = this.gameMode === GameMode.TEAMS ? 0.58 : 0.46;
+            const modeBaseProb = this.gameMode === GameMode.TEAMS ? 0.72 : 0.6;
             const spawnProb = Math.max(0.05, modeBaseProb * (1 - fillPercent));
             if (Math.random() < spawnProb) {
                 this.spawnShape();
@@ -7601,13 +7780,28 @@ export class GameEngine {
 
     if (!this.attractMode && !this.player.isDead && this.playerState === PlayerState.ACTIVE) this.updatePlayerControl(dt);
 
+    if (this.gameMode === GameMode.TEAMS && !this.sandboxConfig.freezeAll) {
+        const { bots, players } = this.buildTdmAiPerception();
+        this.tdmAiSystem.configure({
+            worldWidth: this.width,
+            worldHeight: this.height,
+            mapCenter: { x: this.width * 0.5, y: this.height * 0.5 },
+            chokePoint: { x: this.width * 0.5, y: this.height * 0.5 },
+            safeZones: [
+                { team: Team.BLUE, center: { x: BASE_ZONE_WIDTH * 0.55, y: this.height * 0.5 }, radius: BASE_ZONE_WIDTH * 1.35 },
+                { team: Team.RED, center: { x: this.width - BASE_ZONE_WIDTH * 0.55, y: this.height * 0.5 }, radius: BASE_ZONE_WIDTH * 1.35 },
+            ],
+        });
+        this.tdmAiSystem.update(bots as any, players, this.simulationTick);
+    }
+
     if (!this.sandboxConfig.freezeAll) {
         const canUpdateAI = this.gameMode !== GameMode.SANDBOX || this.sandboxConfig.botsEnabled;
         let aiEntitiesProcessed = 0;
 
         this.entities.forEach(e => {
             if (canUpdateAI) {
-                const isAiEntity = e.type === EntityType.ENEMY || e.type === EntityType.ELITE_TANK || e.type === EntityType.GUARDIAN || e.type === EntityType.CRASHER;
+                const isAiEntity = e.type === EntityType.ENEMY || e.type === EntityType.ELITE_TANK || e.type === EntityType.GUARDIAN || e.type === EntityType.CRASHER || e.type === EntityType.BOSS;
                 const onScreenPriority = this.isOnScreen(e.pos, e.radius + 250);
                 const shouldRunAi = isAiEntity && (runAiTick || onScreenPriority);
                 if (shouldRunAi) {
@@ -7619,6 +7813,7 @@ export class GameEngine {
                     else if (e.type === EntityType.ELITE_TANK && !e.isDead) this.updateEliteAI(e as EliteTank, dt);
                     else if (e.type === EntityType.GUARDIAN) this.updateGuardianAI(e as Guardian, dt);
                     else if (e.type === EntityType.CRASHER) this.updateCrasherAI(e as Crasher, dt);
+                    else if (e.type === EntityType.BOSS && !e.isDead) this.updateBossAI(e as Boss, dt);
                     aiEntitiesProcessed++;
                 }
             }
@@ -7837,6 +8032,13 @@ export class GameEngine {
     const shouldPublishState = this.statePublishAccumulator >= this.statePublishIntervalSec;
     if (shouldPublishState) {
       this.statePublishAccumulator = 0;
+      const nowMs = Date.now();
+      const drainWindowMs = 2600;
+      if (this.player.drainHistory.length > 0) {
+        this.player.drainHistory = this.player.drainHistory.filter(h => (nowMs - h.time) <= drainWindowMs);
+      }
+      const bloodDrainLive = this.player.drainHistory.reduce((sum, h) => sum + h.amount, 0);
+      const bloodDrainStacks = Math.min(12, Math.floor(bloodDrainLive / 55));
       this.onStateUpdate({
         score: this.player.score, 
         level: this.level, 
@@ -7876,7 +8078,10 @@ export class GameEngine {
         evolutionTransitionRemaining: this.playerState === PlayerState.EVOLVING ? this.evolutionTransitionTimer : 0,
         bossChoices: this.playerState === PlayerState.BOSS_SELECTION ? [...this.bossChoices] : [],
         enemyZoneWarningLevel: this.enemyZoneWarningLevel,
-        enemyZoneWarningText: this.enemyZoneWarningText
+        enemyZoneWarningText: this.enemyZoneWarningText,
+        bloodDrainLive,
+        bloodDrainStacks,
+        bloodDrainSession: this.player.totalDrainedThisSession
       });
     }
 
@@ -8016,6 +8221,84 @@ export class GameEngine {
     }
   }
 
+  updateBossAI(boss: Boss, dt: number) {
+      const targets = this.entities.filter((e) =>
+          (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY || e.type === EntityType.ELITE_TANK) &&
+          !e.isDead &&
+          Vector.dist(e.pos, boss.pos) < 2200
+      ) as Tank[];
+      const target = this.findNearest(boss, targets) as Tank | null;
+      if (!target) return;
+
+      const toTarget = Vector.sub(target.pos, boss.pos);
+      const distance = Math.max(1, Vector.mag(toTarget));
+      const dir = Vector.normalize(toTarget);
+      const desiredRange = boss.archetype === 'SIEGEBREAKER' ? 360 : boss.archetype === 'SWARMLORD' ? 520 : 440;
+      const moveForce = distance > desiredRange ? 0.85 : -0.35;
+      boss.acc = Vector.limit(Vector.add(boss.acc, Vector.mult(dir, moveForce)), 1.15);
+
+      // Soft singularity pull so bosses feel "present" and threatening.
+      const pullRadius = boss.archetype === 'SINGULARITY' ? 880 : 760;
+      if (distance < pullRadius) {
+          const pull = 0.018 + (1 - distance / pullRadius) * 0.06;
+          target.vel = Vector.add(target.vel, Vector.mult(dir, pull * 60 * dt));
+      }
+
+      if (boss.pulseCooldown <= 0 && distance < 760) {
+          const pulseRadius = boss.archetype === 'SIEGEBREAKER' ? 520 : boss.archetype === 'SWARMLORD' ? 420 : 480;
+          const pulseDamage = boss.archetype === 'SIEGEBREAKER' ? 220 : boss.archetype === 'SWARMLORD' ? 150 : 185;
+          for (let i = 0; i < this.entities.length; i++) {
+              const e = this.entities[i];
+              if (e.isDead || (e.type !== EntityType.PLAYER && e.type !== EntityType.ENEMY && e.type !== EntityType.ELITE_TANK)) continue;
+              if (Vector.dist(e.pos, boss.pos) > pulseRadius) continue;
+              e.takeDamage(pulseDamage, boss.id, false);
+              const repel = Vector.normalize(Vector.sub(e.pos, boss.pos));
+              e.vel = Vector.add(e.vel, Vector.mult(repel, 4.2));
+          }
+          this.particles.push(new Particle(boss.pos.x, boss.pos.y, boss.color, boss.radius * 0.55, 12, 'RING'));
+          this.sound.playExplosion(true, this.getAudioSpatialOptions(boss.pos, true));
+          boss.pulseCooldown = boss.archetype === 'SIEGEBREAKER' ? 4.2 : boss.archetype === 'SWARMLORD' ? 5.0 : 4.6;
+      }
+
+      if (boss.summonCooldown <= 0) {
+          const spawnCount = boss.archetype === 'SWARMLORD' ? 4 : 2;
+          for (let i = 0; i < spawnCount; i++) {
+              const a = (Math.PI * 2 * i) / spawnCount + Math.random() * 0.4;
+              const r = boss.radius + 80 + Math.random() * 45;
+              this.entities.push(new Crasher(this.nextId(), boss.pos.x + Math.cos(a) * r, boss.pos.y + Math.sin(a) * r, Math.random() < 0.22));
+          }
+          boss.summonCooldown = boss.archetype === 'SWARMLORD' ? 6.8 : 9.5;
+      }
+
+      if (boss.volleyCooldown <= 0 && distance < 1200) {
+          const volleyCount = boss.archetype === 'SIEGEBREAKER' ? 6 : 4;
+          for (let i = 0; i < volleyCount; i++) {
+              const angle = Math.atan2(dir.y, dir.x) + (i - (volleyCount - 1) / 2) * (boss.archetype === 'SIEGEBREAKER' ? 0.14 : 0.22);
+              const spawnPos = {
+                  x: boss.pos.x + Math.cos(angle) * (boss.radius * 0.9),
+                  y: boss.pos.y + Math.sin(angle) * (boss.radius * 0.9),
+              };
+              const impactPos = {
+                  x: spawnPos.x + Math.cos(angle) * (boss.archetype === 'SIEGEBREAKER' ? 560 : 470),
+                  y: spawnPos.y + Math.sin(angle) * (boss.archetype === 'SIEGEBREAKER' ? 560 : 470),
+              };
+              this.particles.push(new Particle(impactPos.x, impactPos.y, boss.color, 8, 16, 'FLASH'));
+              this.particles.push(new Particle(impactPos.x, impactPos.y, boss.color, 12, 14, 'RING'));
+
+              const splash = boss.archetype === 'SIEGEBREAKER' ? 120 : 92;
+              const splashRadius = boss.archetype === 'SIEGEBREAKER' ? 120 : 95;
+              for (let j = 0; j < this.entities.length; j++) {
+                  const maybe = this.entities[j];
+                  if (maybe.isDead || (maybe.type !== EntityType.PLAYER && maybe.type !== EntityType.ENEMY && maybe.type !== EntityType.ELITE_TANK)) continue;
+                  if (Vector.dist(maybe.pos, impactPos) > splashRadius) continue;
+                  maybe.takeDamage(splash, boss.id, false);
+              }
+          }
+          this.sound.playShoot(TankClass.DESTROYER, this.getAudioSpatialOptions(boss.pos, true));
+          boss.volleyCooldown = boss.archetype === 'SIEGEBREAKER' ? 3.1 : 3.9;
+      }
+  }
+
   updateCrasherAI(crasher: Crasher, dt: number) {
     const vision = 700;
     // Crashers are now much slower and more "swarmy"
@@ -8108,7 +8391,82 @@ export class GameEngine {
       return Vector.add(targetPos, Vector.mult(targetVel, timeToHit * predictionFactor)); 
   }
 
+  private buildTdmAiPerception(): { bots: Tank[]; players: TDMPlayer[] } {
+      const bots: Tank[] = [];
+      const players: TDMPlayer[] = [];
+
+      for (let i = 0; i < this.entities.length; i++) {
+          const e = this.entities[i];
+          if (!e || e.isDead) continue;
+
+          if (e.type === EntityType.ENEMY) {
+              bots.push(e as Tank);
+          }
+
+          if (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY || e.type === EntityType.ELITE_TANK) {
+              const t = e as Tank;
+              players.push({
+                  id: t.id,
+                  pos: t.pos,
+                  vel: t.vel,
+                  team: t.team,
+                  isDead: t.isDead,
+                  health: t.health,
+                  maxHealth: t.maxHealth,
+                  level: t.level,
+                  score: t.score,
+                  classType: t.classType,
+                  aiState: t.aiState,
+                  aiTargetId: t.aiTargetId,
+                  type: t.type === EntityType.PLAYER ? 'PLAYER' : 'ENEMY',
+              });
+              continue;
+          }
+
+          if (e.type === EntityType.BULLET) {
+              const b = e as Bullet;
+              players.push({
+                  id: b.id,
+                  pos: b.pos,
+                  vel: b.vel,
+                  team: b.team,
+                  isDead: b.isDead,
+                  ownerId: b.ownerId,
+                  type: 'BULLET',
+              });
+          }
+      }
+
+      return { bots, players };
+  }
+
   updateBotAI(bot: Tank, dt: number) {
+      if (this.gameMode === GameMode.TEAMS) {
+          // In TDM, TDMAISystem is the single source of truth for bot intent.
+          this.applyTankMovement(bot, bot.lastSteering || { x: 0, y: 0 });
+
+          const target = (bot.aiTargetId != null)
+              ? this.entities.find((e) => e.id === bot.aiTargetId && !e.isDead)
+              : null;
+
+          if (target) {
+              const to = Vector.sub(target.pos, bot.pos);
+              if (Vector.magSq(to) > 0.0001) {
+                  bot.aiTargetRot = Math.atan2(to.y, to.x);
+              }
+          } else if (Vector.magSq(bot.vel) > 0.001) {
+              bot.aiTargetRot = Math.atan2(bot.vel.y, bot.vel.x);
+          }
+
+          let diff = bot.aiTargetRot - bot.rotation;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          bot.rotation += diff * Math.min(1, dt * 8.0);
+
+          if (bot.aiShooting) this.attemptShoot(bot);
+          return;
+      }
+
       const useLegacy = (window as any).__vextorLegacyAI === true;
       if (useLegacy) {
           try {
@@ -8241,6 +8599,30 @@ export class GameEngine {
       this.sound.playRoar();
   }
 
+  private getSequentialBarrelPattern(classType: TankClass, barrelCount: number): number[] | null {
+    if (classType === TankClass.TWIN && barrelCount >= 2) return [0, 1];
+    if (classType === TankClass.TWIN_FLANK && barrelCount >= 4) return [0, 2, 1, 3];
+    if (classType === TankClass.TRIPLE_TWIN && barrelCount >= 6) return [0, 2, 4, 1, 3, 5];
+    if (classType === TankClass.SPREAD_SHOT && barrelCount >= 11) return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    return null;
+  }
+
+  private getSequentialCadenceMultiplier(classType: TankClass): number {
+    if (classType === TankClass.TWIN) return 0.62;
+    if (classType === TankClass.TWIN_FLANK) return 0.66;
+    if (classType === TankClass.TRIPLE_TWIN) return 0.7;
+    if (classType === TankClass.SPREAD_SHOT) return 0.54;
+    return 1.0;
+  }
+
+  private getClassMinCooldown(classType: TankClass): number {
+    if (classType === TankClass.TWIN) return 22;
+    if (classType === TankClass.TWIN_FLANK) return 24;
+    if (classType === TankClass.TRIPLE_TWIN) return 26;
+    if (classType === TankClass.SPREAD_SHOT) return 28;
+    return 40;
+  }
+
   attemptShoot(tank: Tank) {
     // Sandbox Hard Guard: Prevent enemies from firing if bots are disabled
     if (this.gameMode === GameMode.SANDBOX && tank.type !== EntityType.PLAYER && !this.sandboxConfig.botsEnabled) {
@@ -8251,11 +8633,11 @@ export class GameEngine {
         [TankClass.BASIC]: 1.0,
         [TankClass.PACIFIST_TRAINEE]: 1.0,
         [TankClass.NURSE]: 1.04,
-        [TankClass.TWIN]: 0.92,
+        [TankClass.TWIN]: 0.82,
         [TankClass.SNIPER]: 1.26,
         [TankClass.MACHINE_GUN]: 0.64,
         [TankClass.FLANK_GUARD]: 0.96,
-        [TankClass.TRIPLE_SHOT]: 0.9,
+        [TankClass.TRIPLE_SHOT]: 0.8,
         [TankClass.QUAD_TANK]: 0.95,
         [TankClass.TWIN_FLANK]: 0.9,
         [TankClass.ASSASSIN]: 1.2,
@@ -8266,11 +8648,11 @@ export class GameEngine {
         [TankClass.GUNNER]: 0.72,
         [TankClass.DOCTOR]: 1.0,
         [TankClass.OVERSEER]: 0.9,
-        [TankClass.TRIPLE_TWIN]: 0.92,
+        [TankClass.TRIPLE_TWIN]: 0.96,
         [TankClass.OCTO_TANK]: 0.9,
         [TankClass.TRIPLE_TANK]: 0.88,
         [TankClass.PENTA_SHOT]: 0.85,
-        [TankClass.SPREAD_SHOT]: 0.78,
+        [TankClass.SPREAD_SHOT]: 0.9,
         [TankClass.RANGER]: 1.4,
         [TankClass.STALKER]: 1.34,
         [TankClass.ANNIHILATOR]: 1.85,
@@ -8303,7 +8685,10 @@ export class GameEngine {
     }
 
     let shotFired = false;
-    const idx = tank.nextBarrelIndex % tank.barrels.length;
+    const pattern = this.getSequentialBarrelPattern(tank.classType, tank.barrels.length);
+    const idx = pattern
+      ? pattern[tank.nextBarrelIndex % pattern.length]
+      : (tank.nextBarrelIndex % tank.barrels.length);
     const barrel = tank.barrels[idx];
 
     const isManager = tank.classType === TankClass.MANAGER;
@@ -8813,7 +9198,10 @@ export class GameEngine {
             const angle = tank.rotation + angleOff;
             const tip = Vector.add(tank.pos, Vector.mult(Vector.fromAngle(angle), tank.radius * length));
 
-            this.entities.push(new MiniTank(this.nextId(), tip.x, tip.y, tank));
+            const unitVariant: 'BASIC' | 'TWIN' = (currentMiniTanks % 2 === 0) ? 'TWIN' : 'BASIC';
+            const unit = new MiniTank(this.nextId(), tip.x, tip.y, tank, unitVariant);
+            unit.combatOrbitDistance = unitVariant === 'TWIN' ? 200 : 180;
+            this.entities.push(unit);
 
             const cooldownVal = Math.max(300, baseReloadTimeMs * 3.3);
             if (!this.sandboxConfig.infiniteAmmo) {
@@ -8901,32 +9289,34 @@ export class GameEngine {
         
         // Class-specialized projectile identity + anti-power-creep buffs for weaker classes.
         if (tank.classType === TankClass.BASIC) { bulletSpeedMult = 1.02; bulletDamageMult = 1.02; bulletLifeMult = 1.03; bulletSizeMult = 1.0; }
-        else if (tank.classType === TankClass.TWIN) { bulletSpeedMult = 1.06; bulletDamageMult = 0.96; bulletLifeMult = 1.0; bulletSizeMult = 0.94; }
-        else if (tank.classType === TankClass.TRIPLE_SHOT) { bulletSpeedMult = 1.08; bulletDamageMult = 0.92; bulletLifeMult = 1.03; bulletSizeMult = 0.9; }
+        else if (tank.classType === TankClass.TWIN) { bulletSpeedMult = 1.06; bulletDamageMult = 1.0; bulletLifeMult = 1.02; bulletSizeMult = 0.96; }
+        else if (tank.classType === TankClass.TRIPLE_SHOT) { bulletSpeedMult = 1.14; bulletDamageMult = 1.06; bulletLifeMult = 1.14; bulletSizeMult = 0.95; }
         else if (tank.classType === TankClass.QUAD_TANK) { bulletSpeedMult = 1.04; bulletDamageMult = 0.9; bulletLifeMult = 1.02; bulletSizeMult = 0.9; }
-        else if (tank.classType === TankClass.TWIN_FLANK) { bulletSpeedMult = 1.08; bulletDamageMult = 0.94; bulletLifeMult = 1.05; bulletSizeMult = 0.92; }
-        else if (tank.classType === TankClass.TRIPLE_TWIN) { bulletSpeedMult = 1.1; bulletDamageMult = 0.9; bulletLifeMult = 1.08; bulletSizeMult = 0.88; }
+        else if (tank.classType === TankClass.TWIN_FLANK) { bulletSpeedMult = 1.08; bulletDamageMult = 0.98; bulletLifeMult = 1.05; bulletSizeMult = 0.94; }
+        else if (tank.classType === TankClass.TRIPLE_TWIN) { bulletSpeedMult = 1.1; bulletDamageMult = 0.96; bulletLifeMult = 1.08; bulletSizeMult = 0.92; }
         else if (tank.classType === TankClass.TRIPLE_TANK) { bulletSpeedMult = 1.06; bulletDamageMult = 1.04; bulletLifeMult = 1.08; bulletSizeMult = 0.97; }
         else if (tank.classType === TankClass.PENTA_SHOT) { bulletSpeedMult = 1.1; bulletDamageMult = 0.88; bulletLifeMult = 1.12; bulletSizeMult = 0.85; }
-        else if (tank.classType === TankClass.SPREAD_SHOT) { bulletSpeedMult = 1.18; bulletDamageMult = 0.76; bulletLifeMult = 0.95; bulletSizeMult = 0.76; }
+        else if (tank.classType === TankClass.SPREAD_SHOT) { bulletSpeedMult = 1.2; bulletDamageMult = 0.82; bulletLifeMult = 0.96; bulletSizeMult = 0.8; }
         else if (tank.classType === TankClass.SNIPER) { bulletSpeedMult = 1.5; bulletDamageMult = 1.65; bulletLifeMult = 1.3; bulletSizeMult = 0.9; }
         else if (tank.classType === TankClass.ASSASSIN) { bulletSpeedMult = 1.85; bulletDamageMult = 2.25; bulletLifeMult = 1.7; bulletSizeMult = 0.88; }
         else if (tank.classType === TankClass.RANGER || tank.classType === TankClass.STALKER) { bulletSpeedMult = 2.4; bulletDamageMult = 3.20; bulletLifeMult = 2.4; bulletSizeMult = 0.92; }
         else if (isDestroyer) { 
-            bulletSizeMult = this.sandboxConfig?.spawningEnabled ? 2.5 : 2.2; 
+            // Keep heavy identity, but shell should read slightly smaller than muzzle width.
+            bulletSizeMult = Math.max(1.55, widthScale * (this.sandboxConfig?.spawningEnabled ? 0.94 : 0.88)); 
             bulletDamageMult = 6.0; 
             bulletLifeMult = 1.8; 
             bulletSpeedMult = 2.1; 
         }
         else if (isHybrid) {
             // HYBRID: no longer treated like destroyer shell spam; distinct "siege-support" bullet profile.
-            bulletSizeMult = 1.28;
+            bulletSizeMult = Math.max(1.3, widthScale * 0.84);
             bulletDamageMult = 2.75;
             bulletLifeMult = 1.38;
             bulletSpeedMult = 1.42;
         }
         else if (isAnnihilator) { 
-            bulletSizeMult = this.sandboxConfig?.spawningEnabled ? 3.2 : 3.0; 
+            // Massive, but still slightly tucked under barrel silhouette.
+            bulletSizeMult = Math.max(1.85, widthScale * (this.sandboxConfig?.spawningEnabled ? 0.96 : 0.9)); 
             bulletDamageMult = 9.0; 
             // Close-mid siege cannon identity: extreme impact, shorter reach.
             bulletLifeMult = 1.75; 
@@ -8954,14 +9344,14 @@ export class GameEngine {
             bulletSpeedMult = 1.22;
         }
         else if (isMachineGun) {
-            // Sustained suppression identity with spin-up overdrive
+            // Sustained suppression identity with a wider spray cone.
             const spin = Math.min(1, tank.machineSpin);
             const heat = Math.min(1, tank.machineHeat);
             const overdrive = Math.max(0, (heat - 0.35) / 0.65) * (0.45 + spin * 0.55);
-            bulletSpeedMult += 0.08 * overdrive;
-            bulletDamageMult *= 1 + 0.14 * overdrive;
-            bulletLifeMult *= 1 + 0.1 * overdrive;
-            bulletSizeMult *= 1 + overdrive * 0.04;
+            bulletSpeedMult = 1.02 + 0.06 * overdrive;
+            bulletDamageMult *= 0.9 + overdrive * 0.11;
+            bulletLifeMult *= 0.9 + overdrive * 0.1;
+            bulletSizeMult *= 0.92 + overdrive * 0.05;
         }
         else if (isSprayer) {
             if (isSprayerCoreBarrel) {
@@ -8977,10 +9367,10 @@ export class GameEngine {
             }
         }
         else if (tank.classType === TankClass.GUNNER || tank.classType === TankClass.AUTO_GUNNER) {
-            bulletSizeMult = tank.classType === TankClass.GUNNER ? 0.82 : 0.72;
-            bulletDamageMult = tank.classType === TankClass.GUNNER ? 0.86 : 0.82;
-            bulletSpeedMult = 1.82;
-            bulletLifeMult = tank.classType === TankClass.GUNNER ? 1.3 : 1.24;
+            bulletSizeMult = tank.classType === TankClass.GUNNER ? 0.86 : 0.72;
+            bulletDamageMult = tank.classType === TankClass.GUNNER ? 0.92 : 0.82;
+            bulletSpeedMult = tank.classType === TankClass.GUNNER ? 1.74 : 1.82;
+            bulletLifeMult = tank.classType === TankClass.GUNNER ? 1.36 : 1.24;
         }
         else if (tank.classType === TankClass.STREAMLINER) { bulletDamageMult = 0.58; bulletSizeMult = 0.62; bulletSpeedMult = 1.95; bulletLifeMult = 1.08; }
 
@@ -8991,11 +9381,30 @@ export class GameEngine {
             bulletLifeMult *= widthScale;
         }
 
+        // Spread Shot identity: heavier center shell, lighter side pellets.
+        if (tank.classType === TankClass.SPREAD_SHOT) {
+            const isCenterBarrel = idx === 0;
+            if (isCenterBarrel) {
+                bulletDamageMult *= 1.55;
+                bulletSpeedMult *= 0.92;
+                bulletLifeMult *= 1.12;
+                bulletSizeMult *= 1.2;
+            } else {
+                bulletDamageMult *= 0.76;
+                bulletSpeedMult *= 1.03;
+                bulletLifeMult *= 0.9;
+                bulletSizeMult *= 0.9;
+            }
+        }
+
         const stabilityFactor = Math.max(0.28, Math.pow(0.86, stability));
         let spreadScale = stabilityFactor;
         if (isMachineGun) {
-            const overheatPenalty = Math.max(0, tank.machineHeat - 0.9) * 1.8;
-            spreadScale = Math.min(1.35, stabilityFactor * (1 + overheatPenalty));
+            const spin = Math.min(1, tank.machineSpin);
+            const heat = Math.min(1, tank.machineHeat);
+            const sprayBias = 1.2 + spin * 0.25 + heat * 0.28;
+            const overheatPenalty = Math.max(0, tank.machineHeat - 0.86) * 1.6;
+            spreadScale = Math.min(1.65, stabilityFactor * sprayBias * (1 + overheatPenalty));
         }
         if (tank.classType === TankClass.GUNNER || tank.classType === TankClass.AUTO_GUNNER) {
             spreadScale *= 0.86;
@@ -9138,7 +9547,11 @@ export class GameEngine {
         }
 
         const annihilatorReloadNerf = isAnnihilator ? 1.6 : 1.0;
-        let cooldownVal = Math.max(40, baseReloadTimeMs * delayMultiplier * annihilatorReloadNerf);
+        let cooldownVal = Math.max(
+            this.getClassMinCooldown(tank.classType),
+            baseReloadTimeMs * delayMultiplier * annihilatorReloadNerf
+        );
+        cooldownVal *= this.getSequentialCadenceMultiplier(tank.classType);
         if (isMachineGun) {
             const spin = Math.min(1, tank.machineSpin);
             const heat = Math.min(1, tank.machineHeat);
@@ -9884,6 +10297,27 @@ export class GameEngine {
     for(let i=0; i<finalCount; i++) this.particles.push(new Particle(pos.x, pos.y, color, size + Math.random() * 2)); 
   }
 
+  private grantTemporaryBossOverride(tank: Tank, sourceBoss: Boss) {
+      if (!tank || tank.isDead || tank.isBot) return;
+      if (this.isBossClass(tank.classType)) return; // keep rebirth classes out of this reward path
+
+      const durationSec = 75;
+      const existing = tank.activeBuffs.find((b) => b.type === 'BOSS_OVERRIDE');
+      if (existing) {
+          existing.timeLeft = Math.max(existing.timeLeft, durationSec);
+          existing.totalTime = Math.max(existing.totalTime, durationSec);
+      } else {
+          tank.activeBuffs.push({ type: 'BOSS_OVERRIDE', timeLeft: durationSec, totalTime: durationSec });
+      }
+      tank.updateStats();
+
+      if (tank.id === this.player.id) {
+          this.transformations++;
+          this.addNotification(`${sourceBoss.name} CORE ABSORBED - BOSS OVERRIDE ${durationSec}s`, "#f472b6");
+          this.sound.playRoar(this.getAudioSpatialOptions(tank.pos, true));
+      }
+  }
+
   handleDeath(victim: Entity, killer: Entity) {
       if (victim.type === EntityType.DUMMY) return; 
 
@@ -9989,6 +10423,46 @@ export class GameEngine {
                       }
                   }
               });
+          }
+      }
+      if (victim.type === EntityType.BOSS) {
+          const vBoss = victim as Boss;
+          this.addNotification(`${vBoss.name} DESTROYED`, "#22d3ee");
+          let totalBossDamage = 0;
+          vBoss.damageDealtBy.forEach((value) => { totalBossDamage += value; });
+
+          if (totalBossDamage > 0) {
+              type BossDamageContributor = { tank: Tank; damage: number };
+              let bestContributor: BossDamageContributor | null = null;
+
+              // Do not use Map.forEach here.
+              // TypeScript does not reliably narrow variables that are assigned inside callbacks,
+              // so `bestContributor` can collapse to `never` after the callback.
+              for (const [id, dmg] of vBoss.damageDealtBy.entries()) {
+                  const tank = this.entities.find((entity): entity is Tank =>
+                      entity instanceof Tank &&
+                      entity.id === id &&
+                      !entity.isDead &&
+                      (
+                          entity.type === EntityType.PLAYER ||
+                          entity.type === EntityType.ENEMY ||
+                          entity.type === EntityType.ELITE_TANK
+                      )
+                  );
+
+                  if (!tank) continue;
+
+                  if (bestContributor === null || dmg > bestContributor.damage) {
+                      bestContributor = { tank, damage: dmg };
+                  }
+              }
+
+              if (bestContributor !== null) {
+                  const contributionRatio = bestContributor.damage / totalBossDamage;
+                  if (contributionRatio >= 0.18 || bestContributor.tank.id === this.player.id || wasPlayerKill) {
+                      this.grantTemporaryBossOverride(bestContributor.tank, vBoss);
+                  }
+              }
           }
       }
       if (victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY || victim.type === EntityType.BOSS || victim.type === EntityType.ELITE_TANK) {

@@ -1,16 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Achievement, User } from '../types';
-import { ACHIEVEMENTS } from '../constants';
+import { Achievement, Quest, User } from '../types';
+import { ACHIEVEMENTS, QUESTS, SHOP_ITEMS } from '../constants';
 
 interface AchievementsModalProps {
   user: User | null;
   onClose: () => void;
   darkMode: boolean;
   playSound: () => void;
+  playHover?: () => void;
 }
 
 type AchievementCategory = 'All' | 'Combat' | 'Engineering' | 'Evolution' | 'Artifacts';
+type RecordScope = 'Achievements' | 'Quests';
+type RecordItem = (Achievement & { kind: 'achievement' }) | (Quest & { kind: 'quest' });
 
 type CategoryMeta = {
   label: AchievementCategory;
@@ -104,8 +107,17 @@ function getAchievementCategory(achievement: Achievement): AchievementCategory {
   return CATEGORY_BY_SOURCE[achievement.category] || 'Artifacts';
 }
 
-export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onClose, darkMode, playSound }) => {
+export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onClose, darkMode, playSound, playHover }) => {
   const [activeTab, setActiveTab] = useState<AchievementCategory>('All');
+  const [scope, setScope] = useState<RecordScope>('Achievements');
+  const [selectedGoals, setSelectedGoals] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('vextor_selected_goals');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const tabRefs = useRef<Record<AchievementCategory, HTMLButtonElement | null>>({
@@ -117,32 +129,46 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
   });
 
   const unlockedIds = user?.stats.achievementsUnlocked || [];
+  const unlockedQuestIds = user?.stats.questsUnlocked || [];
   const unlockedSet = useMemo(() => new Set(unlockedIds), [unlockedIds]);
+  const unlockedQuestSet = useMemo(() => new Set(unlockedQuestIds), [unlockedQuestIds]);
+  const allAchievements: RecordItem[] = useMemo(() => ACHIEVEMENTS.map((a) => ({ ...a, kind: 'achievement' as const })), []);
+  const allQuests: RecordItem[] = useMemo(() => QUESTS.map((q) => ({ ...q, kind: 'quest' as const })), []);
 
   const categorizedAchievements = useMemo(() => {
     const result: Record<AchievementCategory, Achievement[]> = {
-      All: ACHIEVEMENTS,
+      All: scope === 'Achievements' ? (allAchievements as Achievement[]) : (allQuests as unknown as Achievement[]),
       Combat: [],
       Engineering: [],
       Evolution: [],
       Artifacts: [],
     };
 
-    for (const achievement of ACHIEVEMENTS) {
-      const category = getAchievementCategory(achievement);
-      result[category].push(achievement);
+    const source = scope === 'Achievements' ? allAchievements : allQuests;
+    for (const achievement of source) {
+      const category = scope === 'Achievements'
+        ? getAchievementCategory(achievement as Achievement)
+        : 'Artifacts';
+      result[category].push(achievement as unknown as Achievement);
     }
 
     return result;
-  }, []);
+  }, [allAchievements, allQuests, scope]);
 
   const categoryStats = useMemo<Record<AchievementCategory, CategoryMeta>>(() => {
     const output = {} as Record<AchievementCategory, CategoryMeta>;
 
     for (const tab of TABS) {
-      const list = tab === 'All' ? ACHIEVEMENTS : categorizedAchievements[tab];
+      const list = tab === 'All'
+        ? (scope === 'Achievements' ? allAchievements : allQuests)
+        : categorizedAchievements[tab];
       const total = list.length;
-      const unlocked = list.reduce((sum, achievement) => sum + (unlockedSet.has(achievement.id) ? 1 : 0), 0);
+      const unlocked = list.reduce((sum, achievement) => {
+        const isUnlocked = scope === 'Achievements'
+          ? unlockedSet.has(achievement.id)
+          : unlockedQuestSet.has(achievement.id);
+        return sum + (isUnlocked ? 1 : 0);
+      }, 0);
       const percent = total > 0 ? clampPercent((unlocked / total) * 100) : 0;
 
       output[tab] = {
@@ -154,11 +180,22 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
     }
 
     return output;
-  }, [categorizedAchievements, unlockedSet]);
+  }, [allAchievements, allQuests, categorizedAchievements, scope, unlockedQuestSet, unlockedSet]);
 
   const filteredAchievements = useMemo(() => {
-    return activeTab === 'All' ? ACHIEVEMENTS : categorizedAchievements[activeTab];
-  }, [activeTab, categorizedAchievements]);
+    return (activeTab === 'All'
+      ? (scope === 'Achievements' ? allAchievements : allQuests)
+      : categorizedAchievements[activeTab]) as RecordItem[];
+  }, [activeTab, allAchievements, allQuests, categorizedAchievements, scope]);
+
+  useEffect(() => {
+    localStorage.setItem('vextor_selected_goals', JSON.stringify(selectedGoals));
+  }, [selectedGoals]);
+
+  const toggleGoal = (id: string) => {
+    playSound();
+    setSelectedGoals((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  };
 
   const globalStats = categoryStats.All;
   const activeMeta = categoryStats[activeTab];
@@ -315,6 +352,7 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
                     aria-controls={`achievement-panel-${tab}`}
                     tabIndex={active ? 0 : -1}
                     onClick={() => selectTab(tab)}
+                    onMouseEnter={() => playHover?.()}
                     onKeyDown={(event) => handleTabKeyDown(event, tab)}
                     className={`group w-full rounded-[1.35rem] border p-4 text-left transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 ${
                       active
@@ -358,16 +396,33 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
                 </div>
 
                 <h3 className="truncate text-3xl font-black uppercase italic tracking-tight text-white sm:text-4xl lg:text-5xl">
-                  {activeTab === 'All' ? 'All Milestones' : `${activeTab} Milestones`}
+                  {activeTab === 'All' ? `All ${scope}` : `${activeTab} ${scope}`}
                 </h3>
 
                 <p className="mt-3 max-w-3xl text-sm font-medium leading-6 text-white/45">{activeMeta.description}</p>
+                <div className="mt-4 inline-flex rounded-full border border-white/15 bg-black/35 p-1">
+                  {(['Achievements', 'Quests'] as RecordScope[]).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => {
+                        playSound();
+                        setScope(s);
+                      }}
+                      onMouseEnter={() => playHover?.()}
+                      className={`rounded-full px-4 py-1.5 text-xs font-black uppercase tracking-[0.12em] transition ${scope === s ? 'bg-cyan-300 text-slate-950' : 'text-white/60 hover:text-white'}`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <button
                 ref={closeButtonRef}
                 type="button"
                 onClick={closeModal}
+                onMouseEnter={() => playHover?.()}
                 aria-label="Close achievements modal"
                 className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.06] text-white/55 transition-all hover:bg-white/12 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70"
               >
@@ -396,6 +451,7 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
                       aria-controls={`achievement-panel-${tab}`}
                       tabIndex={active ? 0 : -1}
                       onClick={() => selectTab(tab)}
+                      onMouseEnter={() => playHover?.()}
                       onKeyDown={(event) => handleTabKeyDown(event, tab)}
                       className={`shrink-0 rounded-full border px-4 py-2 text-xs font-black uppercase tracking-[0.14em] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 ${
                         active
@@ -430,7 +486,15 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
                   <EmptyAchievementState />
                 ) : (
                   filteredAchievements.map((achievement) => (
-                    <AchievementCard key={achievement.id} achievement={achievement} unlocked={unlockedSet.has(achievement.id)} cardClass={cardClass} />
+                    <AchievementCard
+                      key={achievement.id}
+                      achievement={achievement}
+                      unlocked={achievement.kind === 'achievement' ? unlockedSet.has(achievement.id) : unlockedQuestSet.has(achievement.id)}
+                      cardClass={cardClass}
+                      isGoal={selectedGoals.includes(achievement.id)}
+                      onToggleGoal={toggleGoal}
+                      onHover={playHover}
+                    />
                   ))
                 )}
               </motion.div>
@@ -465,9 +529,28 @@ function EmptyAchievementState() {
   );
 }
 
-function AchievementCard({ achievement, unlocked, cardClass }: { achievement: Achievement; unlocked: boolean; cardClass: string }) {
-  const category = getAchievementCategory(achievement);
+function AchievementCard({
+  achievement,
+  unlocked,
+  cardClass,
+  isGoal,
+  onToggleGoal,
+  onHover
+}: {
+  achievement: RecordItem;
+  unlocked: boolean;
+  cardClass: string;
+  isGoal: boolean;
+  onToggleGoal: (id: string) => void;
+  onHover?: () => void;
+}) {
+  const category = achievement.kind === 'achievement' ? getAchievementCategory(achievement) : 'Artifacts';
   const categoryMeta = CATEGORY_COPY[category];
+  const rewardSkin = achievement.rewardSkinId ? SHOP_ITEMS.find((item) => item.id === achievement.rewardSkinId) : null;
+  const displayIcon = achievement.kind === 'achievement' ? (achievement.icon || '★') : '◎';
+  const rewardCurrency = achievement.kind === 'achievement'
+    ? (achievement.rewardCurrency ?? 0)
+    : achievement.rewardCurrency;
 
   return (
     <article
@@ -488,7 +571,7 @@ function AchievementCard({ achievement, unlocked, cardClass }: { achievement: Ac
             }`}
             aria-hidden="true"
           >
-            {achievement.icon || '★'}
+            {displayIcon}
           </div>
 
           <div
@@ -499,6 +582,14 @@ function AchievementCard({ achievement, unlocked, cardClass }: { achievement: Ac
             {unlocked ? 'Unlocked' : 'Locked'}
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => onToggleGoal(achievement.id)}
+          onMouseEnter={() => onHover?.()}
+          className={`mb-3 rounded-lg border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${isGoal ? 'border-emerald-300/35 bg-emerald-300/15 text-emerald-100' : 'border-white/10 bg-white/5 text-white/55'}`}
+        >
+          {isGoal ? 'Tracking Goal' : 'Track Goal'}
+        </button>
 
         <div className="mb-3 flex items-center gap-3">
           <span className={`text-[0.68rem] font-black uppercase tracking-[0.18em] ${unlocked ? 'text-white/50' : 'text-white/22'}`}>{category}</span>
@@ -514,9 +605,14 @@ function AchievementCard({ achievement, unlocked, cardClass }: { achievement: Ac
         {achievement.rewardSkinId && (
           <div className={`mt-5 rounded-2xl border px-4 py-3 ${unlocked ? 'border-amber-300/20 bg-amber-300/10 text-amber-100' : 'border-white/8 bg-white/[0.025] text-white/20'}`}>
             <div className="flex items-center gap-3">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${unlocked ? 'bg-amber-200 shadow-[0_0_1rem_rgba(253,230,138,0.75)]' : 'bg-white/15'}`} />
-              <span className="truncate text-xs font-black uppercase tracking-[0.14em]">Reward Skin Available</span>
+              <span className={`h-5 w-5 shrink-0 rounded-full border ${unlocked ? 'border-amber-200/80' : 'border-white/20'}`} style={{ background: rewardSkin?.value || '#6b7280' }} />
+              <span className="truncate text-xs font-black uppercase tracking-[0.14em]">{rewardSkin?.name || 'Reward Skin'} Preview</span>
             </div>
+          </div>
+        )}
+        {rewardCurrency > 0 && (
+          <div className="mt-2 text-xs font-black uppercase tracking-[0.12em] text-emerald-200/80">
+            Reward: +{rewardCurrency.toLocaleString()} Credits
           </div>
         )}
       </div>

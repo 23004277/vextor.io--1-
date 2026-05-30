@@ -1,5 +1,5 @@
 
-import { StatType, TankClass, ShopItem, ShapeType, ShapeRarity, Achievement } from './types';
+import { StatType, TankClass, ShopItem, ShapeType, ShapeRarity, Achievement, Quest } from './types';
 
 export const BOT_NAMES = [
     'Spin2Team', 'ProGamer', 'Noob', 'Guest_123', 'VextorPilot', 'Tanky', 'SniperX', 'Destroyer',
@@ -209,16 +209,19 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
     [1.9, 0.8, 0, 0, 1.0, -0.5], 
   ],
   [TankClass.SNIPER]: [[2.5, 0.8, 0, 0, 1.85, 0]],
-  [TankClass.MACHINE_GUN]: [[1.6, 0.8, 0, 0, 0.22, 0, 2.1]], 
+  [TankClass.MACHINE_GUN]: [[1.52, 0.84, 0.02, 0, 0.24, 0]], 
   [TankClass.FLANK_GUARD]: [
     [1.9, 0.8, 0, 0, 1, 0],
     [1.6, 0.8, 0, Math.PI, 1, 0],
   ],
   // Tier 3
   [TankClass.TRIPLE_SHOT]: [
-    [1.9, 0.8, 0, 0, 1, 0],
-    [1.8, 0.8, 0, -Math.PI / 4, 1, 0],
-    [1.8, 0.8, 0, Math.PI / 4, 1, 0],
+    // Distinct from Twin: heavy central lane + two primary spread cannons + two light wing pokers.
+    [2.08, 0.86, 0.05, 0, 0.9, 0],
+    [1.92, 0.76, 0.02, -Math.PI / 5, 0.92, 0],
+    [1.92, 0.76, 0.02, Math.PI / 5, 0.92, 0],
+    [1.48, 0.56, -0.06, -Math.PI * 0.31, 1.18, 0],
+    [1.48, 0.56, -0.06, Math.PI * 0.31, 1.18, 0],
   ],
   [TankClass.QUAD_TANK]: [
     [1.9, 0.8, 0, 0, 1, 0],
@@ -257,11 +260,12 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
     [2.3, 0.7, 0, 0, 1.75, 0], // Top Barrel (Thinnest)
   ],
   [TankClass.GUNNER]: [
-    [1.95, 0.42, 0.05, 0.02, 0.62, 0.22],
-    [1.95, 0.42, 0.05, -0.02, 0.62, -0.22],
-    [1.65, 0.54, -0.03, 0.03, 0.86, 0.52],
-    [1.65, 0.54, -0.03, -0.03, 0.86, -0.52],
-    [1.35, 0.62, -0.1, 0, 1.1, 0],
+    // Redesigned "fan-cluster" gunner profile: dual needles + dual support barrels + compact core stabilizer.
+    [2.04, 0.4, 0.1, 0.05, 0.58, 0.26],
+    [2.04, 0.4, 0.1, -0.05, 0.58, -0.26],
+    [1.78, 0.48, 0.02, 0.08, 0.74, 0.56],
+    [1.78, 0.48, 0.02, -0.08, 0.74, -0.56],
+    [1.46, 0.58, -0.1, 0, 0.94, 0],
   ],
   [TankClass.OVERSEER]: [
     [1.5, 0.72, -0.05, Math.PI / 2, 1, 0],
@@ -418,11 +422,12 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
     [1.6, 1.0, 0, 0, 1.0, 0]
   ],
   [TankClass.REAPER]: [
-    // Asymmetric executioner layout: maw lance, upper sickle, lower injector, rear siphon barb.
-    [1.95, 0.82, 0.08, 0.02, 1.04, 0, 0.92],
-    [1.52, 0.56, -0.16, Math.PI * 0.38, 0.78, 0.52, 0.72],
-    [1.28, 0.48, -0.28, -Math.PI * 0.62, 0.66, -0.34, 0.86],
-    [1.1, 0.44, -0.42, Math.PI * 0.9, 1.15, 0.38, 1.0],
+    // Executioner silhouette: heavy maw lance, upper/lower harvesting hooks, rear siphon pair.
+    [2.12, 0.88, 0.1, 0.02, 0.96, 0, 0.92],
+    [1.72, 0.58, -0.08, Math.PI * 0.3, 0.74, 0.58, 0.74],
+    [1.58, 0.54, -0.18, -Math.PI * 0.36, 0.72, -0.52, 0.78],
+    [1.24, 0.48, -0.34, Math.PI * 0.86, 1.08, 0.44, 0.96],
+    [1.18, 0.44, -0.4, -Math.PI * 0.9, 1.12, -0.34, 0.98],
   ],
 };
 
@@ -701,7 +706,8 @@ export const ACHIEVEMENTS: Achievement[] = [
     description: 'Get your first kill.',
     category: 'kills',
     requirement: 1,
-    rewardSkinId: 'skin_crimson'
+    rewardSkinId: 'skin_crimson',
+    rewardCurrency: 250
   },
   {
     id: 'elite_slayer',
@@ -709,7 +715,8 @@ export const ACHIEVEMENTS: Achievement[] = [
     description: 'Defeat 50 elite bots.',
     category: 'elite',
     requirement: 50,
-    rewardSkinId: 'skin_elite_hunter'
+    rewardSkinId: 'skin_elite_hunter',
+    rewardCurrency: 900
   },
   {
     id: 'veteran',
@@ -717,7 +724,8 @@ export const ACHIEVEMENTS: Achievement[] = [
     description: 'Complete 100 games.',
     category: 'games',
     requirement: 100,
-    rewardSkinId: 'skin_veteran_grey'
+    rewardSkinId: 'skin_veteran_grey',
+    rewardCurrency: 1200
   },
   {
     id: 'high_roller',
@@ -725,7 +733,8 @@ export const ACHIEVEMENTS: Achievement[] = [
     description: 'Reach a score of 1,000,000.',
     category: 'score',
     requirement: 1000000,
-    rewardSkinId: 'skin_gold_trim'
+    rewardSkinId: 'skin_gold_trim',
+    rewardCurrency: 2500
   },
   {
     id: 'level_master',
@@ -733,7 +742,8 @@ export const ACHIEVEMENTS: Achievement[] = [
     description: 'Reach Level 100.',
     category: 'level',
     requirement: 100,
-    rewardSkinId: 'skin_max_level'
+    rewardSkinId: 'skin_max_level',
+    rewardCurrency: 3500
   },
   {
     id: 'transformer',
@@ -741,8 +751,125 @@ export const ACHIEVEMENTS: Achievement[] = [
     description: 'Transform into an Elite Boss 50 times.',
     category: 'special',
     requirement: 50,
-    rewardSkinId: 'skin_boss_core'
-  }
+    rewardSkinId: 'skin_boss_core',
+    rewardCurrency: 5000
+  },
+  { id: 'kills_5', name: 'Scratch Damage', description: 'Get 5 kills.', category: 'kills', requirement: 5, rewardCurrency: 120 },
+  { id: 'kills_10', name: 'Sharpened Barrel', description: 'Get 10 kills.', category: 'kills', requirement: 10, rewardCurrency: 180 },
+  { id: 'kills_25', name: 'Street Cleaner', description: 'Get 25 kills.', category: 'kills', requirement: 25, rewardCurrency: 300 },
+  { id: 'kills_50', name: 'Kill Line', description: 'Get 50 kills.', category: 'kills', requirement: 50, rewardCurrency: 550 },
+  { id: 'kills_100', name: 'Hundred Down', description: 'Get 100 kills.', category: 'kills', requirement: 100, rewardCurrency: 900 },
+  { id: 'kills_250', name: 'Arena Reaper', description: 'Get 250 kills.', category: 'kills', requirement: 250, rewardCurrency: 1400 },
+  { id: 'kills_500', name: 'Killstorm', description: 'Get 500 kills.', category: 'kills', requirement: 500, rewardCurrency: 2200 },
+  { id: 'kills_1000', name: 'Wipe Protocol', description: 'Get 1,000 kills.', category: 'kills', requirement: 1000, rewardCurrency: 3500 },
+  { id: 'kills_2500', name: 'Predator Grid', description: 'Get 2,500 kills.', category: 'kills', requirement: 2500, rewardCurrency: 5200 },
+  { id: 'kills_5000', name: 'Apex Eliminator', description: 'Get 5,000 kills.', category: 'kills', requirement: 5000, rewardCurrency: 8000 },
+
+  { id: 'score_50k', name: 'Up and Running', description: 'Reach 50,000 score.', category: 'score', requirement: 50000, rewardCurrency: 220 },
+  { id: 'score_100k', name: 'Momentum Shift', description: 'Reach 100,000 score.', category: 'score', requirement: 100000, rewardCurrency: 380 },
+  { id: 'score_150k', name: 'Heat Build', description: 'Reach 150,000 score.', category: 'score', requirement: 150000, rewardCurrency: 520 },
+  { id: 'score_250k', name: 'Sector Pressure', description: 'Reach 250,000 score.', category: 'score', requirement: 250000, rewardCurrency: 760 },
+  { id: 'score_350k', name: 'Control Lane', description: 'Reach 350,000 score.', category: 'score', requirement: 350000, rewardCurrency: 980 },
+  { id: 'score_500k', name: 'Half-Million Signal', description: 'Reach 500,000 score.', category: 'score', requirement: 500000, rewardCurrency: 1300 },
+  { id: 'score_750k', name: 'Dominion Pulse', description: 'Reach 750,000 score.', category: 'score', requirement: 750000, rewardCurrency: 1800 },
+  { id: 'score_1_25m', name: 'Million Plus', description: 'Reach 1,250,000 score.', category: 'score', requirement: 1250000, rewardCurrency: 2600 },
+  { id: 'score_2m', name: 'Two-Million Run', description: 'Reach 2,000,000 score.', category: 'score', requirement: 2000000, rewardCurrency: 4200 },
+  { id: 'score_3m', name: 'Myth Run', description: 'Reach 3,000,000 score.', category: 'score', requirement: 3000000, rewardCurrency: 6500 },
+
+  { id: 'games_5', name: 'Pilot Verified', description: 'Complete 5 games.', category: 'games', requirement: 5, rewardCurrency: 100 },
+  { id: 'games_10', name: 'Still Here', description: 'Complete 10 games.', category: 'games', requirement: 10, rewardCurrency: 160 },
+  { id: 'games_25', name: 'Routine Combatant', description: 'Complete 25 games.', category: 'games', requirement: 25, rewardCurrency: 260 },
+  { id: 'games_50', name: 'Session Veteran', description: 'Complete 50 games.', category: 'games', requirement: 50, rewardCurrency: 420 },
+  { id: 'games_75', name: 'Field Regular', description: 'Complete 75 games.', category: 'games', requirement: 75, rewardCurrency: 620 },
+  { id: 'games_150', name: 'Persistent Unit', description: 'Complete 150 games.', category: 'games', requirement: 150, rewardCurrency: 1000 },
+  { id: 'games_250', name: 'Long Service', description: 'Complete 250 games.', category: 'games', requirement: 250, rewardCurrency: 1500 },
+  { id: 'games_500', name: 'Archive Entry', description: 'Complete 500 games.', category: 'games', requirement: 500, rewardCurrency: 2600 },
+  { id: 'games_750', name: 'Operational Core', description: 'Complete 750 games.', category: 'games', requirement: 750, rewardCurrency: 3800 },
+  { id: 'games_1000', name: 'Legend of Rotation', description: 'Complete 1,000 games.', category: 'games', requirement: 1000, rewardCurrency: 5500 },
+
+  { id: 'elite_1', name: 'Elite Ping', description: 'Defeat 1 elite bot.', category: 'elite', requirement: 1, rewardCurrency: 240 },
+  { id: 'elite_3', name: 'Elite Contact', description: 'Defeat 3 elite bots.', category: 'elite', requirement: 3, rewardCurrency: 420 },
+  { id: 'elite_10', name: 'Elite Hunter I', description: 'Defeat 10 elite bots.', category: 'elite', requirement: 10, rewardCurrency: 760 },
+  { id: 'elite_25', name: 'Elite Hunter II', description: 'Defeat 25 elite bots.', category: 'elite', requirement: 25, rewardCurrency: 1200 },
+  { id: 'elite_75', name: 'Elite Breaker', description: 'Defeat 75 elite bots.', category: 'elite', requirement: 75, rewardCurrency: 2200 },
+  { id: 'elite_125', name: 'Elite Purge', description: 'Defeat 125 elite bots.', category: 'elite', requirement: 125, rewardCurrency: 3400 },
+  { id: 'elite_250', name: 'Elite Obliterator', description: 'Defeat 250 elite bots.', category: 'elite', requirement: 250, rewardCurrency: 5600 },
+
+  { id: 'level_15', name: 'Branch Ready', description: 'Reach Level 15.', category: 'level', requirement: 15, rewardCurrency: 140 },
+  { id: 'level_30', name: 'Tier Unlock', description: 'Reach Level 30.', category: 'level', requirement: 30, rewardCurrency: 260 },
+  { id: 'level_45', name: 'Late Tier', description: 'Reach Level 45.', category: 'level', requirement: 45, rewardCurrency: 420 },
+  { id: 'level_60', name: 'Rebirth Candidate', description: 'Reach Level 60.', category: 'level', requirement: 60, rewardCurrency: 800 },
+  { id: 'level_75', name: 'High Altitude', description: 'Reach Level 75.', category: 'level', requirement: 75, rewardCurrency: 1200 },
+  { id: 'level_90', name: 'Near Apex', description: 'Reach Level 90.', category: 'level', requirement: 90, rewardCurrency: 1800 },
+
+  { id: 'transform_1', name: 'First Shift', description: 'Transform into an Elite Boss once.', category: 'special', requirement: 1, rewardCurrency: 600 },
+  { id: 'transform_5', name: 'Mutation Loop', description: 'Transform 5 times.', category: 'special', requirement: 5, rewardCurrency: 950 },
+  { id: 'transform_10', name: 'Boss Cadet', description: 'Transform 10 times.', category: 'special', requirement: 10, rewardCurrency: 1400 },
+  { id: 'transform_20', name: 'Boss Operator', description: 'Transform 20 times.', category: 'special', requirement: 20, rewardCurrency: 2200 },
+  { id: 'transform_35', name: 'Boss Veteran', description: 'Transform 35 times.', category: 'special', requirement: 35, rewardCurrency: 3200 },
+  { id: 'transform_75', name: 'Apex Morph', description: 'Transform 75 times.', category: 'special', requirement: 75, rewardCurrency: 6000 },
+
+  { id: 'score_5m', name: 'Signal Overload', description: 'Reach 5,000,000 score.', category: 'score', requirement: 5000000, rewardCurrency: 10000 },
+  { id: 'kills_10000', name: 'Last Witness', description: 'Get 10,000 kills.', category: 'kills', requirement: 10000, rewardCurrency: 12000 },
+  { id: 'games_2000', name: 'Immortal Shift', description: 'Complete 2,000 games.', category: 'games', requirement: 2000, rewardCurrency: 15000 },
+  { id: 'elite_500', name: 'Elite Extinction', description: 'Defeat 500 elite bots.', category: 'elite', requirement: 500, rewardCurrency: 14000 }
+];
+
+export const QUESTS: Quest[] = [
+  { id: 'q001', name: 'Warm-Up', description: 'Defeat 10 enemies.', category: 'combat', requirement: 10, rewardCurrency: 350 },
+  { id: 'q002', name: 'Skirmisher', description: 'Defeat 25 enemies.', category: 'combat', requirement: 25, rewardCurrency: 700 },
+  { id: 'q003', name: 'Frontline', description: 'Defeat 50 enemies.', category: 'combat', requirement: 50, rewardCurrency: 1200 },
+  { id: 'q004', name: 'Execution Line', description: 'Defeat 100 enemies.', category: 'combat', requirement: 100, rewardCurrency: 2200 },
+  { id: 'q005', name: 'Sharpsight', description: 'Land 150 hits on enemy tanks.', category: 'combat', requirement: 150, rewardCurrency: 1300 },
+  { id: 'q006', name: 'Pressure Fire', description: 'Land 300 hits on enemy tanks.', category: 'combat', requirement: 300, rewardCurrency: 2500 },
+  { id: 'q007', name: 'Brawler', description: 'Deal 25,000 total damage.', category: 'combat', requirement: 25000, rewardCurrency: 1800 },
+  { id: 'q008', name: 'Siegebreaker', description: 'Deal 60,000 total damage.', category: 'combat', requirement: 60000, rewardCurrency: 3600 },
+  { id: 'q009', name: 'Elite Contact', description: 'Defeat 5 elite tanks.', category: 'combat', requirement: 5, rewardCurrency: 2600 },
+  { id: 'q010', name: 'Elite Sweep', description: 'Defeat 15 elite tanks.', category: 'combat', requirement: 15, rewardCurrency: 6200 },
+
+  { id: 'q011', name: 'Square Harvester', description: 'Destroy 200 squares.', category: 'farming', requirement: 200, rewardCurrency: 600 },
+  { id: 'q012', name: 'Triangle Harvester', description: 'Destroy 150 triangles.', category: 'farming', requirement: 150, rewardCurrency: 800 },
+  { id: 'q013', name: 'Pentagon Route', description: 'Destroy 60 pentagons.', category: 'farming', requirement: 60, rewardCurrency: 1300 },
+  { id: 'q014', name: 'Dense Field', description: 'Destroy 500 total shapes.', category: 'farming', requirement: 500, rewardCurrency: 1700 },
+  { id: 'q015', name: 'Resource Cycler', description: 'Destroy 1,000 total shapes.', category: 'farming', requirement: 1000, rewardCurrency: 3400 },
+  { id: 'q016', name: 'Nest Diver', description: 'Destroy 120 shapes in central zones.', category: 'farming', requirement: 120, rewardCurrency: 1400 },
+  { id: 'q017', name: 'Rare Echo', description: 'Destroy 20 rare-or-better shapes.', category: 'farming', requirement: 20, rewardCurrency: 2800 },
+  { id: 'q018', name: 'Rare Purge', description: 'Destroy 50 rare-or-better shapes.', category: 'farming', requirement: 50, rewardCurrency: 5200 },
+  { id: 'q019', name: 'Void Recycler', description: 'Destroy 120 shapes in the Void.', category: 'farming', requirement: 120, rewardCurrency: 2400 },
+  { id: 'q020', name: 'Field Engineer', description: 'Collect 2,500 shape XP in one run.', category: 'farming', requirement: 2500, rewardCurrency: 1100 },
+
+  { id: 'q021', name: 'Live Through It', description: 'Survive for 5 minutes.', category: 'survival', requirement: 300, rewardCurrency: 1100 },
+  { id: 'q022', name: 'Still Standing', description: 'Survive for 10 minutes.', category: 'survival', requirement: 600, rewardCurrency: 2300 },
+  { id: 'q023', name: 'Unbroken', description: 'Survive for 15 minutes.', category: 'survival', requirement: 900, rewardCurrency: 3800 },
+  { id: 'q024', name: 'Last Frame', description: 'Survive with under 20% HP for 60s total.', category: 'survival', requirement: 60, rewardCurrency: 1700 },
+  { id: 'q025', name: 'No Retreat', description: 'Get 20 kills without dying.', category: 'survival', requirement: 20, rewardCurrency: 2400 },
+  { id: 'q026', name: 'Momentum', description: 'Get 40 kills without dying.', category: 'survival', requirement: 40, rewardCurrency: 4600 },
+  { id: 'q027', name: 'Hard Shell', description: 'Block 800 incoming projectile damage.', category: 'survival', requirement: 800, rewardCurrency: 1900 },
+  { id: 'q028', name: 'Shock Cushion', description: 'Block 2,000 incoming projectile damage.', category: 'survival', requirement: 2000, rewardCurrency: 3600 },
+  { id: 'q029', name: 'Void Return', description: 'Enter and return from the Void 5 times.', category: 'survival', requirement: 5, rewardCurrency: 2000 },
+  { id: 'q030', name: 'Late Game', description: 'Reach level 60 in a single run.', category: 'survival', requirement: 60, rewardCurrency: 5400 },
+
+  { id: 'q031', name: 'Wingman', description: 'Assist in 25 enemy takedowns.', category: 'teamplay', requirement: 25, rewardCurrency: 1200 },
+  { id: 'q032', name: 'Link Fire', description: 'Assist in 60 enemy takedowns.', category: 'teamplay', requirement: 60, rewardCurrency: 2600 },
+  { id: 'q033', name: 'Zone Pressure', description: 'Spend 180 seconds contesting mid-map lanes.', category: 'teamplay', requirement: 180, rewardCurrency: 1400 },
+  { id: 'q034', name: 'Anchor Breaker', description: 'Defeat 30 enemies near contested objectives.', category: 'teamplay', requirement: 30, rewardCurrency: 2100 },
+  { id: 'q035', name: 'Combat Courier', description: 'Travel 15,000 units while in team mode.', category: 'teamplay', requirement: 15000, rewardCurrency: 1300 },
+  { id: 'q036', name: 'Field Support', description: 'Restore or drain 15,000 total health.', category: 'teamplay', requirement: 15000, rewardCurrency: 2600 },
+  { id: 'q037', name: 'Field Support II', description: 'Restore or drain 35,000 total health.', category: 'teamplay', requirement: 35000, rewardCurrency: 5200 },
+  { id: 'q038', name: 'Signal Relay', description: 'Trigger your class ability 15 times.', category: 'teamplay', requirement: 15, rewardCurrency: 1000 },
+  { id: 'q039', name: 'Signal Relay II', description: 'Trigger your class ability 35 times.', category: 'teamplay', requirement: 35, rewardCurrency: 2200 },
+  { id: 'q040', name: 'Line Holder', description: 'Spend 240 seconds in active combat state.', category: 'teamplay', requirement: 240, rewardCurrency: 2800 },
+
+  { id: 'q041', name: 'Boss Probe', description: 'Damage any boss for 5,000 total.', category: 'objective', requirement: 5000, rewardCurrency: 2400 },
+  { id: 'q042', name: 'Boss Break', description: 'Damage any boss for 20,000 total.', category: 'objective', requirement: 20000, rewardCurrency: 5600 },
+  { id: 'q043', name: 'Alpha Contact', description: 'Destroy 3 Alpha Pentagons.', category: 'objective', requirement: 3, rewardCurrency: 3200 },
+  { id: 'q044', name: 'Alpha Collapse', description: 'Destroy 8 Alpha Pentagons.', category: 'objective', requirement: 8, rewardCurrency: 7600 },
+  { id: 'q045', name: 'Portal Run', description: 'Use 10 Void portals.', category: 'objective', requirement: 10, rewardCurrency: 1600 },
+  { id: 'q046', name: 'Portal Marshal', description: 'Use 25 Void portals.', category: 'objective', requirement: 25, rewardCurrency: 3800 },
+  { id: 'q047', name: 'Rebirth Candidate', description: 'Reach rebirth eligibility 5 times.', category: 'objective', requirement: 5, rewardCurrency: 4200 },
+  { id: 'q048', name: 'Rebirth Veteran', description: 'Reach rebirth eligibility 12 times.', category: 'objective', requirement: 12, rewardCurrency: 9800 },
+  { id: 'q049', name: 'Titan Pressure', description: 'Defeat 6 rebirth-tier tanks.', category: 'objective', requirement: 6, rewardCurrency: 6400 },
+  { id: 'q050', name: 'Master Rotation', description: 'Complete 20 full matches.', category: 'objective', requirement: 20, rewardCurrency: 5000 },
 ];
 
 export const UPDATE_LOG = [

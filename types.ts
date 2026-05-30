@@ -255,7 +255,7 @@ export interface UINotification {
 }
 
 export interface BuffEffect {
-  type: 'XP_MULT' | 'POWER_TOKEN' | 'SHAPE_MAGNET';
+  type: 'XP_MULT' | 'POWER_TOKEN' | 'SHAPE_MAGNET' | 'BOSS_OVERRIDE';
   timeLeft: number;
   totalTime: number;
 }
@@ -350,6 +350,9 @@ export interface GameState {
   bossChoices?: TankClass[];
   enemyZoneWarningLevel?: 0 | 1 | 2;
   enemyZoneWarningText?: string;
+  bloodDrainLive?: number;
+  bloodDrainStacks?: number;
+  bloodDrainSession?: number;
 }
 
 // --- Shop Types ---
@@ -379,6 +382,7 @@ export interface UserStats {
   transformations: number;
   highestEliteDamage: number;
   achievementsUnlocked: string[];
+  questsUnlocked: string[];
 }
 
 export interface Achievement {
@@ -388,7 +392,18 @@ export interface Achievement {
   category: 'kills' | 'score' | 'games' | 'elite' | 'special' | 'level';
   requirement: number;
   rewardSkinId?: string;
+  rewardCurrency?: number;
   icon?: string;
+}
+
+export interface Quest {
+  id: string;
+  name: string;
+  description: string;
+  category: 'combat' | 'farming' | 'survival' | 'teamplay' | 'objective';
+  requirement: number;
+  rewardCurrency: number;
+  rewardSkinId?: string;
 }
 
 export interface GameSettings {

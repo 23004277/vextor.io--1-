@@ -94,11 +94,16 @@ const App: React.FC = () => {
   
   const [newlyUnlocked, setNewlyUnlocked] = useState<Achievement[]>([]);
   const [showAchievementPopup, setShowAchievementPopup] = useState(false);
+  const [lastDeathReport, setLastDeathReport] = useState<{ moneyEarned: number; unlockedAchievements: number; unlockedQuests: number } | null>(null);
   
   const [gameMode, setGameMode] = useState<GameMode>(GameMode.FFA);
   const [selectedTeam, setSelectedTeam] = useState<Team>(Team.BLUE);
   const [isSpectating, setIsSpectating] = useState(false);
   const [menuMousePos, setMenuMousePos] = useState({ x: 0, y: 0 });
+  const lastUnmutedVolumesRef = useRef<{ volume: number; musicVolume: number }>({
+    volume: DEFAULT_SETTINGS.volume,
+    musicVolume: DEFAULT_SETTINGS.musicVolume,
+  });
 
   // Tooltip State
   const [tooltip, setTooltip] = useState<{ label: string; desc?: string; visible: boolean }>({
@@ -120,8 +125,37 @@ const App: React.FC = () => {
       return COLORS.player;
   }, [user]);
 
-  const playHover = useCallback(() => engine?.sound.playUIHover(), [engine]);
-  const playClick = useCallback(() => engine?.sound.playUIClick(), [engine]);
+  const playHover = useCallback(() => {
+    if (!engine) return;
+    engine.sound.enable();
+    engine.sound.playUIHover();
+  }, [engine]);
+  const playClick = useCallback(() => {
+    if (!engine) return;
+    engine.sound.enable();
+    engine.sound.playUIClick();
+  }, [engine]);
+  const playSelect = useCallback(() => {
+    if (!engine) return;
+    engine.sound.enable();
+    engine.sound.playUISelect();
+  }, [engine]);
+
+  useEffect(() => {
+    if (!engine) return;
+
+    const unlockMainMenuAudio = () => {
+      engine.sound.enable();
+    };
+
+    window.addEventListener('pointerdown', unlockMainMenuAudio, { once: true });
+    window.addEventListener('keydown', unlockMainMenuAudio, { once: true });
+
+    return () => {
+      window.removeEventListener('pointerdown', unlockMainMenuAudio);
+      window.removeEventListener('keydown', unlockMainMenuAudio);
+    };
+  }, [engine]);
 
   useEffect(() => {
     if (playerName) localStorage.setItem('vextor_pilot_name', playerName);
@@ -185,6 +219,68 @@ const App: React.FC = () => {
     }
   }, [engine, settings]);
 
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTypingContext =
+        !!target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+      if (isTypingContext || event.repeat) return;
+
+      const key = event.key.toLowerCase();
+      if (key === 'k') {
+        if (!isPlaying || !engine || isSpectating) return;
+        event.preventDefault();
+        engine.player.takeDamage(engine.player.maxHealth + engine.player.maxShield + 999, engine.player);
+        playSelect();
+        return;
+      }
+
+      if (key === 'o') {
+        event.preventDefault();
+        setShowAlmanac(true);
+        playSelect();
+        return;
+      }
+
+      if (key === 'p') {
+        if (!isPlaying) return;
+        event.preventDefault();
+        setSettings((prev) => ({ ...prev, showLeaderboard: !prev.showLeaderboard }));
+        playSelect();
+        return;
+      }
+
+      if (key === 'm') {
+        event.preventDefault();
+        setSettings((prev) => {
+          const currentlyMuted = prev.volume <= 0.0001 && prev.musicVolume <= 0.0001;
+          if (currentlyMuted) {
+            const restore = lastUnmutedVolumesRef.current;
+            return {
+              ...prev,
+              volume: Math.max(0.02, restore.volume || DEFAULT_SETTINGS.volume),
+              musicVolume: Math.max(0.02, restore.musicVolume || DEFAULT_SETTINGS.musicVolume),
+            };
+          }
+
+          lastUnmutedVolumesRef.current = {
+            volume: prev.volume,
+            musicVolume: prev.musicVolume,
+          };
+          return { ...prev, volume: 0, musicVolume: 0 };
+        });
+        playSelect();
+      }
+    };
+
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, [engine, isPlaying, isSpectating, playSelect]);
+
   const showTT = (label: string, desc?: string) => {
     setTooltip({ label, desc, visible: true });
     playHover();
@@ -226,6 +322,11 @@ const App: React.FC = () => {
         );
         if (result && result.user) {
             setUser(result.user);
+            setLastDeathReport({
+              moneyEarned: result.currencyEarned,
+              unlockedAchievements: result.newlyUnlocked?.length || 0,
+              unlockedQuests: result.newlyUnlockedQuests?.length || 0,
+            });
             if (result.newlyUnlocked && result.newlyUnlocked.length > 0) {
                 setNewlyUnlocked(result.newlyUnlocked);
                 setShowAchievementPopup(true);
@@ -256,6 +357,7 @@ const App: React.FC = () => {
         engine.setPlayerTeam(selectedTeam);
         engine.setAttractMode(false);
         engine.resetPlayer(false);
+        setLastDeathReport(null);
         setIsPlaying(true);
         setIsSpectating(false);
         hideTT();
@@ -292,7 +394,7 @@ const App: React.FC = () => {
       
       {isPlaying && gameState && !isSpectating && (
         <OverlayErrorBoundary onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }}>
-          <UIOverlay gameState={gameState} onUpgradeStat={(s) => engine?.upgradeStat(engine.player, s)} onUpgradeClass={(c) => engine?.upgradeClass(c)} onRestart={() => engine?.resetPlayer(true)} onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }} highScores={displayHighScores} playHover={playHover} engine={engine} settings={settings} />
+          <UIOverlay gameState={gameState} onUpgradeStat={(s) => engine?.upgradeStat(engine.player, s)} onUpgradeClass={(c) => engine?.upgradeClass(c)} onRestart={() => { setLastDeathReport(null); engine?.resetPlayer(true); }} onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }} highScores={displayHighScores} playHover={playHover} engine={engine} settings={settings} deathReport={lastDeathReport} />
         </OverlayErrorBoundary>
       )}
 
@@ -365,6 +467,8 @@ const App: React.FC = () => {
         showTT={showTT}
         hideTT={hideTT}
         playClick={playClick}
+        playHover={playHover}
+        playSelect={playSelect}
         setShowLogin={setShowLogin}
         setShowSettings={setShowSettings}
         setShowAlmanac={setShowAlmanac}
@@ -386,7 +490,7 @@ const App: React.FC = () => {
         }} darkMode={settings.darkMode} />}
         {showShop && <ShopModal user={user} onClose={() => setShowShop(false)} onUpdateUser={setUser} darkMode={settings.darkMode} playSound={playClick} />}
         {showAlmanac && <AlmanacModal onClose={() => setShowAlmanac(false)} darkMode={settings.darkMode} playSound={playClick} />}
-        {showAchievements && <AchievementsModal user={user} onClose={() => setShowAchievements(false)} darkMode={settings.darkMode} playSound={playClick} />}
+        {showAchievements && <AchievementsModal user={user} onClose={() => setShowAchievements(false)} darkMode={settings.darkMode} playSound={playSelect} playHover={playHover} />}
         {showSettings && <SettingsModal settings={settings} setSettings={setSettings} onClose={() => setShowSettings(false)} playSound={playClick} onVolumeChange={(v) => engine?.sound.setVolume(v)} />}
         
         {showAchievementPopup && <AchievementPopup achievements={newlyUnlocked} onClose={() => setShowAchievementPopup(false)} />}

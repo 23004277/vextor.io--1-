@@ -20,8 +20,8 @@ import {
   DocumentSnapshot
 } from 'firebase/firestore';
 import { db, auth, googleProvider } from './FirebaseConfig';
-import { AuthResponse, User, UserStats, Achievement, TankClass, HighScoreEntry } from '../types';
-import { SHOP_ITEMS, ACHIEVEMENTS } from '../constants';
+import { AuthResponse, User, UserStats, Achievement, Quest, TankClass, HighScoreEntry } from '../types';
+import { SHOP_ITEMS, ACHIEVEMENTS, QUESTS } from '../constants';
 
 // ─── Session persistence key ────────────────────────────────────────────────
 const SESSION_KEY = 'vextor_session_token';
@@ -46,7 +46,8 @@ const INITIAL_STATS: UserStats = {
   eliteKills: 0,
   transformations: 0,
   highestEliteDamage: 0,
-  achievementsUnlocked: []
+  achievementsUnlocked: [],
+  questsUnlocked: []
 };
 
 // ─── Firestore custom error reporting ───────────────────────────────────────
@@ -538,7 +539,7 @@ export class BackendService {
     gameData: Partial<UserStats>,
     currencyReward: number = 0,
     unlockedSkins: TankClass[] = []
-  ): Promise<{ user: User, newlyUnlocked: Achievement[] } | null> {
+  ): Promise<{ user: User, newlyUnlocked: Achievement[], newlyUnlockedQuests: Quest[], currencyEarned: number } | null> {
     const currentUser = auth.currentUser;
     if (!currentUser) return null;
 
@@ -565,7 +566,8 @@ export class BackendService {
       eliteKills: (current.eliteKills || 0) + (gameData.eliteKills || 0),
       transformations: (current.transformations || 0) + (gameData.transformations || 0),
       highestEliteDamage: Math.max(current.highestEliteDamage || 0, gameData.highestEliteDamage || 0),
-      achievementsUnlocked: current.achievementsUnlocked || []
+      achievementsUnlocked: current.achievementsUnlocked || [],
+      questsUnlocked: current.questsUnlocked || []
     };
 
     const newlyUnlocked: Achievement[] = [];
@@ -591,7 +593,32 @@ export class BackendService {
       }
     }
 
-    const nextCurrency = (user.currency || 0) + currencyReward;
+    const newlyUnlockedQuests: Quest[] = [];
+    const getQuestProgress = (quest: Quest): number => {
+      switch (quest.category) {
+        case 'combat': return updatedStats.totalKills;
+        case 'farming': return updatedStats.totalScore;
+        case 'survival': return updatedStats.maxLevel;
+        case 'teamplay': return updatedStats.totalGames;
+        case 'objective': return updatedStats.eliteKills + updatedStats.transformations;
+        default: return 0;
+      }
+    };
+
+    for (const quest of QUESTS) {
+      if (updatedStats.questsUnlocked.includes(quest.id)) continue;
+      if (getQuestProgress(quest) < quest.requirement) continue;
+      updatedStats.questsUnlocked.push(quest.id);
+      newlyUnlockedQuests.push(quest);
+      if (quest.rewardSkinId && !user.inventory.includes(quest.rewardSkinId)) {
+        user.inventory.push(quest.rewardSkinId);
+      }
+    }
+
+    const achievementBonus = newlyUnlocked.reduce((sum, a) => sum + (a.rewardCurrency || 0), 0);
+    const questBonus = newlyUnlockedQuests.reduce((sum, q) => sum + (q.rewardCurrency || 0), 0);
+    const totalReward = currencyReward + achievementBonus + questBonus;
+    const nextCurrency = (user.currency || 0) + totalReward;
 
     const nextUnlockedEliteSkins = [...(user.unlockedEliteSkins || [])];
     for (const skin of unlockedSkins) {
@@ -615,7 +642,7 @@ export class BackendService {
     user.currency = nextCurrency;
     user.unlockedEliteSkins = nextUnlockedEliteSkins;
 
-    return { user: { ...user, token: currentUser.uid }, newlyUnlocked };
+    return { user: { ...user, token: currentUser.uid }, newlyUnlocked, newlyUnlockedQuests, currencyEarned: totalReward };
   }
 
   /**
@@ -838,6 +865,7 @@ export class BackendService {
     if (typeof finalUser.stats.transformations !== 'number') finalUser.stats.transformations = 0;
     if (typeof finalUser.stats.highestEliteDamage !== 'number') finalUser.stats.highestEliteDamage = 0;
     if (!Array.isArray(finalUser.stats.achievementsUnlocked)) finalUser.stats.achievementsUnlocked = [];
+    if (!Array.isArray(finalUser.stats.questsUnlocked)) finalUser.stats.questsUnlocked = [];
 
     return finalUser as User;
   }

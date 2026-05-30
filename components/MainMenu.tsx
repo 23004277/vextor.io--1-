@@ -4,7 +4,7 @@ import { GameMode, HighScoreEntry, TankClass, User, Team } from '../types';
 import { TankPreview } from './TankPreview';
 import { COLORS } from '../constants';
 import { BackendService } from '../services/BackendService';
-import { ChevronRight, Pencil, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
+import { BookOpen, ChevronRight, Pencil, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
 
 interface MainMenuProps {
   isPlaying: boolean;
@@ -21,7 +21,9 @@ interface MainMenuProps {
   handleSpectate: () => void;
   showTT: (label: string, desc?: string) => void;
   hideTT: () => void;
+  playHover: () => void;
   playClick: () => void;
+  playSelect: () => void;
   setShowLogin: (show: boolean) => void;
   setShowSettings: (show: boolean) => void;
   setShowAlmanac: (show: boolean) => void;
@@ -129,10 +131,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   handleSpectate,
   showTT,
   hideTT,
+  playHover,
   playClick,
+  playSelect,
   setShowLogin,
   setShowSettings,
   setShowShop,
+  setShowAlmanac,
   setShowUpdateHistory,
   setShowAchievements,
   parallax,
@@ -245,7 +250,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       onClick={() => BackendService.logout().then(() => setUser(null))}
                       className="flex items-center gap-2 transition-all group"
                       style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'rgba(255,80,80,0.5)' }}
-                      onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,80,80,0.9)')}
+                      onMouseEnter={e => { playHover(); e.currentTarget.style.color = 'rgba(255,80,80,0.9)'; }}
                       onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,80,80,0.5)')}
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -305,15 +310,14 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 </div>
                 {[
                   { label: 'Hangar', sub: 'Equip loadout', icon: Warehouse, action: () => setShowShop(true), accent: 'rgba(0,210,255,0.8)' },
+                  { label: 'Almanac', sub: 'Intel archive', icon: BookOpen, action: () => setShowAlmanac(true), accent: 'rgba(34,197,94,0.82)' },
                   { label: 'Records_DB', sub: 'Achievements', icon: Trophy, action: () => setShowAchievements(true), accent: 'rgba(255,200,0,0.8)' },
                   { label: 'Data_Logs', sub: 'Update history', icon: ScrollText, action: () => setShowUpdateHistory(true), accent: 'rgba(180,140,255,0.85)' },
                   { label: 'Settings', sub: 'Configure env', icon: SlidersHorizontal, action: () => setShowSettings(true), accent: 'rgba(52,211,153,0.85)' },
-                  { label: 'Privacy', sub: 'Policy & data usage', icon: ScrollText, action: () => setShowPrivacy(true), accent: 'rgba(96,165,250,0.85)' },
-                  { label: 'Terms', sub: 'TOS & fair play', icon: ScrollText, action: () => setShowTos(true), accent: 'rgba(244,114,182,0.85)' },
                 ].map(link => (
                   <button
                     key={link.label}
-                    onClick={() => { playClick(); link.action(); }}
+                    onClick={() => { (link.label === 'Records_DB' ? playSelect : playClick)(); link.action(); }}
                     onMouseEnter={e => {
                       showTT(link.label, link.sub);
                       e.currentTarget.style.background = 'rgba(0,180,255,0.05)';
@@ -475,8 +479,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       <button
                         key={mode}
                         type="button"
-                        onClick={() => { playClick(); setGameMode(mode); }}
-                        onMouseEnter={() => showTT(meta.title, meta.desc)}
+                        onClick={() => { playSelect(); setGameMode(mode); }}
+                        onMouseEnter={() => { playHover(); showTT(meta.title, meta.desc); }}
                         onMouseLeave={hideTT}
                         className="flex-1 relative rounded-xl p-3 transition-all duration-200 overflow-hidden"
                         style={{
@@ -518,7 +522,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             key={team}
                             type="button"
                             disabled={!canJoin}
-                            onClick={() => setSelectedTeam(team)}
+                            onClick={() => { playSelect(); setSelectedTeam(team); }}
                             className="flex-1 relative rounded-xl py-3 px-4 transition-all flex items-center gap-3 overflow-hidden"
                             style={{
                               background: active ? (isBlue ? 'rgba(0,40,120,0.4)' : 'rgba(120,0,40,0.4)') : 'rgba(0,8,18,0.6)',
@@ -592,7 +596,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     onClick={() => { playClick(); handleSpectate(); }}
                     className="flex items-center gap-2.5 transition-all group"
                     style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.4em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.2)' }}
-                    onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.6)')}
+                    onMouseEnter={e => { playHover(); e.currentTarget.style.color = 'rgba(255,255,255,0.6)'; }}
                     onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.2)')}
                   >
                     <div className="w-1.5 h-1.5 rotate-45 transition-all" style={{ background: 'rgba(255,255,255,0.15)' }} />
