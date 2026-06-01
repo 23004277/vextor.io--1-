@@ -62,6 +62,7 @@ export interface IGameEngine {
 }
 
 export class EnemyAITanks {
+    private static readonly ALLOW_PLAYER_DRIVEN_SOCIAL = false;
     static isPacifist(classType: TankClass): boolean {
         return classType === TankClass.PACIFIST_TRAINEE || 
                classType === TankClass.NURSE || 
@@ -134,7 +135,7 @@ export class EnemyAITanks {
         }
 
         // Social behaviors only when not in danger/combat.
-        if (nextState === AIState.IDLE || nextState === AIState.FARM) {
+        if (this.ALLOW_PLAYER_DRIVEN_SOCIAL && (nextState === AIState.IDLE || nextState === AIState.FARM)) {
             nextState = this.resolveSocialState(bot, data, engine, nextState);
         }
 

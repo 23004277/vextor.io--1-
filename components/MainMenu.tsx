@@ -140,6 +140,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   setShowAlmanac,
   setShowUpdateHistory,
   setShowAchievements,
+  setShowSupport,
   parallax,
   activeColor,
   canJoinTeam,
@@ -313,6 +314,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   { label: 'Almanac', sub: 'Intel archive', icon: BookOpen, action: () => setShowAlmanac(true), accent: 'rgba(34,197,94,0.82)' },
                   { label: 'Records_DB', sub: 'Achievements', icon: Trophy, action: () => setShowAchievements(true), accent: 'rgba(255,200,0,0.8)' },
                   { label: 'Data_Logs', sub: 'Update history', icon: ScrollText, action: () => setShowUpdateHistory(true), accent: 'rgba(180,140,255,0.85)' },
+                  { label: 'Support', sub: 'Command backing', icon: ChevronRight, action: () => setShowSupport(true), accent: 'rgba(244,114,182,0.9)' },
                   { label: 'Settings', sub: 'Configure env', icon: SlidersHorizontal, action: () => setShowSettings(true), accent: 'rgba(52,211,153,0.85)' },
                 ].map(link => (
                   <button

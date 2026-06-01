@@ -277,6 +277,8 @@ export class BackendService {
         inventory: ['color_default'],
         equippedItem: 'color_default',
         unlockedEliteSkins: [],
+        supportTotal: 0,
+        supporterRank: 'standard',
         stats: { ...INITIAL_STATS }
       };
 
@@ -312,7 +314,9 @@ export class BackendService {
           currency: completeUser.currency,
           inventory: completeUser.inventory,
           equippedItem: completeUser.equippedItem,
-          unlockedEliteSkins: completeUser.unlockedEliteSkins
+          unlockedEliteSkins: completeUser.unlockedEliteSkins,
+          supportTotal: completeUser.supportTotal,
+          supporterRank: completeUser.supporterRank
         }
       };
     } catch (err: any) {
@@ -346,6 +350,8 @@ export class BackendService {
         inventory: ['color_default'],
         equippedItem: 'color_default',
         unlockedEliteSkins: [],
+        supportTotal: 0,
+        supporterRank: 'standard',
         stats: { ...INITIAL_STATS }
       };
 
@@ -392,6 +398,8 @@ export class BackendService {
         inventory: ['color_default'],
         equippedItem: 'color_default',
         unlockedEliteSkins: [],
+        supportTotal: 0,
+        supporterRank: 'standard',
         stats: { ...INITIAL_STATS }
       };
 
@@ -497,6 +505,8 @@ export class BackendService {
             inventory: ['color_default'],
             equippedItem: 'color_default',
             unlockedEliteSkins: [],
+            supportTotal: 0,
+            supporterRank: 'standard',
             stats: { ...INITIAL_STATS }
           }
         };
@@ -519,7 +529,9 @@ export class BackendService {
           currency: completeUser.currency,
           inventory: completeUser.inventory,
           equippedItem: completeUser.equippedItem,
-          unlockedEliteSkins: completeUser.unlockedEliteSkins
+          unlockedEliteSkins: completeUser.unlockedEliteSkins,
+          supportTotal: completeUser.supportTotal,
+          supporterRank: completeUser.supporterRank
         }
       };
     } catch (e) {
@@ -718,6 +730,41 @@ export class BackendService {
     return { success: true, user: { ...user, token: currentUser.uid } };
   }
 
+  static async getSupporterRank(uid: string): Promise<'standard' | 'rank1' | 'rank2' | 'rank3'> {
+    if (!uid) return 'standard';
+    try {
+      const q = query(collection(db, 'users'), orderBy('supportTotal', 'desc'), limit(3));
+      const snap = await getDocs(q);
+      const ids = snap.docs.map((d) => d.id);
+      const idx = ids.indexOf(uid);
+      if (idx === 0) return 'rank1';
+      if (idx === 1) return 'rank2';
+      if (idx === 2) return 'rank3';
+      return 'standard';
+    } catch {
+      return 'standard';
+    }
+  }
+
+  static async addSupportContribution(amount: number): Promise<{ success: boolean; user?: User; error?: string }> {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return { success: false, error: 'Credentials missing' };
+    const normalized = Math.max(1, Math.floor(amount || 0));
+    const userDocRef = doc(db, 'users', currentUser.uid);
+    try {
+      const snap = await getDoc(userDocRef);
+      if (!snap.exists()) return { success: false, error: 'Pilot record not found' };
+      const user = this.migrateUser(snap.data(), currentUser.uid);
+      const nextTotal = Math.max(0, (user.supportTotal || 0) + normalized);
+      await updateDoc(userDocRef, { supportTotal: nextTotal });
+      user.supportTotal = nextTotal;
+      user.supporterRank = await this.getSupporterRank(currentUser.uid);
+      return { success: true, user: { ...user, token: currentUser.uid } };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Support transaction failed' };
+    }
+  }
+
   /**
    * Persist a player callsign update and synchronize existing score records.
    */
@@ -859,6 +906,8 @@ export class BackendService {
     if (!Array.isArray(finalUser.inventory)) finalUser.inventory = ['color_default'];
     if (!finalUser.equippedItem) finalUser.equippedItem = 'color_default';
     if (!Array.isArray(finalUser.unlockedEliteSkins)) finalUser.unlockedEliteSkins = [];
+    if (typeof finalUser.supportTotal !== 'number') finalUser.supportTotal = 0;
+    if (!finalUser.supporterRank) finalUser.supporterRank = 'standard';
 
     if (!finalUser.stats) finalUser.stats = { ...INITIAL_STATS };
     if (typeof finalUser.stats.eliteKills !== 'number') finalUser.stats.eliteKills = 0;

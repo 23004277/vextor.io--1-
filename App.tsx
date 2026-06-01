@@ -90,6 +90,8 @@ const App: React.FC = () => {
   const [showAlmanac, setShowAlmanac] = useState(false);
   const [showUpdateHistory, setShowUpdateHistory] = useState(false);
   const [showSupport, setShowSupport] = useState(false);
+  const [supportTxnBusy, setSupportTxnBusy] = useState(false);
+  const [supportTxnMsg, setSupportTxnMsg] = useState<string>('');
   const [showAchievements, setShowAchievements] = useState(false);
   
   const [newlyUnlocked, setNewlyUnlocked] = useState<Achievement[]>([]);
@@ -179,12 +181,17 @@ const App: React.FC = () => {
   useEffect(() => {
       BackendService.getSession().then(res => {
           if (res.success && res.user) {
-              setUser(res.user);
+              hydrateSupportRank(res.user).then(setUser).catch(() => setUser(res.user!));
               // Keep player's custom in-game callsign if they already set one.
               setPlayerName(prev => prev.trim() ? prev : res.user!.username);
           }
       });
   }, []);
+
+  useEffect(() => {
+    if (!engine || !user) return;
+    engine.setPlayerSkin(user.equippedItem || 'default', user.supporterRank || 'standard');
+  }, [engine, user?.equippedItem, user?.supporterRank, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -234,7 +241,7 @@ const App: React.FC = () => {
       if (key === 'k') {
         if (!isPlaying || !engine || isSpectating) return;
         event.preventDefault();
-        engine.player.takeDamage(engine.player.maxHealth + engine.player.maxShield + 999, engine.player);
+        engine.player.takeDamage(engine.player.maxHealth + engine.player.maxShield + 999, engine.player.id);
         playSelect();
         return;
       }
@@ -288,6 +295,15 @@ const App: React.FC = () => {
 
   const hideTT = () => setTooltip(prev => ({ ...prev, visible: false }));
 
+  async function hydrateSupportRank(nextUser: User): Promise<User> {
+    try {
+      const rank = await BackendService.getSupporterRank(nextUser.token);
+      return { ...nextUser, supporterRank: rank };
+    } catch {
+      return nextUser;
+    }
+  }
+
   const handleGameOver = useCallback(async (stats: { 
     score: number, 
     level: number, 
@@ -321,7 +337,7 @@ const App: React.FC = () => {
             stats.eliteSkinsKilled || []
         );
         if (result && result.user) {
-            setUser(result.user);
+            setUser(await hydrateSupportRank(result.user));
             setLastDeathReport({
               moneyEarned: result.currencyEarned,
               unlockedAchievements: result.newlyUnlocked?.length || 0,
@@ -353,6 +369,7 @@ const App: React.FC = () => {
         engine.sound.playUIClick();
         engine.setPlayerName(playerName || 'GUEST_PILOT');
         engine.setGameMode(gameMode);
+        engine.setPlayerSkin(user?.equippedItem || 'default', user?.supporterRank || 'standard');
         engine.setPlayerColor(activeColor);
         engine.setPlayerTeam(selectedTeam);
         engine.setAttractMode(false);
@@ -363,6 +380,21 @@ const App: React.FC = () => {
         hideTT();
     }
   };
+
+  const handleSupportAction = useCallback(async (amount: number) => {
+    if (!user || supportTxnBusy) return;
+    setSupportTxnBusy(true);
+    setSupportTxnMsg('');
+    const res = await BackendService.addSupportContribution(amount);
+    if (res.success && res.user) {
+      const hydrated = await hydrateSupportRank(res.user);
+      setUser(hydrated);
+      setSupportTxnMsg(`Support uplink confirmed (+${amount}). Total backing: ${hydrated.supportTotal}.`);
+    } else {
+      setSupportTxnMsg(res.error || 'Support uplink failed.');
+    }
+    setSupportTxnBusy(false);
+  }, [user, supportTxnBusy]);
 
   const handleSpectate = () => {
     if (engine) {
@@ -485,10 +517,12 @@ const App: React.FC = () => {
 
         {/* Modals */}
         {showLogin && <LoginModal onClose={() => setShowLogin(false)} onLoginSuccess={(u) => {
-          setUser(u);
+          hydrateSupportRank(u).then(setUser).catch(() => setUser(u));
           setPlayerName(prev => prev.trim() ? prev : u.username);
         }} darkMode={settings.darkMode} />}
-        {showShop && <ShopModal user={user} onClose={() => setShowShop(false)} onUpdateUser={setUser} darkMode={settings.darkMode} playSound={playClick} />}
+        {showShop && <ShopModal user={user} onClose={() => setShowShop(false)} onUpdateUser={(u) => {
+          hydrateSupportRank(u).then(setUser).catch(() => setUser(u));
+        }} darkMode={settings.darkMode} playSound={playClick} />}
         {showAlmanac && <AlmanacModal onClose={() => setShowAlmanac(false)} darkMode={settings.darkMode} playSound={playClick} />}
         {showAchievements && <AchievementsModal user={user} onClose={() => setShowAchievements(false)} darkMode={settings.darkMode} playSound={playSelect} playHover={playHover} />}
         {showSettings && <SettingsModal settings={settings} setSettings={setSettings} onClose={() => setShowSettings(false)} playSound={playClick} onVolumeChange={(v) => engine?.sound.setVolume(v)} />}
@@ -557,9 +591,27 @@ const App: React.FC = () => {
                     <div className="w-24 h-24 rounded-full bg-cyan-500/10 border-2 border-cyan-500/20 flex items-center justify-center mx-auto mb-10 group shadow-2xl">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-cyan-500 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                     </div>
-                    <h2 className="text-4xl font-black text-white italic tracking-tighter uppercase mb-6">Tactical_Report</h2>
-                    <p className="text-white/40 text-[11px] font-bold uppercase tracking-widest leading-relaxed mb-10">Detected a fracture in the matrix? Link with central command on Discord for immediate intervention.</p>
+                    <h2 className="text-4xl font-black text-white italic tracking-tighter uppercase mb-4">Command_Support</h2>
+                    <p className="text-white/40 text-[11px] font-bold uppercase tracking-widest leading-relaxed mb-4">Fuel development with command backing. Top 3 supporters receive rank-based skin resonance.</p>
+                    {user && (
+                      <p className="text-cyan-300/80 text-[11px] font-bold uppercase tracking-[0.2em] mb-6">
+                        Backing Total: {user.supportTotal || 0} | Rank: {(user.supporterRank || 'standard').toUpperCase()}
+                      </p>
+                    )}
                     <div className="flex flex-col gap-4">
+                        <div className="grid grid-cols-3 gap-3">
+                          {[5, 25, 100].map((amt) => (
+                            <button
+                              key={amt}
+                              onClick={() => handleSupportAction(amt)}
+                              disabled={!user || supportTxnBusy}
+                              className="py-3 rounded-xl bg-white/5 border border-cyan-400/30 text-cyan-200 font-black text-[11px] uppercase tracking-[0.2em] disabled:opacity-40 hover:bg-cyan-500/10 transition-all"
+                            >
+                              +{amt}
+                            </button>
+                          ))}
+                        </div>
+                        {supportTxnMsg && <p className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/70">{supportTxnMsg}</p>}
                         <a href="https://discord.gg/CSwJKCs4kW" target="_blank" rel="noopener noreferrer" className="w-full py-5 rounded-2xl bg-cyan-600 text-white font-black text-xs uppercase tracking-[0.4em] italic shadow-2xl hover:bg-cyan-500 transition-all">ESTABLISH_DISCORD_LINK</a>
                         <button onClick={() => setShowSupport(false)} className="w-full py-5 rounded-2xl bg-white/5 border border-white/10 text-white/40 font-black text-xs uppercase tracking-[0.3em] italic hover:text-white transition-all">CLOSE_FREQUENCY</button>
                     </div>

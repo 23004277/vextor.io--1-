@@ -1,5 +1,5 @@
 import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState } from '../types';
-import { BASE_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG } from '../constants';
+import { BASE_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG, SHOP_ITEMS } from '../constants';
 import * as Vector from './MathUtils';
 import { SoundEngine } from './SoundEngine';
 import type { AudioSpatialOptions } from './SoundEngine';
@@ -11,6 +11,116 @@ import { TDMAISystem, type Player as TDMPlayer } from '../systems/TDM-ai';
 type FloatingTextType = 'DAMAGE' | 'SCORE';
 type SpawnZone = { x: number; y: number; w: number; h: number; cx: number; cy: number };
 type VoidPortalPhase = 'BLACK_HOLE' | 'WHITE_HOLE' | 'EXPANDING';
+type DonorRank = 'standard' | 'rank1' | 'rank2' | 'rank3';
+type Hsl = { h: number; s: number; l: number };
+type SkinModifier = { hueShift: number; saturationMult: number; lightnessOffset: number };
+type SkinExtras = {
+    outlineGlow?: boolean;
+    glowIntensity?: number;
+    barrelSkin?: string | null;
+    bulletTrail?: string | null;
+    deathEffect?: string | null;
+};
+type SkinDefinition = { id: string; modifier: SkinModifier; extras?: SkinExtras };
+
+const SKIN_APPLICATION = {
+    clamp: {
+        saturation: [22, 98] as [number, number],
+        lightness: [20, 82] as [number, number],
+    },
+    blendStrength: {
+        standard: 0.52,
+        rank1: 0.85,
+        rank2: 0.78,
+        rank3: 0.72,
+    } as Record<DonorRank, number>,
+} as const;
+
+function clampNum(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
+}
+
+function wrapHue(h: number): number {
+    let hue = h % 360;
+    if (hue < 0) hue += 360;
+    return hue;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+    const clean = hex.replace('#', '').trim();
+    const normalized = clean.length === 3 ? clean.split('').map((ch) => ch + ch).join('') : clean;
+    const num = parseInt(normalized, 16);
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return { r, g, b };
+}
+
+function rgbToHsl(r: number, g: number, b: number): Hsl {
+    const rn = r / 255;
+    const gn = g / 255;
+    const bn = b / 255;
+    const max = Math.max(rn, gn, bn);
+    const min = Math.min(rn, gn, bn);
+    const delta = max - min;
+    let h = 0;
+    if (delta > 0) {
+        if (max === rn) h = ((gn - bn) / delta) % 6;
+        else if (max === gn) h = (bn - rn) / delta + 2;
+        else h = (rn - gn) / delta + 4;
+        h *= 60;
+    }
+    const l = (max + min) / 2;
+    const s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1));
+    return { h: wrapHue(h), s: s * 100, l: l * 100 };
+}
+
+function hslToCss(hsl: Hsl): string {
+    return `hsl(${wrapHue(hsl.h)} ${clampNum(hsl.s, 0, 100).toFixed(1)}% ${clampNum(hsl.l, 0, 100).toFixed(1)}%)`;
+}
+
+function shortestHueDelta(from: number, to: number): number {
+    let d = wrapHue(to) - wrapHue(from);
+    if (d > 180) d -= 360;
+    if (d < -180) d += 360;
+    return d;
+}
+
+function teamBaseHsl(team: Team): Hsl {
+    const baseHex = team === Team.BLUE ? COLORS.player : team === Team.RED ? COLORS.enemy : COLORS.player;
+    const rgb = hexToRgb(baseHex);
+    return rgbToHsl(rgb.r, rgb.g, rgb.b);
+}
+
+function makeModifierFromHex(base: Hsl, targetHex: string): SkinModifier {
+    const rgb = hexToRgb(targetHex);
+    const target = rgbToHsl(rgb.r, rgb.g, rgb.b);
+    const safeBaseS = Math.max(1, base.s);
+    return {
+        hueShift: shortestHueDelta(base.h, target.h),
+        saturationMult: clampNum(target.s / safeBaseS, 0.45, 2.2),
+        lightnessOffset: clampNum(target.l - base.l, -28, 28),
+    };
+}
+
+const SKINS: SkinDefinition[] = (() => {
+    const base = teamBaseHsl(Team.BLUE);
+    const built: SkinDefinition[] = [{
+        id: 'default',
+        modifier: { hueShift: 0, saturationMult: 1, lightnessOffset: 0 },
+    }];
+    for (const item of SHOP_ITEMS) {
+        if (item.type !== 'color') continue;
+        built.push({
+            id: item.id,
+            modifier: makeModifierFromHex(base, item.value),
+            extras: item.rarity === 'legendary' || item.rarity === 'elite'
+                ? { outlineGlow: true, glowIntensity: 0.35 }
+                : undefined,
+        });
+    }
+    return built;
+})();
 
 function getWormholeWhitenProgress(phase: VoidPortalPhase, phaseTimerSec: number, expansionCharge: number): number {
     if (phase === 'BLACK_HOLE') return Math.min(0.7, Math.max(0, phaseTimerSec / 60) * 0.7);
@@ -331,9 +441,22 @@ class Entity {
 
   drawName(ctx: CanvasRenderingContext2D) {
     ctx.save();
-    const prefix = this.team === Team.BLUE ? '◆' : this.team === Team.RED ? '◆' : '';
+    const prefix = this.team === Team.BLUE ? '*' : this.team === Team.RED ? '*' : '';
     const teamName = this.team === Team.BLUE ? 'BLU' : this.team === Team.RED ? 'RED' : '';
     const teamColor = this.team === Team.BLUE ? '#38bdf8' : this.team === Team.RED ? '#f87171' : '#ffffff';
+    const engine = (window as any).gameEngine as GameEngine | undefined;
+    const perspectiveTeam = engine?.player?.team ?? Team.NONE;
+    const perspectiveId = engine?.player?.id ?? -1;
+    const isPerspectiveAlly = this.id !== perspectiveId && this.team !== Team.NONE && this.team === perspectiveTeam;
+    const classType = (this as any).classType as TankClass | undefined;
+    const roleTag = !isPerspectiveAlly || !classType
+      ? ''
+      : (classType === TankClass.PACIFIST_TRAINEE || classType === TankClass.NURSE || classType === TankClass.DOCTOR || classType === TankClass.PLAGUE_DOCTOR)
+        ? 'SUP'
+        : (classType === TankClass.DRAINER_TRAINEE || classType === TankClass.LEECH || classType === TankClass.VAMPIRE || classType === TankClass.REAPER)
+          ? 'BLD'
+          : '';
+    const finalAllyHint = isPerspectiveAlly ? `[ALLY${roleTag ? `-${roleTag}` : ''}] ` : '';
     ctx.fillStyle = '#FFFFFF';
     ctx.strokeStyle = '#333333';
     ctx.lineWidth = 3;
@@ -342,7 +465,7 @@ class Entity {
     ctx.textBaseline = 'bottom';
     const yOffset = -this.radius - 12; 
     ctx.translate(this.pos.x, this.pos.y);
-    const renderName = teamName ? `${prefix} ${teamName} ${this.name}` : this.name;
+    const renderName = teamName ? `${prefix} ${teamName} ${finalAllyHint}${this.name}` : this.name;
     ctx.strokeText(renderName, 0, yOffset);
     ctx.fillText(renderName, 0, yOffset);
     if (teamName) {
@@ -1326,6 +1449,11 @@ class Tank extends Entity {
   socialWiggleUntil: number = 0;
   savedByPlayerUntil: number = 0;
   socialSpinSignalUntil: number = 0;
+  skinId: string = 'default';
+  donorRank: DonorRank = 'standard';
+  barrelSkin: string | null = null;
+  trailEffect: string | null = null;
+  deathEffect: string | null = null;
 
   // BURST FIRE SYSTEM
   burstQueue: { barrelIndex: number, delayLeftMs: number }[] = [];
@@ -1357,9 +1485,56 @@ class Tank extends Entity {
     this.score = 0;
     this.availableStatPoints = 0;
     this.chassisRotation = this.rotation;
+    this.setSkin('default', 'standard');
+  }
+
+  private resolveVisualHsl(): { base: Hsl; final: Hsl; skin: SkinDefinition } {
+      const base = teamBaseHsl(this.team);
+      const skin = SKINS.find((s) => s.id === this.skinId) ?? SKINS.find((s) => s.id === 'default')!;
+      const shifted: Hsl = {
+          h: wrapHue(base.h + skin.modifier.hueShift),
+          s: clampNum(base.s * skin.modifier.saturationMult, SKIN_APPLICATION.clamp.saturation[0], SKIN_APPLICATION.clamp.saturation[1]),
+          l: clampNum(base.l + skin.modifier.lightnessOffset, SKIN_APPLICATION.clamp.lightness[0], SKIN_APPLICATION.clamp.lightness[1]),
+      };
+      const strength = SKIN_APPLICATION.blendStrength[this.donorRank] ?? SKIN_APPLICATION.blendStrength.standard;
+      const final: Hsl = {
+          h: wrapHue(base.h + shortestHueDelta(base.h, shifted.h) * strength),
+          s: base.s + (shifted.s - base.s) * strength,
+          l: base.l + (shifted.l - base.l) * strength,
+      };
+      return { base, final, skin };
+  }
+
+  setSkin(skinId: string, donorRank: DonorRank = 'standard') {
+      this.skinId = skinId || 'default';
+      this.donorRank = donorRank;
+      const resolved = this.resolveVisualHsl();
+      this.color = hslToCss(resolved.final);
+      const extras = resolved.skin.extras;
+      this.barrelSkin = extras?.barrelSkin ?? null;
+      this.trailEffect = extras?.bulletTrail ?? null;
+      this.deathEffect = extras?.deathEffect ?? null;
+  }
+
+  private drawSkinOutlineGlow(ctx: CanvasRenderingContext2D, finalColor: string, intensity: number) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius * 1.14, 0, Math.PI * 2);
+      ctx.strokeStyle = finalColor;
+      ctx.globalAlpha = clampNum(intensity, 0, 1) * 0.65;
+      ctx.lineWidth = Math.max(2.5, this.radius * 0.16);
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = finalColor;
+      ctx.stroke();
+      ctx.restore();
   }
 
   drawChassis(ctx: CanvasRenderingContext2D) {
+      const visual = this.resolveVisualHsl();
+      this.color = hslToCss(visual.final);
+      if (visual.skin.extras?.outlineGlow) {
+          this.drawSkinOutlineGlow(ctx, this.color, visual.skin.extras.glowIntensity ?? 0.35);
+      }
       // Layer order: team base ring -> class aura field -> chassis.
       this.drawTeamAffiliationRing(ctx);
       this.drawAuras(ctx);
@@ -6034,6 +6209,8 @@ export class GameEngine {
   private previousGameMode: GameMode = GameMode.FFA;
   preferredTeam: Team = Team.BLUE;
   preferredColor: string = COLORS.player;
+  preferredSkinId: string = 'default';
+  preferredDonorRank: DonorRank = 'standard';
   xp: number = 0;
   level: number = 1;
   maxShapes = 750; 
@@ -6407,10 +6584,16 @@ export class GameEngine {
   setPlayerName(name: string) { this.player.name = name; }
   setPlayerColor(color: string) { 
       this.preferredColor = color;
-      const isBoss = this.isBossClass(this.player.classType);
-      if (this.gameMode !== GameMode.TEAMS && !isBoss) {
-          this.player.color = color; 
+      if (typeof color === 'string' && color.startsWith('color_')) {
+          this.setPlayerSkin(color, this.preferredDonorRank);
+      } else {
+          this.setPlayerSkin('default', this.preferredDonorRank);
       }
+  }
+  setPlayerSkin(skinId: string, donorRank: DonorRank = 'standard') {
+      this.preferredSkinId = skinId || 'default';
+      this.preferredDonorRank = donorRank;
+      this.player.setSkin(this.preferredSkinId, this.preferredDonorRank);
   }
   setPlayerTeam(team: Team) { this.preferredTeam = team; }
   getNowMs() { return Date.now(); }
@@ -6841,6 +7024,8 @@ export class GameEngine {
 
   resetPlayer(preserveWorld: boolean = false) {
     this.player.isDead = false; 
+    this.player.shouldRemove = false;
+    this.player.lastDamageSourceId = null;
     this.gameOverSignaled = false; 
     this.player.invulnerableTime = 3000; // 3 seconds spawn protection
     this.kills = 0;
@@ -6880,13 +7065,14 @@ export class GameEngine {
 
     if (this.gameMode === GameMode.TEAMS) { 
         this.player.team = this.preferredTeam; 
-        this.player.color = (this.player.team === Team.BLUE) ? COLORS.player : COLORS.enemy; 
+        this.player.color = (this.player.team === Team.BLUE) ? COLORS.player : COLORS.enemy;
+        this.player.setSkin(this.preferredSkinId, this.preferredDonorRank);
         if (this.player.team === Team.BLUE) this.player.pos = { x: Vector.randomRange(100, BASE_ZONE_WIDTH - 100), y: Vector.randomRange(100, CANVAS_HEIGHT - 100) }; 
         else this.player.pos = { x: Vector.randomRange(CANVAS_WIDTH - BASE_ZONE_WIDTH + 100, CANVAS_WIDTH - 100), y: Vector.randomRange(100, CANVAS_HEIGHT - 100) }; 
     }
     else { 
         this.player.team = Team.BLUE; 
-        this.player.color = this.preferredColor;
+        this.player.setSkin(this.preferredSkinId, this.preferredDonorRank);
         this.player.pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT); 
     }
     this.player.vel = { x: 0, y: 0 }; 
@@ -6903,6 +7089,7 @@ export class GameEngine {
     this.player.updateStats(); 
     this.player.health = this.player.maxHealth; 
     this.player.displayHealth = this.player.maxHealth; 
+    this.player.visualScale = 1;
     this.player.socialSpinSignalUntil = 0;
     this.playerSpinWindowMs = 0;
     this.playerSpinAccumRad = 0;
@@ -8434,6 +8621,24 @@ export class GameEngine {
                   ownerId: b.ownerId,
                   type: 'BULLET',
               });
+              continue;
+          }
+
+          if (e.type === EntityType.SHAPE || e.type === EntityType.BOSS || e.type === EntityType.CRASHER) {
+              const s = e as any;
+              players.push({
+                  id: s.id,
+                  pos: s.pos,
+                  vel: s.vel || { x: 0, y: 0 },
+                  team: Team.NONE,
+                  isDead: s.isDead,
+                  health: s.health,
+                  maxHealth: s.maxHealth,
+                  xpValue: typeof s.xpValue === 'number' ? s.xpValue : undefined,
+                  shapeType: typeof s.shapeType === 'string' ? s.shapeType : undefined,
+                  rarity: typeof s.rarity === 'string' ? s.rarity : undefined,
+                  type: e.type === EntityType.BOSS ? 'BOSS' : e.type === EntityType.CRASHER ? 'CRASHER' : 'SHAPE',
+              });
           }
       }
 
@@ -8449,10 +8654,14 @@ export class GameEngine {
               ? this.entities.find((e) => e.id === bot.aiTargetId && !e.isDead)
               : null;
 
+          // Keep TDMAISystem aim authority to avoid close-range turret buzzing.
+          // Only synthesize a fallback target angle when no valid AI aim exists.
           if (target) {
-              const to = Vector.sub(target.pos, bot.pos);
-              if (Vector.magSq(to) > 0.0001) {
-                  bot.aiTargetRot = Math.atan2(to.y, to.x);
+              if (!Number.isFinite(bot.aiTargetRot)) {
+                  const to = Vector.sub(target.pos, bot.pos);
+                  if (Vector.magSq(to) > 0.0001) {
+                      bot.aiTargetRot = Math.atan2(to.y, to.x);
+                  }
               }
           } else if (Vector.magSq(bot.vel) > 0.001) {
               bot.aiTargetRot = Math.atan2(bot.vel.y, bot.vel.x);
@@ -8461,7 +8670,17 @@ export class GameEngine {
           let diff = bot.aiTargetRot - bot.rotation;
           while (diff > Math.PI) diff -= Math.PI * 2;
           while (diff < -Math.PI) diff += Math.PI * 2;
-          bot.rotation += diff * Math.min(1, dt * 8.0);
+
+          // Turn-rate-limited smoothing is much more stable than direct proportional snap.
+          const turnRate = 0.19 * dt * 60;
+          const deadzone = 0.0065;
+          if (Math.abs(diff) > deadzone) {
+              const step = Math.min(Math.abs(diff), turnRate);
+              bot.rotation += Math.sign(diff) * step;
+          }
+
+          while (bot.rotation > Math.PI) bot.rotation -= Math.PI * 2;
+          while (bot.rotation < -Math.PI) bot.rotation += Math.PI * 2;
 
           if (bot.aiShooting) this.attemptShoot(bot);
           return;
@@ -9760,6 +9979,36 @@ export class GameEngine {
     return Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
   }
 
+  private getRefinedBotName(team: Team): string {
+      const clean = (value: string): string =>
+          String(value || '')
+              .replace(/[_]+/g, ' ')
+              .replace(/[^A-Za-z0-9 ]+/g, '')
+              .trim()
+              .replace(/\s{2,}/g, ' ');
+
+      const activeNames = new Set(
+          this.entities
+              .filter((e) => (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER) && !e.isDead)
+              .map((e) => clean((e as Tank).name).toLowerCase())
+      );
+
+      const pool = BOT_NAMES.map(clean).filter((n) => n.length > 0);
+      let base = pool[Math.floor(Math.random() * pool.length)] || 'Vextor Unit';
+
+      const teamPrefix = team === Team.BLUE ? 'BLU' : team === Team.RED ? 'RED' : 'BOT';
+      base = `${teamPrefix} ${base}`;
+
+      if (!activeNames.has(base.toLowerCase())) return base;
+
+      for (let i = 2; i <= 99; i++) {
+          const candidate = `${base} ${i}`;
+          if (!activeNames.has(candidate.toLowerCase())) return candidate;
+      }
+
+      return `${base} ${Math.floor(Math.random() * 900 + 100)}`;
+  }
+
   spawnEnemy() {
       let pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT), team = Team.RED;
       if (this.gameMode === GameMode.TEAMS) {
@@ -9778,7 +10027,7 @@ export class GameEngine {
       }
       
       const bot = new Tank(this.nextId(), pos.x, pos.y, false, team);
-      bot.name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+      bot.name = this.getRefinedBotName(team);
       bot.invulnerableTime = 2000; // Protection for bots too
       
       // Bots now start at level 1 and grind their way up
@@ -10138,6 +10387,51 @@ export class GameEngine {
 
       dmgA = filterDamage(a, b, dmgA);
       dmgB = filterDamage(b, a, dmgB);
+
+      const applyPenetrationPassThrough = (
+          bullet: Bullet,
+          victim: Entity,
+          incomingToBullet: number,
+          outgoingToVictim: number
+      ): { bulletIncoming: number; victimOutgoing: number } => {
+          if (!(victim.type === EntityType.SHAPE || victim.type === EntityType.CRASHER || victim.type === EntityType.BOSS)) {
+              return { bulletIncoming: incomingToBullet, victimOutgoing: outgoingToVictim };
+          }
+
+          const owner = this.entities.find((e) => e.id === bullet.ownerId);
+          if (!(owner instanceof Tank)) {
+              return { bulletIncoming: incomingToBullet, victimOutgoing: outgoingToVictim };
+          }
+
+          const penStat = Math.max(0, owner.stats[StatType.BULLET_PENETRATION] || 0);
+          const sizeFactor = Math.min(1, Math.max(0, (bullet.radius - 5.5) / 9.5));
+
+          let classBias = 0;
+          if (bullet.ownerClass === TankClass.DESTROYER || bullet.ownerClass === TankClass.ANNIHILATOR) classBias = 0.055;
+          else if (bullet.ownerClass === TankClass.SPREAD_SHOT || bullet.ownerClass === TankClass.PENTA_SHOT) classBias = 0.04;
+          else if (bullet.ownerClass === TankClass.HYBRID) classBias = 0.03;
+
+          // Persist bullets slightly through shapes/crashers/bosses based on penetration.
+          const passThrough = Math.min(0.42, 0.07 + penStat * 0.022 + sizeFactor * 0.08 + classBias);
+
+          // Small effective damage gain from longer overlap/lifespan, mirroring classic diep feel.
+          const victimBoost = Math.min(0.14, 0.015 + penStat * 0.008 + sizeFactor * 0.03 + classBias * 0.55);
+
+          return {
+              bulletIncoming: incomingToBullet * (1 - passThrough),
+              victimOutgoing: outgoingToVictim * (1 + victimBoost),
+          };
+      };
+
+      if (a.type === EntityType.BULLET && b.type !== EntityType.BULLET) {
+          const tuned = applyPenetrationPassThrough(a as Bullet, b, dmgA, dmgB);
+          dmgA = tuned.bulletIncoming;
+          dmgB = tuned.victimOutgoing;
+      } else if (b.type === EntityType.BULLET && a.type !== EntityType.BULLET) {
+          const tuned = applyPenetrationPassThrough(b as Bullet, a, dmgB, dmgA);
+          dmgB = tuned.bulletIncoming;
+          dmgA = tuned.victimOutgoing;
+      }
 
       // Ram balance: at extreme speed, ram classes are still dangerous,
       // but they lose some collision forgiveness and take more punish damage.
@@ -11077,3 +11371,4 @@ export class GameEngine {
       });
   }
 }
+

@@ -309,6 +309,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       ? Droplets
       : MousePointer2;
   const isTeamMode = gameMode === GameMode.TEAMS;
+  const topFiveLeaderboard = useMemo(() => leaderboard.slice(0, 5), [leaderboard]);
 
   return (
     <div 
@@ -505,8 +506,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-200/80">Leaderboard</span>
                    <span className="text-[9px] font-bold uppercase tracking-wider text-white/35">Live</span>
                  </div>
-                 <div className="flex flex-col max-h-[232px] overflow-y-auto custom-scrollbar">
-                     {leaderboard.map((entry, i) => (
+                 <div className="flex flex-col">
+                     {topFiveLeaderboard.map((entry, i) => (
                          (() => {
                            const entryTeam = entry.teamId ?? entry.team;
                            const rowClass = !isTeamMode
@@ -526,7 +527,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                              <div className="w-7 h-7 rounded-md bg-black/40 border border-white/10 flex items-center justify-center overflow-hidden">
                                <TankPreview tankClass={iconClass} size={18} />
                              </div>
-                             <span className="truncate font-black tracking-wide">{entry.name}</span>
+                              <span className="truncate font-black tracking-wide">{String(entry.name || '').replace(/[_]+/g, ' ').trim() || 'Unknown'}</span>
                              <span className="font-mono text-[11px] text-white/75">{formatScoreValue(entry.score, settings.compactScoreNotation)}</span>
                           </div>
                            );

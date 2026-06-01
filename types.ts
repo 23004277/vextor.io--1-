@@ -430,6 +430,8 @@ export interface User {
   inventory: string[]; // List of ShopItem IDs
   equippedItem: string; // ID of currently equipped color/skin
   unlockedEliteSkins: TankClass[]; // Classes for which elite skin is unlocked
+  supportTotal: number;
+  supporterRank: 'standard' | 'rank1' | 'rank2' | 'rank3';
 }
 
 export interface AuthResponse {

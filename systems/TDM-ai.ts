@@ -1,7 +1,21 @@
-import { AIState, Team, TankClass, Vector2 } from '../types';
+import { AIState, GameMode, StatType, TankClass, Team, Vector2 } from '../types';
 import * as Vector from '../services/MathUtils';
 import { MovementSystem } from '../services/systems/MovementSystem';
 import type { IAITank } from '../services/EnemyAITanks';
+
+type TacticalState = AIState.COMBAT | AIState.FLEE | AIState.BASE_DEFENSE | AIState.HUNT;
+
+type Memory = {
+  stateLatchUntil: number;
+  stateLock: TacticalState;
+  targetLockUntil: number;
+  targetId: number | null;
+  strafeDir: 1 | -1;
+  strafeFlipTick: number;
+  wanderAngle: number;
+  laneOffsetY: number;
+  laneBiasX: number;
+};
 
 export type Player = {
   id: number;
@@ -16,17 +30,11 @@ export type Player = {
   classType?: TankClass;
   aiState?: AIState;
   aiTargetId?: number | null;
-  type?: 'PLAYER' | 'ENEMY' | 'BULLET';
+  xpValue?: number;
+  shapeType?: string;
+  rarity?: string;
+  type?: 'PLAYER' | 'ENEMY' | 'BULLET' | 'SHAPE' | 'BOSS' | 'CRASHER';
   ownerId?: number;
-};
-
-type Squad = {
-  id: number;
-  team: Team;
-  memberIds: number[];
-  leaderId: number;
-  centroid: Vector2;
-  sharedTargetId: number | null;
 };
 
 type SafeZone = {
@@ -41,25 +49,9 @@ type FrameConfig = {
   mapCenter: Vector2;
   chokePoint: Vector2;
   safeZones: SafeZone[];
-  projectileHeatRadius: number;
-  squadJoinRadius: number;
 };
 
-type SpatialBucket = {
-  bots: IAITank[];
-  players: Player[];
-  bullets: Player[];
-};
-
-type BotSense = {
-  allies: IAITank[];
-  enemies: Player[];
-  bullets: Player[];
-  squad: Squad | null;
-  pressure: number;
-  enemyCountNear: number;
-  allyCountNear: number;
-};
+const ZERO: Vector2 = { x: 0, y: 0 };
 
 const DEFAULT_CONFIG: FrameConfig = {
   worldWidth: 6000,
@@ -67,21 +59,41 @@ const DEFAULT_CONFIG: FrameConfig = {
   mapCenter: { x: 3000, y: 2000 },
   chokePoint: { x: 3000, y: 2000 },
   safeZones: [
-    { team: Team.BLUE, center: { x: 500, y: 2000 }, radius: 700 },
-    { team: Team.RED, center: { x: 5500, y: 2000 }, radius: 700 },
+    { team: Team.BLUE, center: { x: 500, y: 2000 }, radius: 1200 },
+    { team: Team.RED, center: { x: 5500, y: 2000 }, radius: 1200 },
   ],
-  projectileHeatRadius: 440,
-  squadJoinRadius: 520,
+};
+
+const TUNING = {
+  maxSteering: 4.5,
+  senseRadius: 980,
+  localCountRadius: 760,
+  separationRadius: 185,
+  crowdSeparationRadius: 280,
+  cohesionRadius: 620,
+  fleeHealthRatio: 0.35,
+  outnumberedMargin: 2,
+  stateLatchMinTicks: 20,
+  stateLatchMaxTicks: 30,
+  targetLatchMinTicks: 20,
+  targetLatchMaxTicks: 30,
+  bulletAvoidRadius: 420,
+  dangerFleePressure: 1.25,
+  farmSenseRadius: 860,
+  boundaryPadding: 260,
+  boundaryLookAhead: 180,
+  combatRange: 360,
+  combatRangeSniper: 620,
+  combatRangeRusher: 220,
+  laneWeight: 0.8,
 };
 
 export class TDMAISystem {
   private readonly movement = new MovementSystem();
-  private readonly hash = new Map<string, SpatialBucket>();
-  private readonly squadByMember = new Map<number, Squad>();
+  private readonly memory = new Map<number, Memory>();
   private config: FrameConfig = { ...DEFAULT_CONFIG };
-  private currentTick = 0;
-  private readonly cellSize = 360;
-  private readonly maxSteering = 4.5;
+  private tick = 0;
+  private playersById = new Map<number, Player>();
 
   configure(next: Partial<FrameConfig>): void {
     this.config = {
@@ -94,107 +106,185 @@ export class TDMAISystem {
   }
 
   update(bots: IAITank[], players: Player[], tick: number): void {
-    this.currentTick = tick;
-    this.rebuildSpatialHash(bots, players);
-    const squads = this.buildSquads(bots);
-    this.assignSquadTargets(squads, players);
+    this.tick = tick;
+    this.playersById.clear();
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      if (!p || p.isDead) continue;
+      this.playersById.set(p.id, p);
+    }
 
     for (let i = 0; i < bots.length; i++) {
       const bot = bots[i];
       if (!bot || bot.isDead || bot.team === Team.NONE) continue;
-      this.updateSingleBot(bot, players);
+      this.updateBot(bot, players);
     }
   }
 
-  private updateSingleBot(bot: IAITank, players: Player[]): void {
-    const sense = this.senseBot(bot);
+  private updateBot(bot: IAITank, players: Player[]): void {
+    const mem = this.getMemory(bot.id);
+    const sensed = this.sense(bot, players);
     const hpRatio = bot.health / Math.max(1, bot.maxHealth);
-    const outnumbered = sense.enemyCountNear > sense.allyCountNear + 1;
-    const shouldRetreat = hpRatio < 0.3 || (outnumbered && hpRatio < 0.55);
-    const sharedTarget = this.resolveSharedTarget(bot, sense, players);
+    const dangerPressure = this.computeDangerPressure(bot, sensed.enemies, sensed.bullets);
+    const outnumbered = sensed.enemyCount >= sensed.allyCount + TUNING.outnumberedMargin;
+    const shouldRetreat = hpRatio <= TUNING.fleeHealthRatio || outnumbered || dangerPressure >= TUNING.dangerFleePressure;
 
-    let targetPos: Vector2 = this.config.chokePoint;
-    let state: AIState = AIState.HUNT;
+    const desiredTarget = this.pickTarget(bot, sensed.enemies, sensed.allies, mem);
+    const farmTarget = !desiredTarget && !shouldRetreat ? this.pickFarmTarget(bot, sensed.farmTargets) : null;
+    const desiredState: TacticalState = shouldRetreat ? AIState.FLEE : desiredTarget ? AIState.COMBAT : AIState.HUNT;
+    const state = this.applyStateLatch(mem, desiredState, bot.id);
+    const target = this.resolveTargetLock(mem, desiredTarget, sensed.enemies, bot.id);
 
-    if (shouldRetreat) {
-      state = AIState.RETURNING;
-      targetPos = this.getSafeZoneCenter(bot.team);
-    } else if (sharedTarget) {
-      state = AIState.COMBAT;
-      targetPos = this.computeCombatAimPoint(bot, sharedTarget);
+    let goal = ZERO;
+    if (state === AIState.FLEE || shouldRetreat) {
+      const retreatPos = this.getSafeZoneCenter(bot.team);
+      goal = this.movement.arriveForce(bot.pos, retreatPos, 420, 20);
+      bot.aiState = AIState.FLEE;
+      bot.aiShooting = false;
+      bot.aiTargetId = target?.id ?? null;
+      if (target) bot.aiTargetRot = this.angleTo(bot.pos, this.computeInterceptPoint(bot, target));
+    } else if (state === AIState.COMBAT && target) {
+      const aim = this.computeInterceptPoint(bot, target);
+      goal = this.computeCombatGoal(bot, target, aim, mem);
+      bot.aiState = AIState.COMBAT;
+      bot.aiTargetId = target.id;
+      bot.aiShooting = true;
+      bot.aiTargetRot = this.angleTo(bot.pos, aim);
     } else {
-      state = AIState.BASE_DEFENSE;
-      targetPos = this.computeChokeHoldPoint(bot, sense.squad);
-    }
-
-    // Team role synergy.
-    if (!shouldRetreat && sense.squad) {
-      if (this.isSupport(bot.classType)) {
-        const leader = sense.squad.memberIds.find((id) => id === sense.squad!.leaderId);
-        if (leader != null) {
-          const leaderBot = this.findBotById(leader);
-          if (leaderBot) targetPos = this.computeSupportAnchor(leaderBot, sense.squad.centroid);
-        }
-      } else if (this.isFarmer(bot.classType)) {
-        const leaderBot = this.findBotById(sense.squad.leaderId);
-        if (leaderBot) targetPos = this.computeFarmerRear(leaderBot);
+      if (farmTarget) {
+        goal = this.movement.arriveForce(bot.pos, farmTarget.pos, 300, 20);
+        bot.aiState = AIState.FARM;
+        bot.aiTargetId = farmTarget.id;
+        bot.aiShooting = true;
+        const aim = this.computeInterceptPoint(bot, farmTarget);
+        bot.aiTargetRot = this.angleTo(bot.pos, aim);
+      } else {
+        goal = this.computeDefenseGoal(bot, mem);
+        bot.aiState = AIState.BASE_DEFENSE;
+        bot.aiTargetId = null;
+        bot.aiShooting = false;
+        if (Vector.magSq(bot.vel) > 0.001) bot.aiTargetRot = Math.atan2(bot.vel.y, bot.vel.x);
       }
     }
 
-    const goal = shouldRetreat
-      ? this.movement.arriveForce(bot.pos, targetPos, 340)
-      : this.movement.seekForce(bot.pos, targetPos);
-
-    const alliesLite = sense.allies.map((a) => ({ pos: a.pos }));
-    const allyVels = sense.allies.map((a) => a.vel);
-    const sep = this.movement.separationForce(bot.pos, alliesLite, 180);
-    const align = this.movement.alignmentForce(bot.vel, allyVels);
-    const coh = sense.squad ? this.movement.cohesionForce(bot.pos, alliesLite, 560) : { x: 0, y: 0 };
-
-    const heatAvoid = this.computeHeatAvoidance(bot, sense.bullets, sense.enemies, shouldRetreat);
+    const sep = this.movement.separationForce(bot.pos, sensed.allies.map((a) => ({ pos: a.pos })), TUNING.separationRadius);
+    const crowdRepel = this.computeCrowdRepulsion(bot, sensed.allies, TUNING.crowdSeparationRadius);
+    const align = this.movement.alignmentForce(bot.vel, sensed.allies.map((a) => a.vel));
+    const coh = this.movement.cohesionForce(bot.pos, sensed.allies.map((a) => ({ pos: a.pos })), TUNING.cohesionRadius);
+    const bulletAvoid = this.computeBulletAvoid(bot, sensed.bullets);
+    const laneForce = this.movement.seekForce(bot.pos, this.getLaneAnchor(bot, mem, state === AIState.FLEE ? 0.3 : 0.58));
     const bounds = this.movement.boundaryAvoidanceForce(
       bot.pos,
       bot.vel,
       this.config.worldWidth,
       this.config.worldHeight,
-      220,
-      120
+      TUNING.boundaryPadding,
+      TUNING.boundaryLookAhead
     );
 
-    let steering = { x: 0, y: 0 };
-    steering = this.movement.blendSteering(steering, goal, shouldRetreat ? 1.25 : 1.05);
-    steering = this.movement.blendSteering(steering, sep, 1.45);
-    steering = this.movement.blendSteering(steering, align, shouldRetreat ? 0.22 : 0.34);
-    steering = this.movement.blendSteering(steering, coh, shouldRetreat ? 0.18 : 0.44);
-    steering = this.movement.blendSteering(steering, heatAvoid, shouldRetreat ? 1.2 : 1.0);
-    steering = this.movement.blendSteering(steering, bounds, 1.15);
+    const boids = this.getBoidWeights(bot.classType);
+    let steering = ZERO;
+    steering = this.movement.blendSteering(steering, goal, shouldRetreat ? 1.45 : 1.2);
+    steering = this.movement.blendSteering(steering, sep, boids.separation);
+    steering = this.movement.blendSteering(steering, crowdRepel, 1.5);
+    steering = this.movement.blendSteering(steering, align, boids.alignment);
+    steering = this.movement.blendSteering(steering, coh, boids.cohesion);
+    steering = this.movement.blendSteering(steering, laneForce, TUNING.laneWeight);
+    steering = this.movement.blendSteering(steering, bulletAvoid, 1.2);
+    steering = this.movement.blendSteering(steering, bounds, 1.3);
 
-    bot.lastSteering = Vector.limit(steering, this.maxSteering);
-    bot.aiState = state;
-    bot.aiTargetId = sharedTarget ? sharedTarget.id : null;
-    bot.aiShooting = state === AIState.COMBAT && !!sharedTarget;
-    if (sharedTarget) {
-      bot.aiTargetRot = Math.atan2(sharedTarget.pos.y - bot.pos.y, sharedTarget.pos.x - bot.pos.x);
+    if (shouldRetreat) {
+      steering = this.movement.blendSteering(
+        steering,
+        this.movement.seekForce(bot.pos, this.getSafeZoneCenter(bot.team)),
+        1.4
+      );
     }
+
+    bot.lastSteering = Vector.limit(this.ensureValidSteering(steering, goal, bot, mem), TUNING.maxSteering);
   }
 
-  private resolveSharedTarget(bot: IAITank, sense: BotSense, players: Player[]): Player | null {
-    if (sense.squad?.sharedTargetId != null) {
-      const shared = players.find((p) => p.id === sense.squad!.sharedTargetId && !p.isDead);
-      if (shared) return shared;
+  private sense(bot: IAITank, players: Player[]): { allies: IAITank[]; enemies: Player[]; bullets: Player[]; farmTargets: Player[]; allyCount: number; enemyCount: number } {
+    const allies: IAITank[] = [];
+    const enemies: Player[] = [];
+    const bullets: Player[] = [];
+    const farmTargets: Player[] = [];
+    const r2 = TUNING.senseRadius * TUNING.senseRadius;
+    const farmR2 = TUNING.farmSenseRadius * TUNING.farmSenseRadius;
+
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      if (!p || p.isDead || p.id === bot.id) continue;
+      if (Vector.distSq(bot.pos, p.pos) > r2) continue;
+
+      if (p.type === 'BULLET') {
+        if (p.team !== bot.team) bullets.push(p);
+        continue;
+      }
+      if (p.type === 'SHAPE' || p.type === 'BOSS' || p.type === 'CRASHER') {
+        if (Vector.distSq(bot.pos, p.pos) <= farmR2) farmTargets.push(p);
+        continue;
+      }
+
+      if (p.team === bot.team) {
+        const allyBot = this.asAllyBot(p);
+        if (allyBot) allies.push(allyBot);
+      } else {
+        enemies.push(p);
+      }
     }
 
-    if (sense.enemies.length <= 0) return null;
+    const presenceR2 = TUNING.localCountRadius * TUNING.localCountRadius;
+    let allyCount = 1;
+    let enemyCount = 0;
+    for (let i = 0; i < allies.length; i++) if (Vector.distSq(bot.pos, allies[i].pos) <= presenceR2) allyCount++;
+    for (let i = 0; i < enemies.length; i++) if (Vector.distSq(bot.pos, enemies[i].pos) <= presenceR2) enemyCount++;
+
+    return { allies, enemies, bullets, farmTargets, allyCount, enemyCount };
+  }
+
+  private asAllyBot(p: Player): IAITank | null {
+    const candidate = this.playersById.get(p.id);
+    if (!candidate) return null;
+    return {
+      id: candidate.id,
+      pos: candidate.pos,
+      vel: candidate.vel,
+      rotation: 0,
+      health: candidate.health ?? 100,
+      maxHealth: candidate.maxHealth ?? 100,
+      team: candidate.team,
+      classType: candidate.classType ?? TankClass.BASIC,
+      stats: {} as any,
+      visionRange: 0,
+      aiUpdateTimer: 0,
+      aiState: candidate.aiState ?? AIState.IDLE,
+      lastSteering: ZERO,
+      availableStatPoints: 0,
+      isDead: !!candidate.isDead,
+      aiTargetId: candidate.aiTargetId ?? null,
+      aiTargetRot: 0,
+      aiShooting: false,
+      idleDir: null,
+    };
+  }
+
+  private pickTarget(bot: IAITank, enemies: Player[], allies: IAITank[], mem: Memory): Player | null {
+    if (enemies.length === 0) return null;
+    const locked = mem.targetId != null ? enemies.find((e) => e.id === mem.targetId) ?? null : null;
+    if (locked && this.tick <= mem.targetLockUntil) return locked;
+
     let best: Player | null = null;
     let bestScore = -Infinity;
-
-    for (let i = 0; i < sense.enemies.length; i++) {
-      const e = sense.enemies[i];
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
       const d2 = Math.max(1, Vector.distSq(bot.pos, e.pos));
       const hpRatio = (e.health ?? 100) / Math.max(1, e.maxHealth ?? 100);
-      const focusBonus = e.aiTargetId === bot.id ? 0.45 : 0;
-      const lowHpBonus = hpRatio < 0.5 ? (1 - hpRatio) * 0.7 : 0;
-      const score = 900000 / d2 + lowHpBonus + focusBonus;
+      const lowHp = hpRatio < 0.55 ? (1 - hpRatio) * 0.9 : 0;
+      const focus = e.aiTargetId === bot.id ? 0.4 : 0;
+      const focusPenalty = this.getAllyFocusPenalty(e.id, allies);
+      const laneAffinity = this.getLaneAffinity(bot, mem, e.pos);
+      const score = 900000 / d2 + lowHp + focus + laneAffinity - focusPenalty;
       if (score > bestScore) {
         best = e;
         bestScore = score;
@@ -203,358 +293,243 @@ export class TDMAISystem {
     return best;
   }
 
-  private computeCombatAimPoint(bot: IAITank, enemy: Player): Vector2 {
-    if (this.isRusher(bot.classType) || this.isExplorer(bot.classType)) {
-      const toEnemy = Vector.sub(enemy.pos, bot.pos);
-      const dist = Math.max(1, Math.sqrt(Vector.magSq(toEnemy)));
-      const approxBulletSpeed = 5 + (bot.stats?.reload ?? 0) * 0.1 + (bot.stats?.['Bullet Speed' as any] ?? 0) * 0.4;
-      const predictT = Math.min(0.85, dist / Math.max(8, approxBulletSpeed * 56));
-      return {
-        x: enemy.pos.x + enemy.vel.x * predictT * 60,
-        y: enemy.pos.y + enemy.vel.y * predictT * 60,
-      };
-    }
-    return enemy.pos;
-  }
+  private resolveTargetLock(mem: Memory, desired: Player | null, enemies: Player[], botId: number): Player | null {
+    const locked = mem.targetId != null ? enemies.find((e) => e.id === mem.targetId) ?? null : null;
+    if (locked && this.tick <= mem.targetLockUntil) return locked;
 
-  private computeSupportAnchor(leader: IAITank, squadCentroid: Vector2): Vector2 {
-    const back = Vector.normalize(Vector.sub(squadCentroid, leader.pos));
-    return {
-      x: leader.pos.x + back.x * 140,
-      y: leader.pos.y + back.y * 140,
-    };
-  }
-
-  private computeFarmerRear(leader: IAITank): Vector2 {
-    const retreat = Vector.normalize({ x: -leader.vel.x || -1, y: -leader.vel.y || 0 });
-    return {
-      x: leader.pos.x + retreat.x * 220,
-      y: leader.pos.y + retreat.y * 220,
-    };
-  }
-
-  private computeChokeHoldPoint(bot: IAITank, squad: Squad | null): Vector2 {
-    const base = this.config.chokePoint;
-    if (!squad) return base;
-    const seed = ((bot.id * 73856093) ^ (this.currentTick * 19349663)) & 1023;
-    const angle = (seed / 1023) * Math.PI * 2;
-    const radius = 120 + (bot.id % 3) * 56;
-    return {
-      x: base.x + Math.cos(angle) * radius,
-      y: base.y + Math.sin(angle) * radius,
-    };
-  }
-
-  private computeHeatAvoidance(bot: IAITank, bullets: Player[], enemies: Player[], retreating: boolean): Vector2 {
-    let fx = 0;
-    let fy = 0;
-    for (let i = 0; i < bullets.length; i++) {
-      const b = bullets[i];
-      const dx = bot.pos.x - b.pos.x;
-      const dy = bot.pos.y - b.pos.y;
-      const d2 = Math.max(1, dx * dx + dy * dy);
-      if (d2 > this.config.projectileHeatRadius * this.config.projectileHeatRadius) continue;
-      fx += (dx / d2) * 18000;
-      fy += (dy / d2) * 18000;
+    if (!desired) {
+      mem.targetId = null;
+      mem.targetLockUntil = 0;
+      return null;
     }
 
-    // Enemy concentration heat.
-    let ex = 0;
-    let ey = 0;
-    for (let i = 0; i < enemies.length; i++) {
-      const e = enemies[i];
-      const dx = bot.pos.x - e.pos.x;
-      const dy = bot.pos.y - e.pos.y;
-      const d2 = Math.max(1, dx * dx + dy * dy);
-      ex += dx / d2;
-      ey += dy / d2;
-    }
-    const enemyHeat = enemies.length > 0 ? Vector.normalize({ x: ex, y: ey }) : { x: 0, y: 0 };
-    const bulletHeat = Math.abs(fx) + Math.abs(fy) > 0.0001 ? Vector.normalize({ x: fx, y: fy }) : { x: 0, y: 0 };
-
-    const heat = this.movement.composeSteering(
-      [bulletHeat, enemyHeat],
-      [1.0, retreating ? 1.15 : 0.62],
-      1.35
-    );
-    return heat;
+    mem.targetId = desired.id;
+    mem.targetLockUntil = this.tick + this.randomLatch(botId * 31, TUNING.targetLatchMinTicks, TUNING.targetLatchMaxTicks);
+    return desired;
   }
 
-  private senseBot(bot: IAITank): BotSense {
-    const nearby = this.queryCells(bot.pos, 900);
-    const allies: IAITank[] = [];
-    const enemies: Player[] = [];
-    const bullets: Player[] = [];
+  private applyStateLatch(mem: Memory, desired: TacticalState, botId: number): TacticalState {
+    if (this.tick < mem.stateLatchUntil && mem.stateLock !== desired) return mem.stateLock;
+    if (mem.stateLock !== desired) {
+      mem.stateLock = desired;
+      mem.stateLatchUntil = this.tick + this.randomLatch(botId * 17, TUNING.stateLatchMinTicks, TUNING.stateLatchMaxTicks);
+    }
+    return mem.stateLock;
+  }
 
-    for (let i = 0; i < nearby.bots.length; i++) {
-      const other = nearby.bots[i];
-      if (!other || other.id === bot.id || other.isDead) continue;
-      if (other.team === bot.team) allies.push(other);
-      else {
-        enemies.push({
-          id: other.id,
-          pos: other.pos,
-          vel: other.vel,
-          team: other.team,
-          isDead: other.isDead,
-          health: other.health,
-          maxHealth: other.maxHealth,
-          aiTargetId: other.aiTargetId,
-          type: 'ENEMY',
-        });
+  private computeCombatGoal(bot: IAITank, target: Player, aimPoint: Vector2, mem: Memory): Vector2 {
+    const toTarget = Vector.sub(target.pos, bot.pos);
+    const dist = Math.max(1, Math.sqrt(Vector.magSq(toTarget)));
+    const dir = Vector.normalize(toTarget);
+
+    if (this.tick >= mem.strafeFlipTick) {
+      mem.strafeDir = mem.strafeDir === 1 ? -1 : 1;
+      mem.strafeFlipTick = this.tick + 24 + (bot.id % 13);
+    }
+
+    const strafe = { x: -dir.y * mem.strafeDir, y: dir.x * mem.strafeDir };
+    const toward = this.movement.seekForce(bot.pos, aimPoint);
+    const away = this.movement.fleeForce(bot.pos, target.pos);
+    const ideal = this.getIdealRange(bot.classType);
+
+    if (dist < ideal * 0.78) return this.movement.composeSteering([away, strafe], [1.0, 0.7], 1.4);
+    if (dist > ideal * 1.22) return this.movement.composeSteering([toward, strafe], [1.05, 0.52], 1.4);
+    return this.movement.composeSteering([strafe, toward], [0.95, 0.32], 1.2);
+  }
+
+  private computeDefenseGoal(bot: IAITank, mem: Memory): Vector2 {
+    const laneAnchor = this.getLaneAnchor(bot, mem, 0.52);
+    const jitter = { x: Math.cos(mem.wanderAngle) * 160, y: Math.sin(mem.wanderAngle) * 180 };
+    mem.wanderAngle += 0.11 + ((bot.id % 7) * 0.003);
+    const hold = { x: laneAnchor.x + jitter.x, y: laneAnchor.y + jitter.y };
+    return this.movement.arriveForce(bot.pos, hold, 300, 20);
+  }
+
+  private pickFarmTarget(bot: IAITank, farmTargets: Player[]): Player | null {
+    if (farmTargets.length === 0) return null;
+    let best: Player | null = null;
+    let bestScore = -Infinity;
+    for (let i = 0; i < farmTargets.length; i++) {
+      const f = farmTargets[i];
+      const d2 = Math.max(1, Vector.distSq(bot.pos, f.pos));
+      const xp = Math.max(40, f.xpValue ?? (f.type === 'BOSS' ? 1200 : f.type === 'CRASHER' ? 220 : 110));
+      const rarityBoost = f.rarity === 'Legendary' || f.rarity === 'Mythical' || f.rarity === 'Eternal' ? 1.5 : 1.0;
+      const score = (xp * rarityBoost) / Math.sqrt(d2);
+      if (score > bestScore) {
+        best = f;
+        bestScore = score;
       }
     }
-
-    for (let i = 0; i < nearby.players.length; i++) {
-      const p = nearby.players[i];
-      if (!p || p.id === bot.id || p.isDead || p.type === 'BULLET') continue;
-      if (p.team !== bot.team) enemies.push(p);
-    }
-
-    for (let i = 0; i < nearby.bullets.length; i++) {
-      const b = nearby.bullets[i];
-      if (!b || b.team === bot.team) continue;
-      bullets.push(b);
-    }
-
-    const pressure = this.computePressure(bot.pos, bullets, enemies);
-    const squad = this.squadByMember.get(bot.id) ?? null;
-
-    return {
-      allies,
-      enemies,
-      bullets,
-      squad,
-      pressure,
-      enemyCountNear: enemies.length,
-      allyCountNear: allies.length,
-    };
+    return best;
   }
 
-  private computePressure(pos: Vector2, bullets: Player[], enemies: Player[]): number {
-    let pressure = 0;
+  private computeCrowdRepulsion(bot: IAITank, allies: IAITank[], radius: number): Vector2 {
+    const r2 = radius * radius;
+    let fx = 0;
+    let fy = 0;
+    let count = 0;
+
+    for (let i = 0; i < allies.length; i++) {
+      const ally = allies[i];
+      const dx = bot.pos.x - ally.pos.x;
+      const dy = bot.pos.y - ally.pos.y;
+      const d2 = Math.max(1, dx * dx + dy * dy);
+      if (d2 > r2) continue;
+      const d = Math.sqrt(d2);
+      const t = 1 - Math.min(1, d / radius);
+      const w = (t * t) * 1.9;
+      fx += (dx / d) * w;
+      fy += (dy / d) * w;
+      count++;
+    }
+
+    if (count === 0 || (Math.abs(fx) + Math.abs(fy) < 0.0001)) return ZERO;
+    return Vector.normalize({ x: fx, y: fy });
+  }
+
+  private computeInterceptPoint(bot: IAITank, target: Player): Vector2 {
+    const bulletSpeed = 5 + (bot.stats?.[StatType.BULLET_SPEED] ?? 0) * 0.8;
+    const rel = Vector.sub(target.pos, bot.pos);
+    const dist = Math.max(1, Math.sqrt(Vector.magSq(rel)));
+    const t = Math.min(1.0, dist / Math.max(12, bulletSpeed * 56));
+    const tv = target.vel ?? ZERO;
+    return { x: target.pos.x + tv.x * t * 60, y: target.pos.y + tv.y * t * 60 };
+  }
+
+  private computeBulletAvoid(bot: IAITank, bullets: Player[]): Vector2 {
+    let fx = 0;
+    let fy = 0;
+    const maxD2 = TUNING.bulletAvoidRadius * TUNING.bulletAvoidRadius;
     for (let i = 0; i < bullets.length; i++) {
       const b = bullets[i];
-      const d2 = Math.max(1, Vector.distSq(pos, b.pos));
-      pressure += 18000 / d2;
+      const rel = Vector.sub(bot.pos, b.pos);
+      const d2 = Math.max(1, Vector.magSq(rel));
+      if (d2 > maxD2) continue;
+      const away = Vector.normalize(rel);
+      const inbound = Vector.dot(rel, b.vel ?? ZERO) > 0 ? 1.2 : 0.35;
+      const w = (22000 / d2) * inbound;
+      fx += away.x * w;
+      fy += away.y * w;
     }
+    if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;
+    return Vector.normalize({ x: fx, y: fy });
+  }
+
+  private getBoidWeights(cls: TankClass): { separation: number; alignment: number; cohesion: number } {
+    if (this.isSupport(cls)) return { separation: 1.8, alignment: 0.55, cohesion: 0.18 };
+    if (this.isRusher(cls)) return { separation: 1.45, alignment: 0.4, cohesion: 0.1 };
+    return { separation: 1.6, alignment: 0.45, cohesion: 0.14 };
+  }
+
+  private computeDangerPressure(bot: IAITank, enemies: Player[], bullets: Player[]): number {
+    let pressure = 0;
     for (let i = 0; i < enemies.length; i++) {
-      const e = enemies[i];
-      const d2 = Math.max(1, Vector.distSq(pos, e.pos));
-      pressure += 140000 / d2;
+      const d2 = Math.max(1, Vector.distSq(bot.pos, enemies[i].pos));
+      pressure += 160000 / d2;
+    }
+    for (let i = 0; i < bullets.length; i++) {
+      const b = bullets[i];
+      const rel = Vector.sub(bot.pos, b.pos);
+      const d2 = Math.max(1, Vector.magSq(rel));
+      const inbound = Vector.dot(rel, b.vel ?? ZERO) > 0 ? 1.3 : 0.32;
+      pressure += (23000 / d2) * inbound;
     }
     return pressure;
   }
 
-  private rebuildSpatialHash(bots: IAITank[], players: Player[]): void {
-    this.hash.clear();
-    this.squadByMember.clear();
-
-    for (let i = 0; i < bots.length; i++) {
-      const b = bots[i];
-      if (!b || b.isDead) continue;
-      const key = this.keyFor(b.pos);
-      const bucket = this.getOrCreateBucket(key);
-      bucket.bots.push(b);
-    }
-    for (let i = 0; i < players.length; i++) {
-      const p = players[i];
-      if (!p || p.isDead) continue;
-      const key = this.keyFor(p.pos);
-      const bucket = this.getOrCreateBucket(key);
-      if (p.type === 'BULLET') bucket.bullets.push(p);
-      else bucket.players.push(p);
-    }
-  }
-
-  private buildSquads(bots: IAITank[]): Squad[] {
-    const squads: Squad[] = [];
-    const visited = new Set<number>();
-
-    for (let i = 0; i < bots.length; i++) {
-      const seed = bots[i];
-      if (!seed || seed.isDead || seed.team === Team.NONE || visited.has(seed.id)) continue;
-
-      const members: IAITank[] = [];
-      const queue: IAITank[] = [seed];
-      visited.add(seed.id);
-
-      while (queue.length > 0) {
-        const current = queue.shift()!;
-        members.push(current);
-
-        const nearby = this.queryCells(current.pos, this.config.squadJoinRadius).bots;
-        for (let j = 0; j < nearby.length; j++) {
-          const next = nearby[j];
-          if (!next || next.isDead || next.team !== seed.team || visited.has(next.id)) continue;
-          if (Vector.distSq(current.pos, next.pos) > this.config.squadJoinRadius * this.config.squadJoinRadius) continue;
-          visited.add(next.id);
-          queue.push(next);
-        }
-      }
-
-      const centroid = this.computeCentroid(members);
-      const leader = this.pickSquadLeader(members);
-      const squad: Squad = {
-        id: squads.length + 1,
-        team: seed.team,
-        memberIds: members.map((m) => m.id),
-        leaderId: leader.id,
-        centroid,
-        sharedTargetId: null,
-      };
-      squads.push(squad);
-      for (let j = 0; j < members.length; j++) this.squadByMember.set(members[j].id, squad);
-    }
-
-    return squads;
-  }
-
-  private assignSquadTargets(squads: Squad[], players: Player[]): void {
-    for (let i = 0; i < squads.length; i++) {
-      const squad = squads[i];
-      const hostile = players.filter(
-        (p) =>
-          !p.isDead &&
-          p.type !== 'BULLET' &&
-          p.team !== squad.team &&
-          Vector.distSq(p.pos, squad.centroid) < 1200 * 1200
-      );
-
-      const focused = this.pickFocusedTargetFromMembers(squad);
-      if (focused != null) {
-        squad.sharedTargetId = focused;
-        continue;
-      }
-
-      if (hostile.length <= 0) {
-        squad.sharedTargetId = null;
-        continue;
-      }
-
-      let best = hostile[0];
-      let bestScore = -Infinity;
-      for (let j = 0; j < hostile.length; j++) {
-        const h = hostile[j];
-        const d2 = Math.max(1, Vector.distSq(h.pos, squad.centroid));
-        const hp = (h.health ?? 100) / Math.max(1, h.maxHealth ?? 100);
-        const score = 700000 / d2 + (hp < 0.55 ? (1 - hp) * 0.75 : 0);
-        if (score > bestScore) {
-          best = h;
-          bestScore = score;
-        }
-      }
-      squad.sharedTargetId = best.id;
-    }
-  }
-
-  private pickFocusedTargetFromMembers(squad: Squad): number | null {
-    const counts = new Map<number, number>();
-    for (let i = 0; i < squad.memberIds.length; i++) {
-      const bot = this.findBotById(squad.memberIds[i]);
-      if (!bot || bot.aiState !== AIState.COMBAT || bot.aiTargetId == null) continue;
-      counts.set(bot.aiTargetId, (counts.get(bot.aiTargetId) ?? 0) + 1);
-    }
-    let bestTarget: number | null = null;
-    let bestCount = 0;
-    for (const [targetId, count] of counts.entries()) {
-      if (count > bestCount) {
-        bestCount = count;
-        bestTarget = targetId;
-      }
-    }
-    return bestTarget;
-  }
-
-  private pickSquadLeader(members: IAITank[]): IAITank {
-    let leader = members[0];
-    let best = this.getBotPower(leader);
-    for (let i = 1; i < members.length; i++) {
-      const candidate = members[i];
-      const power = this.getBotPower(candidate);
-      if (power > best) {
-        best = power;
-        leader = candidate;
-      }
-    }
-    return leader;
-  }
-
-  private getBotPower(bot: IAITank): number {
-    const level = (bot as unknown as { level?: number }).level ?? 1;
-    const score = (bot as unknown as { score?: number }).score ?? 0;
-    return level * 100000 + score;
-  }
-
-  private computeCentroid(members: IAITank[]): Vector2 {
-    if (members.length === 0) return this.config.mapCenter;
-    let x = 0;
-    let y = 0;
-    for (let i = 0; i < members.length; i++) {
-      x += members[i].pos.x;
-      y += members[i].pos.y;
-    }
-    return { x: x / members.length, y: y / members.length };
-  }
-
-  private queryCells(pos: Vector2, radius: number): SpatialBucket {
-    const minX = Math.floor((pos.x - radius) / this.cellSize);
-    const maxX = Math.floor((pos.x + radius) / this.cellSize);
-    const minY = Math.floor((pos.y - radius) / this.cellSize);
-    const maxY = Math.floor((pos.y + radius) / this.cellSize);
-
-    const out: SpatialBucket = { bots: [], players: [], bullets: [] };
-    for (let gx = minX; gx <= maxX; gx++) {
-      for (let gy = minY; gy <= maxY; gy++) {
-        const bucket = this.hash.get(`${gx},${gy}`);
-        if (!bucket) continue;
-        out.bots.push(...bucket.bots);
-        out.players.push(...bucket.players);
-        out.bullets.push(...bucket.bullets);
-      }
-    }
-    return out;
-  }
-
-  private keyFor(pos: Vector2): string {
-    return `${Math.floor(pos.x / this.cellSize)},${Math.floor(pos.y / this.cellSize)}`;
-  }
-
-  private getOrCreateBucket(key: string): SpatialBucket {
-    let bucket = this.hash.get(key);
-    if (bucket) return bucket;
-    bucket = { bots: [], players: [], bullets: [] };
-    this.hash.set(key, bucket);
-    return bucket;
+  private ensureValidSteering(steering: Vector2, goal: Vector2, bot: IAITank, mem: Memory): Vector2 {
+    if (Vector.magSq(steering) > 0.00001) return steering;
+    if (Vector.magSq(goal) > 0.00001) return Vector.normalize(goal);
+    if (Vector.magSq(bot.vel) > 0.00001) return Vector.normalize(bot.vel);
+    const fallback = { x: Math.cos(mem.wanderAngle), y: Math.sin(mem.wanderAngle) };
+    mem.wanderAngle += 0.17;
+    return Vector.normalize(fallback);
   }
 
   private getSafeZoneCenter(team: Team): Vector2 {
     const zone = this.config.safeZones.find((z) => z.team === team);
-    return zone ? zone.center : this.config.mapCenter;
+    if (zone) return zone.center;
+    return this.config.mapCenter;
   }
 
-  private findBotById(id: number): IAITank | null {
-    for (const bucket of this.hash.values()) {
-      for (let i = 0; i < bucket.bots.length; i++) {
-        if (bucket.bots[i].id === id) return bucket.bots[i];
-      }
+  private getIdealRange(cls: TankClass): number {
+    if (cls === TankClass.SNIPER || cls === TankClass.ASSASSIN || cls === TankClass.RANGER || cls === TankClass.STALKER) {
+      return TUNING.combatRangeSniper;
     }
-    return null;
+    if (this.isRusher(cls)) return TUNING.combatRangeRusher;
+    return TUNING.combatRange;
+  }
+
+  private getMemory(botId: number): Memory {
+    const existing = this.memory.get(botId);
+    if (existing) return existing;
+    const created: Memory = {
+      stateLatchUntil: 0,
+      stateLock: AIState.BASE_DEFENSE,
+      targetLockUntil: 0,
+      targetId: null,
+      strafeDir: botId % 2 === 0 ? 1 : -1,
+      strafeFlipTick: 0,
+      wanderAngle: (botId % 360) * (Math.PI / 180),
+      laneOffsetY: ((botId % 11) - 5) * 115,
+      laneBiasX: ((botId % 5) - 2) * 45,
+    };
+    this.memory.set(botId, created);
+    return created;
+  }
+
+  private getLaneAnchor(bot: IAITank, mem: Memory, depth: number): Vector2 {
+    const w = this.config.worldWidth;
+    const h = this.config.worldHeight;
+    const laneY = this.clamp(h * 0.5 + mem.laneOffsetY, 160, h - 160);
+    const laneX = bot.team === Team.BLUE
+      ? w * depth + mem.laneBiasX
+      : w * (1 - depth) - mem.laneBiasX;
+    return { x: this.clamp(laneX, 160, w - 160), y: laneY };
+  }
+
+  private getAllyFocusPenalty(targetId: number, allies: IAITank[]): number {
+    let focused = 0;
+    for (let i = 0; i < allies.length; i++) {
+      if (allies[i].aiTargetId === targetId) focused++;
+    }
+    return Math.min(1.25, focused * 0.28);
+  }
+
+  private getLaneAffinity(bot: IAITank, mem: Memory, point: Vector2): number {
+    const lane = this.getLaneAnchor(bot, mem, 0.58);
+    const dy = Math.abs(point.y - lane.y);
+    return Math.max(0, 0.35 - dy / 1800);
+  }
+
+  private randomLatch(seed: number, min: number, max: number): number {
+    const n = this.seeded01((seed ^ (this.tick * 2654435761)) >>> 0);
+    return min + Math.floor(n * (max - min + 1));
+  }
+
+  private seeded01(seed: number): number {
+    const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  private clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  private angleTo(from: Vector2, to: Vector2): number {
+    return Math.atan2(to.y - from.y, to.x - from.x);
   }
 
   private isSupport(cls: TankClass): boolean {
     return cls === TankClass.NURSE || cls === TankClass.DOCTOR || cls === TankClass.PLAGUE_DOCTOR;
   }
 
-  private isFarmer(cls: TankClass): boolean {
-    return cls === TankClass.PACIFIST_TRAINEE || cls === TankClass.MACHINE_GUN;
-  }
-
   private isRusher(cls: TankClass): boolean {
     return cls === TankClass.BOOSTER || cls === TankClass.FIGHTER || cls === TankClass.TRI_ANGLE || cls === TankClass.SPRAYER;
   }
 
-  private isExplorer(cls: TankClass): boolean {
-    return cls === TankClass.FLANK_GUARD || cls === TankClass.TWIN_FLANK || cls === TankClass.OVERSEER;
+  // Compatibility helper if a caller still expects this to be TDM-specific.
+  getMode(): GameMode {
+    return GameMode.TEAMS;
   }
 }
