@@ -72,6 +72,7 @@ const TUNING = {
   crowdSeparationRadius: 280,
   cohesionRadius: 620,
   fleeHealthRatio: 0.35,
+  criticalRetreatHealthRatio: 0.18,
   outnumberedMargin: 2,
   stateLatchMinTicks: 20,
   stateLatchMaxTicks: 30,
@@ -89,6 +90,9 @@ const TUNING = {
   shotObstructionRadius: 42,
   flankOffset: 150,
   hostileRepelRadius: 440,
+  aimTurnStepCombat: 0.22,
+  aimTurnStepFallback: 0.12,
+  aimDeadzone: 0.01,
 };
 
 export class TDMAISystem {
@@ -128,9 +132,9 @@ export class TDMAISystem {
     const mem = this.getMemory(bot.id);
     const sensed = this.sense(bot, players);
     const hpRatio = bot.health / Math.max(1, bot.maxHealth);
-    const dangerPressure = this.computeDangerPressure(bot, sensed.enemies, sensed.bullets);
-    const outnumbered = sensed.enemyCount >= sensed.allyCount + TUNING.outnumberedMargin;
-    const shouldRetreat = hpRatio <= TUNING.fleeHealthRatio || outnumbered || dangerPressure >= TUNING.dangerFleePressure;
+    const dangerPressure = this.computeDangerPressure(bot, sensed.enemies, sensed.bullets, sensed.farmTargets);
+    const shouldRetreat = hpRatio <= TUNING.criticalRetreatHealthRatio;
+    const supportAnchor = this.isSupport(bot.classType) ? this.findSupportAnchor(bot, sensed.allies, sensed.enemies) : null;
 
     const desiredTarget = this.pickTarget(bot, sensed.enemies, sensed.allies, mem);
     const farmTarget = !desiredTarget && !shouldRetreat ? this.pickFarmTarget(bot, sensed.farmTargets) : null;
@@ -146,7 +150,7 @@ export class TDMAISystem {
       bot.aiTargetId = target?.id ?? null;
       if (target) {
         const retreatAim = this.computeInterceptPoint(bot, target);
-        bot.aiTargetRot = this.angleTo(bot.pos, retreatAim);
+        this.setSmoothedAimRotation(bot, this.angleTo(bot.pos, retreatAim), false);
         bot.aiShooting = this.shouldTakeShot(bot, target, retreatAim, sensed.allies, AIState.FLEE);
       } else {
         bot.aiShooting = false;
@@ -157,21 +161,21 @@ export class TDMAISystem {
       bot.aiState = AIState.COMBAT;
       bot.aiTargetId = target.id;
       bot.aiShooting = this.shouldTakeShot(bot, target, aim, sensed.allies, AIState.COMBAT);
-      bot.aiTargetRot = this.angleTo(bot.pos, aim);
+      this.setSmoothedAimRotation(bot, this.angleTo(bot.pos, aim), true);
     } else {
       if (farmTarget) {
-        goal = this.movement.arriveForce(bot.pos, farmTarget.pos, 300, 20);
+        goal = this.computeFarmGoal(bot, farmTarget);
         bot.aiState = AIState.FARM;
         bot.aiTargetId = farmTarget.id;
         const aim = this.computeInterceptPoint(bot, farmTarget);
         bot.aiShooting = this.shouldTakeShot(bot, farmTarget, aim, sensed.allies, AIState.FARM);
-        bot.aiTargetRot = this.angleTo(bot.pos, aim);
+        this.setSmoothedAimRotation(bot, this.angleTo(bot.pos, aim), true);
       } else {
         goal = this.computeDefenseGoal(bot, mem);
         bot.aiState = AIState.BASE_DEFENSE;
         bot.aiTargetId = null;
         bot.aiShooting = false;
-        if (Vector.magSq(bot.vel) > 0.001) bot.aiTargetRot = Math.atan2(bot.vel.y, bot.vel.x);
+        if (Vector.magSq(bot.vel) > 0.001) this.setSmoothedAimRotation(bot, Math.atan2(bot.vel.y, bot.vel.x), false);
       }
     }
 
@@ -196,6 +200,13 @@ export class TDMAISystem {
     const boids = this.getBoidWeights(bot.classType);
     let steering = ZERO;
     steering = this.movement.blendSteering(steering, goal, shouldRetreat ? 1.45 : 1.2);
+    if (supportAnchor) {
+      steering = this.movement.blendSteering(
+        steering,
+        this.computeSupportAnchorForce(bot, supportAnchor, target),
+        bot.aiState === AIState.FLEE ? 0.45 : 1.18
+      );
+    }
     steering = this.movement.blendSteering(steering, sep, boids.separation);
     steering = this.movement.blendSteering(steering, crowdRepel, 1.5);
     steering = this.movement.blendSteering(steering, hostileRepel, state === AIState.COMBAT ? 0.82 : 0.45);
@@ -300,7 +311,23 @@ export class TDMAISystem {
       const supportWindow = this.countFriendlyPressureAt(e.pos, allies, 310);
       const coverWindow = this.countEnemyPressureAt(e.id, e.pos, enemies, 310);
       const interceptPenalty = this.getInterceptDifficulty(bot, e);
-      const score = 900000 / d2 + lowHp + focus + laneAffinity + supportWindow - coverWindow - interceptPenalty - focusPenalty;
+      const overextendPenalty = this.getEnemySafeZonePenalty(bot.team, e.pos);
+      const collapsePenalty = Math.max(0, coverWindow - supportWindow) * 0.72;
+      const isolationBonus = Math.max(0, 0.42 - coverWindow * 0.2);
+      const reachableBonus = Math.max(0, 0.3 - interceptPenalty * 0.5);
+      const score =
+        900000 / d2 +
+        lowHp +
+        focus +
+        laneAffinity +
+        supportWindow +
+        isolationBonus +
+        reachableBonus -
+        coverWindow -
+        collapsePenalty -
+        overextendPenalty -
+        interceptPenalty -
+        focusPenalty;
       if (score > bestScore) {
         best = e;
         bestScore = score;
@@ -363,6 +390,34 @@ export class TDMAISystem {
     return this.movement.arriveForce(bot.pos, hold, 300, 20);
   }
 
+  private computeFarmGoal(bot: IAITank, target: Player): Vector2 {
+    const toTarget = Vector.sub(target.pos, bot.pos);
+    const distSq = Vector.magSq(toTarget);
+    const dist = Math.max(1, Math.sqrt(distSq));
+    const dir = Vector.normalize(toTarget);
+    const shapeRadius = this.getFarmTargetRadius(target);
+    const botRadius = this.getBotRadius(bot);
+    const panicRange = botRadius + shapeRadius + 90;
+    const holdRange = Math.max(175, shapeRadius + 235 + (target.type === 'CRASHER' ? 70 : 0));
+
+    if (dist < panicRange) {
+      return this.movement.composeSteering(
+        [
+          this.movement.fleeForce(bot.pos, target.pos),
+          { x: -dir.y, y: dir.x }
+        ],
+        [1.18, 0.34],
+        1.4
+      );
+    }
+
+    const anchor = {
+      x: target.pos.x - dir.x * holdRange,
+      y: target.pos.y - dir.y * holdRange
+    };
+    return this.movement.arriveForce(bot.pos, anchor, 250, 24);
+  }
+
   private pickFarmTarget(bot: IAITank, farmTargets: Player[]): Player | null {
     if (farmTargets.length === 0) return null;
     let best: Player | null = null;
@@ -375,7 +430,7 @@ export class TDMAISystem {
       const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, f) ? 0.48 : 1;
       const shapeRadius = this.getFarmTargetRadius(f);
       const botRadius = this.getBotRadius(bot);
-      const bodyRiskPenalty = d2 < (botRadius + shapeRadius + 28) * (botRadius + shapeRadius + 28) ? 0.25 : 1;
+      const bodyRiskPenalty = d2 < (botRadius + shapeRadius + 48) * (botRadius + shapeRadius + 48) ? 0.15 : 1;
       const score = ((xp * rarityBoost) / Math.sqrt(d2)) * antiOverlap * bodyRiskPenalty;
       if (score > bestScore) {
         best = f;
@@ -411,7 +466,7 @@ export class TDMAISystem {
 
   private computeFarmObstacleRepel(bot: IAITank, farmTargets: Player[], committedTargetId: number | null, state: TacticalState): Vector2 {
     if (farmTargets.length === 0) return ZERO;
-    const avoidRadius = (state === AIState.COMBAT || state === AIState.FLEE ? 250 : 215);
+    const avoidRadius = (state === AIState.COMBAT || state === AIState.FLEE ? 290 : state === AIState.HUNT ? 255 : 235);
     const avoidR2 = avoidRadius * avoidRadius;
     let fx = 0;
     let fy = 0;
@@ -423,14 +478,14 @@ export class TDMAISystem {
       const dy = bot.pos.y - target.pos.y;
       const d2 = Math.max(1, dx * dx + dy * dy);
       const radius = this.getFarmTargetRadius(target);
-      const personalSpace = this.getBotRadius(bot) + radius + 54;
+      const personalSpace = this.getBotRadius(bot) + radius + 80;
       const personalR2 = personalSpace * personalSpace;
       if (d2 > avoidR2 && d2 > personalR2) continue;
       const d = Math.sqrt(d2);
       const pressureRadius = Math.max(avoidRadius, personalSpace);
       const closeness = 1 - Math.min(1, d / pressureRadius);
-      const typeWeight = target.type === 'CRASHER' ? 2.15 : target.type === 'BOSS' ? 1.5 : 1.18;
-      const urgency = d2 <= personalR2 ? 1.85 : 1.0;
+      const typeWeight = target.type === 'CRASHER' ? 2.45 : target.type === 'BOSS' ? 1.7 : 1.28;
+      const urgency = d2 <= personalR2 ? 2.25 : 1.0;
       const weight = closeness * closeness * typeWeight * urgency;
       fx += (dx / d) * weight;
       fy += (dy / d) * weight;
@@ -574,6 +629,15 @@ export class TDMAISystem {
         : ideal * 1.45;
     if (dist > maxRange) return false;
     if (state === AIState.FLEE && dist > ideal * 0.82 && ((target.health ?? 100) / Math.max(1, target.maxHealth ?? 100)) > 0.38) return false;
+    if (target.type === 'CRASHER' && dist < this.getFarmTargetRadius(target) + this.getBotRadius(bot) + 120) return false;
+    const confidence = this.getShotConfidence(bot, target, dist, state);
+    const threshold =
+      state === AIState.FLEE
+        ? 0.7
+        : target.type === 'SHAPE' || target.type === 'CRASHER' || target.type === 'BOSS'
+          ? 0.42
+          : 0.52;
+    if (confidence < threshold) return false;
     return !this.hasFriendlyObstruction(bot.pos, aimPoint, allies);
   }
 
@@ -593,7 +657,7 @@ export class TDMAISystem {
     return false;
   }
 
-  private computeDangerPressure(bot: IAITank, enemies: Player[], bullets: Player[]): number {
+  private computeDangerPressure(bot: IAITank, enemies: Player[], bullets: Player[], farmTargets: Player[]): number {
     let pressure = 0;
     for (let i = 0; i < enemies.length; i++) {
       const d2 = Math.max(1, Vector.distSq(bot.pos, enemies[i].pos));
@@ -605,6 +669,15 @@ export class TDMAISystem {
       const d2 = Math.max(1, Vector.magSq(rel));
       const inbound = Vector.dot(rel, b.vel ?? ZERO) > 0 ? 1.3 : 0.32;
       pressure += (23000 / d2) * inbound;
+    }
+    for (let i = 0; i < farmTargets.length; i++) {
+      const target = farmTargets[i];
+      const radius = this.getFarmTargetRadius(target);
+      const personalSpace = this.getBotRadius(bot) + radius + 110;
+      const d2 = Math.max(1, Vector.distSq(bot.pos, target.pos));
+      if (d2 > personalSpace * personalSpace) continue;
+      const hazardWeight = target.type === 'CRASHER' ? 0.6 : target.type === 'BOSS' ? 0.42 : 0.18;
+      pressure += hazardWeight * (personalSpace * personalSpace / d2) * 0.22;
     }
     return pressure;
   }
@@ -700,6 +773,64 @@ export class TDMAISystem {
     return Math.max(0, 0.35 - dy / 1800);
   }
 
+  private findSupportAnchor(bot: IAITank, allies: IAITank[], enemies: Player[]): IAITank | null {
+    let best: IAITank | null = null;
+    let bestScore = -Infinity;
+    for (let i = 0; i < allies.length; i++) {
+      const ally = allies[i];
+      const hpRatio = ally.health / Math.max(1, ally.maxHealth);
+      if (hpRatio > 0.82) continue;
+      const d2 = Math.max(1, Vector.distSq(bot.pos, ally.pos));
+      const hostilePressure = this.countEnemyPressureAt(ally.id, ally.pos, enemies, 340);
+      const score = (1 - hpRatio) * 1.8 + hostilePressure * 0.55 + 260000 / d2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = ally;
+      }
+    }
+    return best;
+  }
+
+  private computeSupportAnchorForce(bot: IAITank, ally: IAITank, target: Player | null): Vector2 {
+    if (!target) {
+      return this.movement.arriveForce(bot.pos, ally.pos, 180, 18);
+    }
+
+    const toThreat = Vector.normalize(Vector.sub(target.pos, ally.pos));
+    const desired = {
+      x: ally.pos.x - toThreat.x * 120,
+      y: ally.pos.y - toThreat.y * 120
+    };
+    return this.movement.arriveForce(bot.pos, desired, 190, 18);
+  }
+
+  private getEnemySafeZonePenalty(botTeam: Team, point: Vector2): number {
+    let enemyZone: SafeZone | undefined;
+    for (let i = 0; i < this.config.safeZones.length; i++) {
+      const zone = this.config.safeZones[i];
+      if (zone.team !== Team.NONE && zone.team !== botTeam) {
+        enemyZone = zone;
+        break;
+      }
+    }
+    if (!enemyZone) return 0;
+    const dist = Math.sqrt(Math.max(1, Vector.distSq(point, enemyZone.center)));
+    if (dist >= enemyZone.radius * 1.08) return 0;
+    const normalized = 1 - Math.min(1, dist / Math.max(1, enemyZone.radius * 1.08));
+    return normalized * 0.9;
+  }
+
+  private getShotConfidence(bot: IAITank, target: Player, distance: number, state: AIState): number {
+    const targetSpeed = Math.sqrt(Vector.magSq(target.vel ?? ZERO));
+    const ideal = this.getIdealRange(bot.classType);
+    const travelPenalty = Math.min(0.58, (distance / Math.max(160, ideal * 1.18)) * 0.34);
+    const lateralPenalty = Math.min(0.36, targetSpeed * 0.022);
+    const finishBonus = ((target.health ?? 100) / Math.max(1, target.maxHealth ?? 100)) < 0.4 ? 0.12 : 0;
+    const farmBonus = target.type === 'SHAPE' || target.type === 'CRASHER' || target.type === 'BOSS' ? 0.18 : 0;
+    const fleePenalty = state === AIState.FLEE ? 0.18 : 0;
+    return Math.max(0, Math.min(1.2, 1 + finishBonus + farmBonus - travelPenalty - lateralPenalty - fleePenalty));
+  }
+
   private randomLatch(seed: number, min: number, max: number): number {
     const n = this.seeded01((seed ^ (this.tick * 2654435761)) >>> 0);
     return min + Math.floor(n * (max - min + 1));
@@ -716,6 +847,23 @@ export class TDMAISystem {
 
   private angleTo(from: Vector2, to: Vector2): number {
     return Math.atan2(to.y - from.y, to.x - from.x);
+  }
+
+  private setSmoothedAimRotation(bot: IAITank, desiredAngle: number, combatTracking: boolean): void {
+    if (!Number.isFinite(bot.aiTargetRot)) {
+      bot.aiTargetRot = desiredAngle;
+      return;
+    }
+    const diff = this.normalizeAngle(desiredAngle - bot.aiTargetRot);
+    if (Math.abs(diff) <= TUNING.aimDeadzone) return;
+    const step = combatTracking ? TUNING.aimTurnStepCombat : TUNING.aimTurnStepFallback;
+    bot.aiTargetRot = this.normalizeAngle(bot.aiTargetRot + diff * step);
+  }
+
+  private normalizeAngle(angle: number): number {
+    while (angle > Math.PI) angle -= Math.PI * 2;
+    while (angle < -Math.PI) angle += Math.PI * 2;
+    return angle;
   }
 
   private isSupport(cls: TankClass): boolean {

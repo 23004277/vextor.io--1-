@@ -98,6 +98,20 @@ function getTeamProjectileColor(team: Team): string {
     return COLORS.barrel;
 }
 
+function stripInjectedTeamPrefix(name: string): string {
+    return name.replace(/^(?:[\*\u25c6\u25cf]\s*)?(?:BLU|BLUE|RED)\s+/i, '').trim();
+}
+
+function formatDisplayCallsign(name: string, fallback = 'Unknown Unit'): string {
+    const stripped = stripInjectedTeamPrefix(String(name || ''));
+    const spaced = stripped
+        .replace(/[_-]+/g, ' ')
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return spaced || fallback;
+}
+
 function resolveDamageOwnerId(engine: GameEngine | undefined, sourceId: number | null): number | null {
     if (!engine || sourceId === null) return sourceId;
     const source = engine.entities.find((entity: Entity) => entity.id === sourceId);
@@ -484,8 +498,6 @@ class Entity {
 
   drawName(ctx: CanvasRenderingContext2D) {
     ctx.save();
-    const prefix = this.team === Team.BLUE ? '*' : this.team === Team.RED ? '*' : '';
-    const teamName = this.team === Team.BLUE ? 'BLU' : this.team === Team.RED ? 'RED' : '';
     const teamColor = this.team === Team.BLUE ? '#38bdf8' : this.team === Team.RED ? '#f87171' : '#ffffff';
     const engine = (window as any).gameEngine as GameEngine | undefined;
     const perspectiveTeam = engine?.player?.team ?? Team.NONE;
@@ -508,15 +520,17 @@ class Entity {
     ctx.textBaseline = 'bottom';
     const yOffset = -this.radius - 12; 
     ctx.translate(this.pos.x, this.pos.y);
-    const renderName = teamName ? `${prefix} ${teamName} ${finalAllyHint}${this.name}` : this.name;
+    const renderName = `${finalAllyHint}${formatDisplayCallsign(this.name, 'Unknown Unit')}`;
     ctx.strokeText(renderName, 0, yOffset);
     ctx.fillText(renderName, 0, yOffset);
-    if (teamName) {
-        const textWidth = ctx.measureText(renderName).width;
-        const tagWidth = Math.min(48, Math.max(22, textWidth * 0.25));
+    const textWidth = ctx.measureText(renderName).width;
+    if (this.team !== Team.NONE) {
         ctx.fillStyle = teamColor;
-        ctx.globalAlpha = 0.9;
-        ctx.fillRect(-textWidth * 0.5, yOffset + 2, tagWidth, 2);
+        ctx.globalAlpha = 0.95;
+        ctx.beginPath();
+        ctx.arc(-(textWidth * 0.5) - 10, yOffset - 7, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(-textWidth * 0.5, yOffset + 2, Math.min(54, Math.max(24, textWidth * 0.24)), 2);
     }
     ctx.restore();
   }
@@ -6775,14 +6789,19 @@ export class GameEngine {
     const zone = this.spawnZones[zoneIndex];
     const center = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
     const distNorm = Math.min(1, Vector.dist({ x: zone.cx, y: zone.cy }, center) / (Math.hypot(CANVAS_WIDTH, CANVAS_HEIGHT) * 0.5));
+    const shapePressure = this.zoneShapeCounts[zoneIndex] || 0;
+    const playerPressure = this.zonePlayerPressure[zoneIndex] || 0;
+    const quietness = Math.max(0, Math.min(1, (4 - playerPressure) / 4));
+    const lowDensity = Math.max(0, Math.min(1, (8 - shapePressure) / 8));
+    const commonBias = quietness * 0.6 + lowDensity * 0.4;
     const roll = Math.random();
 
     if (this.gameMode === GameMode.TEAMS) {
       const midBias = 1 - distNorm;
-      const octThresh = 0.0012 + midBias * 0.008;
-      const hexThresh = octThresh + (0.007 + midBias * 0.018);
-      const pentThresh = hexThresh + (0.036 + midBias * 0.05);
-      const triThresh = pentThresh + 0.61;
+      const octThresh = Math.max(0.0004, 0.0012 + midBias * 0.008 - commonBias * 0.001);
+      const hexThresh = octThresh + Math.max(0.003, 0.007 + midBias * 0.018 - commonBias * 0.006);
+      const pentThresh = hexThresh + Math.max(0.018, 0.036 + midBias * 0.05 - commonBias * 0.018);
+      const triThresh = Math.min(0.92, pentThresh + 0.61 + commonBias * 0.085);
       if (roll < octThresh) return ShapeType.OCTAGON;
       if (roll < hexThresh) return ShapeType.HEXAGON;
       if (roll < pentThresh) return ShapeType.PENTAGON;
@@ -6790,10 +6809,14 @@ export class GameEngine {
       return ShapeType.SQUARE;
     }
 
-     if (roll < 0.0018) return ShapeType.OCTAGON;
-    if (roll < 0.0085) return ShapeType.HEXAGON;
-    if (roll < 0.028) return ShapeType.PENTAGON;
-    if (roll < 0.57) return ShapeType.TRIANGLE;
+    const octThresh = Math.max(0.0007, 0.0018 - commonBias * 0.0006);
+    const hexThresh = octThresh + Math.max(0.0035, 0.0067 - commonBias * 0.0022);
+    const pentThresh = hexThresh + Math.max(0.012, 0.0195 - commonBias * 0.006);
+    const triThresh = Math.min(0.9, pentThresh + 0.542 + commonBias * 0.09);
+    if (roll < octThresh) return ShapeType.OCTAGON;
+    if (roll < hexThresh) return ShapeType.HEXAGON;
+    if (roll < pentThresh) return ShapeType.PENTAGON;
+    if (roll < triThresh) return ShapeType.TRIANGLE;
     return ShapeType.SQUARE;
   }
 
@@ -10287,6 +10310,7 @@ export class GameEngine {
   applyTankMovement(tank: Tank, dir: Vector2) { 
     if (Vector.mag(dir) > 0) {
       const isRamClass = tank.classType === TankClass.TRI_ANGLE || tank.classType === TankClass.BOOSTER || tank.classType === TankClass.FIGHTER;
+      const isBossClass = this.isBossClass(tank.classType);
       const weightPenalty = tank.stats[StatType.BODY_DAMAGE] * 0.12;
       const rawSpeedStat = tank.stats[StatType.MOVEMENT_SPEED];
       const speedSoftcap = 5;
@@ -10294,6 +10318,17 @@ export class GameEngine {
       const dampedSpeedStat = rawSpeedStat - overflow + overflow * 0.42;
       const speedBonus = dampedSpeedStat * 0.6;
       let effectiveSpeed = Math.max(1.8, BASE_STATS.speed + speedBonus - weightPenalty);
+
+      if (isBossClass) {
+        const bossSpeedCap =
+          tank.classType === TankClass.CELESTIAL ? 2.35 :
+          tank.classType === TankClass.LEVIATHAN ? 1.82 :
+          tank.classType === TankClass.WARLORD ? 1.58 :
+          tank.classType === TankClass.OBLITERATOR ? 1.3 :
+          1.5;
+        effectiveSpeed = Math.min(effectiveSpeed, bossSpeedCap);
+        effectiveSpeed *= tank.classType === TankClass.WARLORD && (tank as Tank).isSiegeMode ? 0.82 : 1;
+      }
 
       if (isRamClass) {
         // Keep high-speed identity but cap extreme stack cases.
@@ -10323,6 +10358,20 @@ export class GameEngine {
       while (diff < -Math.PI) diff += Math.PI * 2;
       tank.chassisRotation += diff * 0.15;
     }
+  }
+
+  private syncTankBarrelsForClass(tank: Tank, preserveCooldowns = false) {
+      const resolvedBarrels = TANK_CONFIGS[tank.classType] ?? TANK_CONFIGS[TankClass.BASIC];
+      tank.barrels = resolvedBarrels;
+      const barrelCount = resolvedBarrels.length;
+      tank.barrelCooldowns = preserveCooldowns
+        ? Array.from({ length: barrelCount }, (_, i) => tank.barrelCooldowns[i] || 0)
+        : new Array(barrelCount).fill(0);
+      tank.barrelMaxCooldowns = preserveCooldowns
+        ? Array.from({ length: barrelCount }, (_, i) => tank.barrelMaxCooldowns[i] || 100)
+        : new Array(barrelCount).fill(100);
+      tank.barrelHeat = Array.from({ length: barrelCount }, (_, i) => tank.barrelHeat[i] || 0);
+      tank.barrelRecoilOffsets = Array.from({ length: barrelCount }, (_, i) => tank.barrelRecoilOffsets[i] || 0);
   }
   
   findNearest(origin: Entity, targets: Entity[]): Entity | null { let nearest = null; let minDst = Infinity; for (const t of targets) { const d = Vector.dist(origin.pos, t.pos); if (d < minDst) { minDst = d; nearest = t; } } return nearest; }
@@ -10377,11 +10426,8 @@ export class GameEngine {
               .map((e) => clean((e as Tank).name).toLowerCase())
       );
 
-      const pool = BOT_NAMES.map(clean).filter((n) => n.length > 0);
+      const pool = BOT_NAMES.map((name) => clean(stripInjectedTeamPrefix(name))).filter((n) => n.length > 0);
       let base = pool[Math.floor(Math.random() * pool.length)] || 'Vextor Unit';
-
-      const teamPrefix = team === Team.BLUE ? 'BLU' : team === Team.RED ? 'RED' : 'BOT';
-      base = `${teamPrefix} ${base}`;
 
       if (!activeNames.has(base.toLowerCase())) return base;
 
@@ -11417,16 +11463,14 @@ export class GameEngine {
       }
 
       this.adaptClassUpgradesForSwitch(tank, oldClass, newClass);
-      tank.classType = newClass; tank.barrels = TANK_CONFIGS[newClass];
-      tank.barrelCooldowns = new Array(tank.barrels.length).fill(0);
-      tank.barrelMaxCooldowns = new Array(tank.barrels.length).fill(100);
-      tank.barrelHeat = new Array(tank.barrels.length).fill(0);
-      tank.barrelRecoilOffsets = new Array(tank.barrels.length).fill(0);
+      tank.classType = newClass;
+      this.syncTankBarrelsForClass(tank);
       tank.machineHeat = 0;
       tank.machineSpin = 0;
       tank.nextBarrelIndex = 0;
       
       tank.updateStats(); // Ensure aura radii and other constants are calculated immediately
+      this.syncTankBarrelsForClass(tank);
       
       const isBoss = this.isBossClass(newClass);
       if (isBoss) {

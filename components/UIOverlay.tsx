@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GameMode, GameSettings, GameState, HighScoreEntry, PlayerState, StatType, TankClass, Team, ShapeType, ShapeRarity } from '../types';
 import { CLASS_TREE, COLORS, STAT_COLORS, TANK_CONFIGS } from '../constants';
@@ -41,6 +41,16 @@ const SANDBOX_TAB_META: Record<SandboxTab, { label: string; icon: any; hint: str
   SYSTEM: { label: 'World', icon: Cpu, hint: 'Simulation controls' },
   RESEARCH: { label: 'Tanks', icon: FlaskConical, hint: 'Class research and swap' },
   SPAWN: { label: 'Entities', icon: Boxes, hint: 'Spawner and templates' },
+};
+
+const formatDisplayName = (value: string | null | undefined): string => {
+  const stripped = String(value || '')
+    .replace(/^(?:[\*\u25c6\u25cf]\s*)?(?:BLU|BLUE|RED)\s+/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return stripped || 'Unknown';
 };
 
 const CLASS_CATEGORIES = [
@@ -142,6 +152,10 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   const [researchQuery, setResearchQuery] = useState('');
   const [researchSector, setResearchSector] = useState<string>('ALL');
   const [sandboxButtonPulse, setSandboxButtonPulse] = useState(false);
+  const [displayHealthValue, setDisplayHealthValue] = useState(health);
+  const [displayXpPercent, setDisplayXpPercent] = useState(0);
+  const healthTweenRef = useRef<number>(health);
+  const xpTweenRef = useRef<number>(0);
 
   const resolvePreviewClass = (cls: TankClass): TankClass => {
     // Fallback keeps research grid stable if a future class key is renamed but not yet remapped.
@@ -201,6 +215,34 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       return () => clearTimeout(timer);
     }
   }, [availableStatPoints, showStandardUpgrades]);
+
+  useEffect(() => {
+    let rafId = 0;
+    const targetHealth = Math.max(0, health);
+    const targetXpPercent = xpPercent;
+
+    const animate = () => {
+      const nextHealth = healthTweenRef.current + (targetHealth - healthTweenRef.current) * 0.22;
+      const nextXp = xpTweenRef.current + (targetXpPercent - xpTweenRef.current) * 0.14;
+
+      healthTweenRef.current = Math.abs(nextHealth - targetHealth) < 0.08 ? targetHealth : nextHealth;
+      xpTweenRef.current = Math.abs(nextXp - targetXpPercent) < 0.08 ? targetXpPercent : nextXp;
+
+      setDisplayHealthValue(healthTweenRef.current);
+      setDisplayXpPercent(xpTweenRef.current);
+
+      if (
+        Math.abs(healthTweenRef.current - targetHealth) > 0.01 ||
+        Math.abs(xpTweenRef.current - targetXpPercent) > 0.01
+      ) {
+        rafId = window.requestAnimationFrame(animate);
+      }
+    };
+
+    rafId = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [health, xpPercent]);
+
   const topFiveLeaderboard = useMemo(() => leaderboard.slice(0, 5), [leaderboard]);
 
   if (isDead) {
@@ -533,7 +575,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                              <div className="w-7 h-7 rounded-md bg-black/40 border border-white/10 flex items-center justify-center overflow-hidden">
                                <TankPreview tankClass={iconClass} size={18} />
                              </div>
-                              <span className="truncate font-black tracking-wide">{String(entry.name || '').replace(/[_]+/g, ' ').trim() || 'Unknown'}</span>
+                              <span className="truncate font-black tracking-wide">{formatDisplayName(entry.name)}</span>
                              <span className="font-mono text-[11px] text-white/75">{formatScoreValue(entry.score, settings.compactScoreNotation)}</span>
                           </div>
                            );
@@ -1095,14 +1137,14 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                  </div>
                )}
              </div>
-           <div className="w-full h-4 mb-1.5 bg-black/60 rounded-full border border-gray-600/50 relative shadow-lg overflow-hidden group">
-               <div className={`h-full transition-all duration-200 ease-out relative ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (health / maxHealth) * 100)}%` }} />
-               <div className="absolute inset-0 flex items-center justify-center text-[9px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] z-10 tracking-wider">{Math.ceil(health)} / {Math.ceil(maxHealth)}</div>
-           </div>
-           <div className="w-full h-4 bg-black/60 rounded-full border border-gray-600/50 relative shadow-xl overflow-hidden group">
-              <div className="h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-700 ease-out relative" style={{ width: `${xpPercent}%` }}></div>
-              <div className="absolute inset-0 flex items-center justify-center text-[9px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] z-10 tracking-wider"><span>{Math.floor(xpPercent)}%</span></div>
-           </div>
+            <div className="w-full h-4 mb-1.5 bg-black/60 rounded-full border border-gray-600/50 relative shadow-lg overflow-hidden group">
+                <div className={`h-full transition-all duration-75 ease-out relative ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / maxHealth) * 100)}%` }} />
+                <div className="absolute inset-0 flex items-center justify-center text-[9px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] z-10 tracking-wider">{Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}</div>
+            </div>
+            <div className="w-full h-4 bg-black/60 rounded-full border border-gray-600/50 relative shadow-xl overflow-hidden group">
+               <div className="h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-75 ease-out relative" style={{ width: `${displayXpPercent}%` }}></div>
+               <div className="absolute inset-0 flex items-center justify-center text-[9px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] z-10 tracking-wider"><span>{Math.floor(displayXpPercent)}%</span></div>
+            </div>
         </div>
       </div>
     </div>

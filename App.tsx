@@ -1,5 +1,6 @@
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import GameCanvas from './components/GameCanvas';
 import UIOverlay from './components/UIOverlay';
 import CustomCursor from './components/CustomCursor';
@@ -16,8 +17,18 @@ import { COLORS, SHOP_ITEMS, ACHIEVEMENTS, UPDATE_LOG } from './constants';
 import { TankPreview } from './components/TankPreview';
 import { TacticalTooltip } from './components/TacticalTooltip';
 import { MainMenu } from './components/MainMenu';
+import { BackgroundMusic } from './Background Music';
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
+
+const SUPPORT_RANK_META: Record<User['supporterRank'], { label: string; accent: string; glow: string; tone: string }> = {
+  standard: { label: 'Standard', accent: '#67e8f9', glow: 'rgba(103,232,249,0.16)', tone: 'Field access' },
+  rank1: { label: 'Sovereign', accent: '#fbbf24', glow: 'rgba(251,191,36,0.2)', tone: 'Primary resonance' },
+  rank2: { label: 'Elite', accent: '#a78bfa', glow: 'rgba(167,139,250,0.18)', tone: 'Command resonance' },
+  rank3: { label: 'Patron', accent: '#34d399', glow: 'rgba(52,211,153,0.18)', tone: 'Support resonance' },
+};
+
+const SUPPORT_OPTIONS = [5, 25, 100] as const;
 
 const DEFAULT_SETTINGS: GameSettings = {
     volume: 0.15,
@@ -100,6 +111,7 @@ const App: React.FC = () => {
   const [newlyUnlocked, setNewlyUnlocked] = useState<Achievement[]>([]);
   const [showAchievementPopup, setShowAchievementPopup] = useState(false);
   const [lastDeathReport, setLastDeathReport] = useState<{ moneyEarned: number; unlockedAchievements: number; unlockedQuests: number } | null>(null);
+  const [creditToast, setCreditToast] = useState<{ id: number; amount: number; total: number } | null>(null);
   
   const [gameMode, setGameMode] = useState<GameMode>(GameMode.FFA);
   const [selectedTeam, setSelectedTeam] = useState<Team>(Team.BLUE);
@@ -109,6 +121,9 @@ const App: React.FC = () => {
     volume: DEFAULT_SETTINGS.volume,
     musicVolume: DEFAULT_SETTINGS.musicVolume,
   });
+  const menuMusicRef = useRef<BackgroundMusic | null>(null);
+  const previousCurrencyRef = useRef<number | null>(null);
+  const currencyHydratedRef = useRef(false);
 
   // Tooltip State
   const [tooltip, setTooltip] = useState<{ label: string; desc?: string; visible: boolean }>({
@@ -133,6 +148,18 @@ const App: React.FC = () => {
   const selectedUpdate = useMemo<UpdateLogEntry>(() => {
     return UPDATE_LOG.find((entry) => entry.id === selectedUpdateId) ?? UPDATE_LOG[0];
   }, [selectedUpdateId]);
+
+  const supportRankMeta = useMemo(() => {
+    const rank = user?.supporterRank || 'standard';
+    return SUPPORT_RANK_META[rank];
+  }, [user?.supporterRank]);
+
+  const supportStatusText = useMemo(() => {
+    if (!user) return 'Sign in to track backing and activate supporter resonance.';
+    if (supportTxnBusy) return 'Processing uplink transaction...';
+    if (supportTxnMsg) return supportTxnMsg;
+    return `Live supporter standing: ${supportRankMeta.label}. Top 3 backing totals receive active skin resonance.`;
+  }, [supportRankMeta.label, supportTxnBusy, supportTxnMsg, user]);
 
   useEffect(() => {
     if (!showUpdateHistory) return;
@@ -162,6 +189,7 @@ const App: React.FC = () => {
 
     const unlockMainMenuAudio = () => {
       engine.sound.enable();
+      menuMusicRef.current?.start().catch(() => undefined);
     };
 
     window.addEventListener('pointerdown', unlockMainMenuAudio, { once: true });
@@ -172,6 +200,34 @@ const App: React.FC = () => {
       window.removeEventListener('keydown', unlockMainMenuAudio);
     };
   }, [engine]);
+
+  useEffect(() => {
+    const music = new BackgroundMusic();
+    music.setVolume(settings.musicVolume);
+    menuMusicRef.current = music;
+    return () => {
+      music.stop();
+      if (menuMusicRef.current === music) menuMusicRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const music = menuMusicRef.current;
+    if (!music) return;
+    music.setVolume(settings.musicVolume);
+  }, [settings.musicVolume]);
+
+  useEffect(() => {
+    const music = menuMusicRef.current;
+    if (!music) return;
+
+    if (isPlaying) {
+      music.pause();
+      return;
+    }
+
+    music.start().catch(() => undefined);
+  }, [isPlaying]);
 
   useEffect(() => {
     if (playerName) localStorage.setItem('vextor_pilot_name', playerName);
@@ -201,6 +257,41 @@ const App: React.FC = () => {
           }
       });
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      previousCurrencyRef.current = null;
+      currencyHydratedRef.current = false;
+      return;
+    }
+
+    const currentCurrency = user.currency || 0;
+    if (!currencyHydratedRef.current) {
+      previousCurrencyRef.current = currentCurrency;
+      currencyHydratedRef.current = true;
+      return;
+    }
+
+    const previousCurrency = previousCurrencyRef.current ?? currentCurrency;
+    if (currentCurrency > previousCurrency) {
+      const gain = currentCurrency - previousCurrency;
+      setCreditToast({
+        id: Date.now(),
+        amount: gain,
+        total: currentCurrency,
+      });
+    }
+
+    previousCurrencyRef.current = currentCurrency;
+  }, [user]);
+
+  useEffect(() => {
+    if (!creditToast) return;
+    const timer = window.setTimeout(() => {
+      setCreditToast((current) => (current?.id === creditToast.id ? null : current));
+    }, 2400);
+    return () => window.clearTimeout(timer);
+  }, [creditToast]);
 
   useEffect(() => {
     if (!engine || !user) return;
@@ -445,6 +536,32 @@ const App: React.FC = () => {
       <div className="hex-grid" />
       <div className="scanline" />
       <GameCanvas onStateUpdate={setGameState} onEngineInit={setEngine} onGameOver={handleGameOver} gameMode={gameMode} settings={settings} />
+
+      <AnimatePresence>
+        {creditToast && (
+          <motion.div
+            key={creditToast.id}
+            initial={{ opacity: 0, y: -28, scale: 0.92 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -18, scale: 0.96 }}
+            transition={{ type: 'spring', stiffness: 260, damping: 22 }}
+            className="pointer-events-none absolute top-5 left-1/2 z-[320] -translate-x-1/2"
+          >
+            <div className="min-w-[240px] rounded-2xl border border-amber-300/35 bg-[linear-gradient(135deg,rgba(24,18,6,0.96),rgba(54,40,10,0.94))] px-5 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/70">Credit Uplink</div>
+                  <div className="mt-1 text-2xl font-black tracking-tight text-amber-300">+{creditToast.amount.toLocaleString()} Credits</div>
+                </div>
+                <div className="rounded-xl border border-amber-200/20 bg-black/25 px-3 py-2 text-right">
+                  <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">Balance</div>
+                  <div className="mt-1 text-sm font-black text-white">{creditToast.total.toLocaleString()}</div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       
       {isPlaying && gameState && !isSpectating && (
         <OverlayErrorBoundary onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }}>
@@ -718,34 +835,162 @@ const App: React.FC = () => {
         )}
 
         {showSupport && (
-            <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/95 backdrop-blur-[40px] animate-in fade-in duration-300 p-4" onClick={() => setShowSupport(false)}>
-                <div className="w-full max-w-xl rounded-[3.5rem] bg-[#030303] border border-white/10 p-10 md:p-14 text-center shadow-[0_0_100px_rgba(0,0,0,1)]" onClick={e => e.stopPropagation()}>
-                    <div className="w-24 h-24 rounded-full bg-cyan-500/10 border-2 border-cyan-500/20 flex items-center justify-center mx-auto mb-10 group shadow-2xl">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-cyan-500 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    </div>
-                    <h2 className="text-4xl font-black text-white italic tracking-tighter uppercase mb-4">Command_Support</h2>
-                    <p className="text-white/40 text-[11px] font-bold uppercase tracking-widest leading-relaxed mb-4">Fuel development with command backing. Top 3 supporters receive rank-based skin resonance.</p>
-                    {user && (
-                      <p className="text-cyan-300/80 text-[11px] font-bold uppercase tracking-[0.2em] mb-6">
-                        Backing Total: {user.supportTotal || 0} | Rank: {(user.supporterRank || 'standard').toUpperCase()}
-                      </p>
-                    )}
-                    <div className="flex flex-col gap-4">
-                        <div className="grid grid-cols-3 gap-3">
-                          {[5, 25, 100].map((amt) => (
-                            <button
-                              key={amt}
-                              onClick={() => handleSupportAction(amt)}
-                              disabled={!user || supportTxnBusy}
-                              className="py-3 rounded-xl bg-white/5 border border-cyan-400/30 text-cyan-200 font-black text-[11px] uppercase tracking-[0.2em] disabled:opacity-40 hover:bg-cyan-500/10 transition-all"
-                            >
-                              +{amt}
-                            </button>
-                          ))}
+            <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 backdrop-blur-[28px] animate-in fade-in duration-300 p-4" onClick={() => setShowSupport(false)}>
+                <div
+                  className="w-full max-w-5xl overflow-hidden rounded-[2.25rem] border border-cyan-400/20 bg-[#030814] shadow-[0_30px_120px_rgba(0,0,0,0.82)]"
+                  onClick={e => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between gap-4 border-b border-white/10 bg-[linear-gradient(135deg,rgba(6,12,28,0.96),rgba(9,20,36,0.92))] px-6 py-5 md:px-8">
+                        <div className="flex items-center gap-4">
+                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-400/10 shadow-[0_0_30px_rgba(34,211,238,0.12)]">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-cyan-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                            </div>
+                            <div>
+                                <div className="text-[10px] font-black uppercase tracking-[0.32em] text-cyan-300/70">Support Terminal</div>
+                                <h2 className="mt-1 text-2xl md:text-3xl font-black uppercase tracking-[0.06em] text-white">Command Backing</h2>
+                            </div>
                         </div>
-                        {supportTxnMsg && <p className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/70">{supportTxnMsg}</p>}
-                        <a href="https://discord.gg/CSwJKCs4kW" target="_blank" rel="noopener noreferrer" className="w-full py-5 rounded-2xl bg-cyan-600 text-white font-black text-xs uppercase tracking-[0.4em] italic shadow-2xl hover:bg-cyan-500 transition-all">ESTABLISH_DISCORD_LINK</a>
-                        <button onClick={() => setShowSupport(false)} className="w-full py-5 rounded-2xl bg-white/5 border border-white/10 text-white/40 font-black text-xs uppercase tracking-[0.3em] italic hover:text-white transition-all">CLOSE_FREQUENCY</button>
+                        <button
+                          onClick={() => setShowSupport(false)}
+                          className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                    </div>
+
+                    <div className="grid gap-0 lg:grid-cols-[1.15fr_0.85fr]">
+                        <section className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_42%),linear-gradient(180deg,rgba(4,12,24,0.96),rgba(4,8,18,0.98))] px-6 py-6 md:px-8 lg:border-b-0 lg:border-r">
+                            <div className="flex flex-wrap items-center gap-3">
+                                <span className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200">
+                                  Live Rank: {supportRankMeta.label}
+                                </span>
+                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-white/55">
+                                  {supportRankMeta.tone}
+                                </span>
+                            </div>
+
+                            <div className="mt-6 grid gap-4 sm:grid-cols-3">
+                                <div className="rounded-[1.4rem] border border-white/10 bg-white/[0.035] p-4">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Backing Total</div>
+                                    <div className="mt-2 text-3xl font-black text-white">{(user?.supportTotal || 0).toLocaleString()}</div>
+                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/35">Points committed</div>
+                                </div>
+                                <div className="rounded-[1.4rem] border p-4" style={{ borderColor: `${supportRankMeta.accent}40`, background: supportRankMeta.glow }}>
+                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: `${supportRankMeta.accent}` }}>Active Resonance</div>
+                                    <div className="mt-2 text-2xl font-black text-white">{supportRankMeta.label}</div>
+                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/50">Skin blend tier</div>
+                                </div>
+                                <div className="rounded-[1.4rem] border border-white/10 bg-white/[0.035] p-4">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Network Status</div>
+                                    <div className="mt-2 text-lg font-black text-white">{user ? 'Linked' : 'Offline'}</div>
+                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/35">{user ? 'Account recognised' : 'Sign in required'}</div>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 rounded-[1.6rem] border border-white/10 bg-black/25 p-5">
+                                <div className="flex items-center justify-between gap-4">
+                                    <div>
+                                        <div className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-300/70">Terminal Brief</div>
+                                        <h3 className="mt-2 text-xl font-black text-white">Keep development active and visible.</h3>
+                                    </div>
+                                    <div className="hidden md:flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-white/45">
+                                        Top 3 = live rank holders
+                                    </div>
+                                </div>
+                                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                                    {[
+                                      { title: 'Resonance', body: 'Top supporters receive rank-based skin blending tied to their live standing.' },
+                                      { title: 'Visibility', body: 'Backing totals contribute to the active supporter leaderboard and recognition systems.' },
+                                      { title: 'Continuity', body: 'Your backing total stays on the account and updates the moment the uplink confirms.' }
+                                    ].map((item) => (
+                                      <div key={item.title} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/42">{item.title}</div>
+                                          <p className="mt-2 text-sm leading-6 text-white/68">{item.body}</p>
+                                      </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </section>
+
+                        <aside className="bg-[linear-gradient(180deg,rgba(8,10,18,0.98),rgba(5,7,14,0.98))] px-6 py-6 md:px-8">
+                            <div className="rounded-[1.75rem] border border-cyan-300/18 bg-white/[0.03] p-5">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-300/65">Contribution Uplink</div>
+                                        <h3 className="mt-2 text-lg font-black text-white">Choose a backing packet</h3>
+                                    </div>
+                                    <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${supportTxnBusy ? 'bg-amber-400/14 text-amber-200 border border-amber-300/20' : 'bg-emerald-400/12 text-emerald-200 border border-emerald-300/20'}`}>
+                                      {supportTxnBusy ? 'Processing' : 'Ready'}
+                                    </div>
+                                </div>
+
+                                <div className="mt-5 grid grid-cols-3 gap-3">
+                                    {SUPPORT_OPTIONS.map((amt) => (
+                                      <button
+                                        key={amt}
+                                        onClick={() => handleSupportAction(amt)}
+                                        disabled={!user || supportTxnBusy}
+                                        className="group rounded-[1.15rem] border border-cyan-300/25 bg-cyan-400/[0.06] px-3 py-4 text-left transition-all hover:border-cyan-200/40 hover:bg-cyan-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
+                                      >
+                                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-200/60">Packet</div>
+                                        <div className="mt-2 text-2xl font-black text-white">+{amt}</div>
+                                        <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35 group-hover:text-white/55">Backing pts</div>
+                                      </button>
+                                    ))}
+                                </div>
+
+                                <div className={`mt-5 rounded-[1.2rem] border px-4 py-3 ${supportTxnMsg ? 'border-cyan-300/20 bg-cyan-300/10' : 'border-white/10 bg-white/[0.03]'}`}>
+                                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/40">Uplink Status</div>
+                                    <p className="mt-2 text-sm leading-6 text-white/72">{supportStatusText}</p>
+                                </div>
+
+                                <div className="mt-5 rounded-[1.35rem] border border-white/10 bg-black/20 p-4">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/42">Live Rank Ladder</div>
+                                    <div className="mt-3 space-y-2">
+                                      {(['rank1', 'rank2', 'rank3'] as const).map((rankKey, idx) => {
+                                        const meta = SUPPORT_RANK_META[rankKey];
+                                        return (
+                                          <div key={rankKey} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
+                                              <div className="flex items-center gap-3">
+                                                  <span className="flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-black text-black" style={{ background: meta.accent }}>
+                                                    {idx + 1}
+                                                  </span>
+                                                  <div>
+                                                      <div className="text-sm font-black text-white">{meta.label}</div>
+                                                      <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/35">{meta.tone}</div>
+                                                  </div>
+                                              </div>
+                                              <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color: meta.accent }}>
+                                                Top {idx + 1}
+                                              </span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                                <a
+                                  href="https://discord.gg/CSwJKCs4kW"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center justify-center rounded-[1.25rem] border border-cyan-300/25 bg-cyan-500/85 px-5 py-4 text-center text-[11px] font-black uppercase tracking-[0.28em] text-white transition hover:bg-cyan-400"
+                                >
+                                  Open Discord Relay
+                                </a>
+                                <button
+                                  onClick={() => setShowSupport(false)}
+                                  className="rounded-[1.25rem] border border-white/10 bg-white/[0.04] px-5 py-4 text-[11px] font-black uppercase tracking-[0.28em] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+                                >
+                                  Close Terminal
+                                </button>
+                            </div>
+                        </aside>
                     </div>
                 </div>
             </div>

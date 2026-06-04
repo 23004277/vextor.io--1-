@@ -128,7 +128,7 @@ export const COLORS = {
 
 export const XP_CURVE_MULTIPLIER = 1.06; // Slower tier gates, smoother recursive XP scaling.
 export const MAX_LEVEL = 100;
-export const REBIRTH_LEVEL = 60;
+export const REBIRTH_LEVEL = 150;
 export const REBIRTH_AREA_POS = { x: 20000, y: 20000 };
 export const REBIRTH_AREA_SIZE = 2000;
 
@@ -460,11 +460,11 @@ export const CLASS_PROJECTILE_MODIFIERS: Partial<Record<TankClass, {
 // --- Shape Stats ---
 
 export const SHAPE_STATS: Record<ShapeType, { health: number; xp: number; damage: number; radius: number; color: string; sides: number }> = {
-    [ShapeType.SQUARE]: { health: 25, xp: 35, damage: 8, radius: 12.5, color: COLORS.square, sides: 4 },
-    [ShapeType.TRIANGLE]: { health: 80, xp: 110, damage: 14, radius: 18.75, color: COLORS.triangle, sides: 3 },
-    [ShapeType.PENTAGON]: { health: 300, xp: 360, damage: 20, radius: 31.25, color: COLORS.pentagon, sides: 5 },
-    [ShapeType.HEXAGON]: { health: 800, xp: 900, damage: 35, radius: 50, color: COLORS.hexagon, sides: 6 },
-    [ShapeType.OCTAGON]: { health: 2500, xp: 2200, damage: 60, radius: 110, color: COLORS.octagon, sides: 8 },
+    [ShapeType.SQUARE]: { health: 25, xp: 50, damage: 8, radius: 12.5, color: COLORS.square, sides: 4 },
+    [ShapeType.TRIANGLE]: { health: 80, xp: 145, damage: 14, radius: 18.75, color: COLORS.triangle, sides: 3 },
+    [ShapeType.PENTAGON]: { health: 300, xp: 440, damage: 20, radius: 31.25, color: COLORS.pentagon, sides: 5 },
+    [ShapeType.HEXAGON]: { health: 800, xp: 1080, damage: 35, radius: 50, color: COLORS.hexagon, sides: 6 },
+    [ShapeType.OCTAGON]: { health: 2500, xp: 2650, damage: 60, radius: 110, color: COLORS.octagon, sides: 8 },
 };
 
 export const BOSS_STATS: Record<string, { id: string; name: string; health: number; xp: number; radius: number; color: string; sides: number; description: string }> = {

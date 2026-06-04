@@ -485,7 +485,7 @@ export class AISystem {
     const postKillPaused = this.tick < memory.postKillPauseUntilTick;
 
     const rare = this.resolveRareHuntTarget(bot, neighbors, engine);
-    const hostile = this.pickBestHostile(bot, neighbors, engine.gameMode, projectilePressure, memory);
+    const hostile = this.pickBestHostile(bot, neighbors, engine.gameMode, projectilePressure, memory, world);
     const teamFightObjective = this.pickTeamFightObjective(bot, neighbors, engine.gameMode, memory);
     const portalIntent = this.pickPortalTransitTarget(bot, neighbors, engine, hpRatio, projectilePressure);
 
@@ -569,26 +569,24 @@ export class AISystem {
   private shouldFlee(bot: TankLike, hostile: any, hpRatio: number, projectilePressure: number, memory: BotMemory): boolean {
     const distanceSq = Vector.distSq(bot.pos, hostile.pos);
     const closeThreat = distanceSq < 585 * 585;
-    const heavyThreat = this.classThreatScore(hostile.classType) >= 0.45;
-    const pressurePanic = projectilePressure >= AI_TUNING.pressureFleeThreshold && hpRatio < 0.56;
-    const outclassed = heavyThreat && hpRatio < 0.42 && closeThreat;
+    void projectilePressure;
 
-    const threshold = memory.fleeHealthThreshold + Math.max(0, memory.cautionBias) * 0.1 - Math.max(0, memory.aggressionBias) * 0.06;
+    const threshold = Math.min(0.22, memory.fleeHealthThreshold * 0.72);
 
-    if ((hpRatio <= threshold && closeThreat) || pressurePanic || outclassed) {
+    if (hpRatio <= threshold && closeThreat) {
       memory.fleeLatchUntilTick = this.tick + AI_TUNING.fleeLatchTicks;
       return true;
     }
 
     return (
       memory.lastState === AIState.FLEE &&
-      hpRatio < Math.max(memory.fleeHealthThreshold + 0.12, AI_TUNING.fleeExitHpRatio) &&
+      hpRatio < Math.max(threshold + 0.08, 0.3) &&
       this.tick <= memory.fleeLatchUntilTick
     );
   }
 
   private isUnderImmediateDanger(hpRatio: number, projectilePressure: number): boolean {
-    return hpRatio < 0.28 || projectilePressure >= AI_TUNING.pressureFleeThreshold;
+    return hpRatio < 0.2 || (projectilePressure >= AI_TUNING.pressureFleeThreshold && hpRatio < 0.24);
   }
 
   private commitBehavior(bot: TankLike, result: ThinkResult): void {
@@ -656,7 +654,8 @@ export class AISystem {
     neighbors: any[],
     mode: GameMode,
     projectilePressure: number,
-    memory: BotMemory
+    memory: BotMemory,
+    world: WorldInfo
   ): any | null {
     let best: any = null;
     let bestScore = -Infinity;
@@ -692,6 +691,9 @@ export class AISystem {
       const closePressure = distance < 460 ? 0.26 : 0;
       const interceptPenalty = Math.min(0.55, Math.sqrt(Vector.magSq(e.vel || ZERO)) * (distance / 1500) * 0.08);
       const hostileCoverPenalty = this.countEnemyCoverAt(e, neighbors, mode, bot) * 0.18;
+      const collapsePenalty = Math.max(0, this.countEnemyCoverAt(e, neighbors, mode, bot) - alliedFocus * 1.35) * 0.14;
+      const safeZonePenalty = this.getEnemySafeZonePenalty(bot, e.pos, mode, world);
+      const isolationBonus = Math.max(0, 0.3 - this.countEnemyCoverAt(e, neighbors, mode, bot) * 0.06);
       const flankAffinity = this.getFlankAffinity(bot, e, memory);
 
       const score =
@@ -708,11 +710,14 @@ export class AISystem {
         bossHunter +
         rusherPressure +
         closePressure +
+        isolationBonus +
         flankAffinity -
         dangerPenalty -
         sniperClosePenalty -
         interceptPenalty -
-        hostileCoverPenalty;
+        hostileCoverPenalty -
+        collapsePenalty -
+        safeZonePenalty;
 
       if (this.tick < memory.targetLockUntilTick && memory.lastTargetId != null && e.id !== memory.lastTargetId) continue;
       if (score > bestScore) {
@@ -744,7 +749,7 @@ export class AISystem {
       const farmBias = 1 + memory.farmBias * 0.35;
 
       const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, e, neighbors) ? 0.42 : 1;
-      const bodyRiskPenalty = distanceSq < (bot.radius + ((typeof e.radius === 'number' ? e.radius : 20)) + 34) ** 2 ? 0.22 : 1;
+      const bodyRiskPenalty = distanceSq < (bot.radius + ((typeof e.radius === 'number' ? e.radius : 20)) + 54) ** 2 ? 0.12 : 1;
       const score = ((xp * 8500 * rarityBoost * bossBoost * crasherRisk * pressurePenalty * antiOverlap * farmBias * bodyRiskPenalty) / distanceSq);
 
       if (score > bestScore) {
@@ -937,7 +942,7 @@ export class AISystem {
     const anchor = this.computeEngageAnchor(bot, target, state, memory, neighbors, mode, range);
 
     if (distanceSq > range.max * range.max) {
-      return this.movement.arriveForce(bot.pos, anchor, state === AIState.FARM ? 245 : 315);
+      return this.movement.arriveForce(bot.pos, anchor, state === AIState.FARM ? 225 : 315);
     }
 
     if (distanceSq < range.min * range.min) {
@@ -1253,14 +1258,14 @@ export class AISystem {
       if (!this.isValidEntity(e) || !this.isFarmTarget(e)) continue;
       if (committedFarmId != null && e.id === committedFarmId) continue;
       const er = typeof e.radius === 'number' ? e.radius : 14;
-      const avoidRadius = bot.radius + er + AI_TUNING.farmShapeAvoidRadiusPadding + (avoidDuringCombat ? 28 : 0);
+      const avoidRadius = bot.radius + er + AI_TUNING.farmShapeAvoidRadiusPadding + (avoidDuringCombat ? 46 : 18);
       const dx = bot.pos.x - e.pos.x;
       const dy = bot.pos.y - e.pos.y;
       const distSq = dx * dx + dy * dy;
       if (distSq <= 0.0001 || distSq > avoidRadius * avoidRadius) continue;
       const dist = Math.sqrt(distSq);
       const closeness = 1 - Math.min(1, dist / avoidRadius);
-      const typeMult = e.type === EntityType.CRASHER ? 1.9 : avoidDuringCombat ? 1.45 : 1.15;
+      const typeMult = e.type === EntityType.CRASHER ? 2.2 : avoidDuringCombat ? 1.62 : 1.22;
       const w = (closeness * typeMult) / Math.max(24, dist);
       fx += dx * w;
       fy += dy * w;
@@ -1410,10 +1415,16 @@ export class AISystem {
       ? range.max * 1.05
       : range.max * (this.isSupportClass(bot.classType) ? 1.2 : 1.35);
     if (distance > maxRange) return false;
+    if (target.type === EntityType.CRASHER && distance < ((typeof target.radius === 'number' ? target.radius : 20) + bot.radius + 110)) return false;
     if (this.isShotLaneBlocked(bot, aimPos, neighbors)) return false;
 
     const shotConfidence = this.getShotConfidence(bot, target, distance, memory);
-    const threshold = bot.aiState === AIState.FLEE ? 0.7 : target.type === EntityType.SHAPE ? 0.34 : 0.48;
+    const threshold =
+      bot.aiState === AIState.FLEE
+        ? 0.7
+        : target.type === EntityType.SHAPE || target.type === EntityType.CRASHER || target.type === EntityType.BOSS
+          ? 0.4
+          : 0.5;
     return shotConfidence >= threshold;
   }
 
@@ -1752,6 +1763,17 @@ export class AISystem {
       pressure += (towardWeight / distanceSq) * 20000;
     }
 
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || !this.isFarmTarget(e)) continue;
+      const radius = typeof e.radius === 'number' ? e.radius : (e.type === EntityType.BOSS ? 72 : e.type === EntityType.CRASHER ? 24 : 18);
+      const dangerRadius = bot.radius + radius + (e.type === EntityType.CRASHER ? 120 : e.type === EntityType.BOSS ? 150 : 80);
+      const distanceSq = Vector.distSq(bot.pos, e.pos);
+      if (distanceSq <= 0.0001 || distanceSq > dangerRadius * dangerRadius) continue;
+      const hazardWeight = e.type === EntityType.CRASHER ? 0.5 : e.type === EntityType.BOSS ? 0.34 : 0.12;
+      pressure += hazardWeight * ((dangerRadius * dangerRadius) / distanceSq) * 0.18;
+    }
+
     return pressure;
   }
 
@@ -1846,6 +1868,19 @@ export class AISystem {
       if (Vector.distSq(e.pos, target.pos) <= 380 * 380) count++;
     }
     return Math.min(3, count);
+  }
+
+  private getEnemySafeZonePenalty(bot: TankLike, targetPos: Vector2, mode: GameMode, world: WorldInfo): number {
+    if (mode !== GameMode.TEAMS || bot.team === Team.NONE) return 0;
+    let distIntoEnemyZone = 0;
+    const enemyEdge = bot.team === Team.BLUE ? world.width - world.baseZoneWidth : world.baseZoneWidth;
+    if (bot.team === Team.BLUE && targetPos.x > enemyEdge - SAFE_ZONE_WARNING_RADIUS) {
+      distIntoEnemyZone = targetPos.x - (enemyEdge - SAFE_ZONE_WARNING_RADIUS);
+    } else if (bot.team === Team.RED && targetPos.x < enemyEdge + SAFE_ZONE_WARNING_RADIUS) {
+      distIntoEnemyZone = (enemyEdge + SAFE_ZONE_WARNING_RADIUS) - targetPos.x;
+    }
+    if (distIntoEnemyZone <= 0) return 0;
+    return Math.min(0.92, (distIntoEnemyZone / Math.max(1, SAFE_ZONE_WARNING_RADIUS)) * 0.92);
   }
 
   private getFlankAffinity(bot: TankLike, target: any, memory: BotMemory): number {

@@ -54,6 +54,7 @@ const SUPPORTER_RANKS = new Set(['standard', 'rank1', 'rank2', 'rank3']);
 const SHOP_ITEM_IDS = new Set(SHOP_ITEMS.map((item) => item.id));
 const TANK_CLASS_VALUES = new Set(Object.values(TankClass) as TankClass[]);
 const SECURITY_LOG_KEY = 'vextor_security_log';
+const RATE_LIMIT_STATE_KEY = 'vextor_rate_limit_state';
 const OPERATION_COOLDOWNS_MS = {
   stats: 1800,
   purchase: 700,
@@ -61,6 +62,18 @@ const OPERATION_COOLDOWNS_MS = {
   support: 900,
   score: 1800,
   callsign: 1500,
+} as const;
+const RATE_LIMIT_RULES = {
+  authLogin: { maxEvents: 5, windowMs: 60_000, penaltyMs: 120_000 },
+  authRegister: { maxEvents: 3, windowMs: 60_000, penaltyMs: 180_000 },
+  authGoogle: { maxEvents: 4, windowMs: 60_000, penaltyMs: 90_000 },
+  sessionRestore: { maxEvents: 8, windowMs: 60_000, penaltyMs: 45_000 },
+  statsWrite: { maxEvents: 4, windowMs: 45_000, penaltyMs: 90_000 },
+  purchase: { maxEvents: 6, windowMs: 30_000, penaltyMs: 60_000 },
+  equip: { maxEvents: 14, windowMs: 12_000, penaltyMs: 30_000 },
+  support: { maxEvents: 4, windowMs: 30_000, penaltyMs: 75_000 },
+  scoreSubmit: { maxEvents: 3, windowMs: 90_000, penaltyMs: 120_000 },
+  callsign: { maxEvents: 3, windowMs: 60_000, penaltyMs: 180_000 },
 } as const;
 const MAX_SESSION_SCORE = 25_000_000;
 const MAX_SESSION_LEVEL = 100;
@@ -70,6 +83,7 @@ const MAX_SESSION_TRANSFORMATIONS = 50;
 const MAX_SESSION_ELITE_DAMAGE = 25_000_000;
 const MAX_TOTAL_CURRENCY_REWARD = 500_000;
 const operationWindows = new Map<string, number>();
+const rateLimitMemory = new Map<string, { hits: number[]; blockedUntil: number }>();
 
 // ─── Firestore custom error reporting ───────────────────────────────────────
 
@@ -218,6 +232,74 @@ function beginOperationWindow(scope: keyof typeof OPERATION_COOLDOWNS_MS, actorI
   return true;
 }
 
+function loadRateLimitState(): void {
+  if (typeof window === 'undefined') return;
+  if (rateLimitMemory.size > 0) return;
+  try {
+    const raw = localStorage.getItem(RATE_LIMIT_STATE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, { hits?: number[]; blockedUntil?: number }>;
+    const now = Date.now();
+    for (const [key, value] of Object.entries(parsed || {})) {
+      if (!value || !Array.isArray(value.hits)) continue;
+      const hits = value.hits.filter((hit): hit is number => typeof hit === 'number' && Number.isFinite(hit) && hit > now - (10 * 60_000));
+      const blockedUntil = typeof value.blockedUntil === 'number' && Number.isFinite(value.blockedUntil) ? value.blockedUntil : 0;
+      if (hits.length > 0 || blockedUntil > now) rateLimitMemory.set(key, { hits, blockedUntil });
+    }
+  } catch {
+    // Ignore persistence corruption and rebuild from memory.
+  }
+}
+
+function persistRateLimitState(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const now = Date.now();
+    const payload: Record<string, { hits: number[]; blockedUntil: number }> = {};
+    for (const [key, value] of rateLimitMemory.entries()) {
+      const hits = value.hits.filter((hit) => hit > now - (10 * 60_000));
+      const blockedUntil = value.blockedUntil > now ? value.blockedUntil : 0;
+      if (hits.length === 0 && blockedUntil === 0) continue;
+      payload[key] = { hits, blockedUntil };
+    }
+    localStorage.setItem(RATE_LIMIT_STATE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore persistence failures; in-memory limiting still works this session.
+  }
+}
+
+function consumeRateLimit(scope: keyof typeof RATE_LIMIT_RULES, actorId: string): { ok: boolean; retryAfterMs: number } {
+  loadRateLimitState();
+  const now = Date.now();
+  const key = `${scope}:${actorId}`;
+  const rule = RATE_LIMIT_RULES[scope];
+  const current = rateLimitMemory.get(key) || { hits: [], blockedUntil: 0 };
+  const recentHits = current.hits.filter((hit) => hit > now - rule.windowMs);
+
+  if (current.blockedUntil > now) {
+    rateLimitMemory.set(key, { hits: recentHits, blockedUntil: current.blockedUntil });
+    persistRateLimitState();
+    return { ok: false, retryAfterMs: current.blockedUntil - now };
+  }
+
+  recentHits.push(now);
+  if (recentHits.length > rule.maxEvents) {
+    const blockedUntil = now + rule.penaltyMs;
+    rateLimitMemory.set(key, { hits: recentHits, blockedUntil });
+    persistRateLimitState();
+    return { ok: false, retryAfterMs: rule.penaltyMs };
+  }
+
+  rateLimitMemory.set(key, { hits: recentHits, blockedUntil: 0 });
+  persistRateLimitState();
+  return { ok: true, retryAfterMs: 0 };
+}
+
+function rateLimitMessage(retryAfterMs: number, fallback: string): string {
+  const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return `${fallback} Try again in ${seconds}s.`;
+}
+
 function sanitizeUnlockedEliteSkins(unlockedSkins: TankClass[]): TankClass[] {
   return Array.from(new Set((Array.isArray(unlockedSkins) ? unlockedSkins : []).filter((skin): skin is TankClass => TANK_CLASS_VALUES.has(skin))));
 }
@@ -363,6 +445,12 @@ export class BackendService {
    * never blocks the player entering the game.
    */
   static async login(username: string, password: string): Promise<AuthResponse> {
+    const loginActor = resolveAuthEmail(username);
+    const loginLimit = consumeRateLimit('authLogin', loginActor);
+    if (!loginLimit.ok) {
+      logSecurityEvent('auth_login_rate_limited', { actor: loginActor, retryAfterMs: loginLimit.retryAfterMs });
+      return { success: false, error: rateLimitMessage(loginLimit.retryAfterMs, 'Login requests are cooling down.') };
+    }
     try {
       const email = resolveAuthEmail(username);
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
@@ -433,6 +521,12 @@ export class BackendService {
   static async register(username: string, password: string): Promise<AuthResponse> {
     if (username.length < 3) return { success: false, error: 'Email or username must be at least 3 characters' };
     if (password.length < 6) return { success: false, error: 'Security key must be at least 6 characters' };
+    const registerActor = resolveAuthEmail(username);
+    const registerLimit = consumeRateLimit('authRegister', registerActor);
+    if (!registerLimit.ok) {
+      logSecurityEvent('auth_register_rate_limited', { actor: registerActor, retryAfterMs: registerLimit.retryAfterMs });
+      return { success: false, error: rateLimitMessage(registerLimit.retryAfterMs, 'Registration requests are cooling down.') };
+    }
 
     try {
       const email = resolveAuthEmail(username);
@@ -478,6 +572,12 @@ export class BackendService {
    * second one.
    */
   static async loginWithGoogle(): Promise<AuthResponse> {
+    const googleActor = auth.currentUser?.uid || 'google_popup';
+    const googleLimit = consumeRateLimit('authGoogle', googleActor);
+    if (!googleLimit.ok) {
+      logSecurityEvent('auth_google_rate_limited', { actor: googleActor, retryAfterMs: googleLimit.retryAfterMs });
+      return { success: false, error: rateLimitMessage(googleLimit.retryAfterMs, 'Google sign-in is cooling down.') };
+    }
     try {
       console.log('[Auth] Google popup sign-in start');
       const result = await withTimeout(
@@ -565,6 +665,11 @@ export class BackendService {
 
     try {
       const { uid } = JSON.parse(sessionStr);
+      const sessionLimit = consumeRateLimit('sessionRestore', uid || 'session_restore');
+      if (!sessionLimit.ok) {
+        logSecurityEvent('session_restore_rate_limited', { actor: uid || 'session_restore', retryAfterMs: sessionLimit.retryAfterMs });
+        return { success: false, error: rateLimitMessage(sessionLimit.retryAfterMs, 'Session restore is cooling down.') };
+      }
       console.log('[Auth] Restoring session start', { uid });
 
       // Only wait for the auth state listener when we genuinely do not
@@ -653,6 +758,11 @@ export class BackendService {
   ): Promise<{ user: User, newlyUnlocked: Achievement[], newlyUnlockedQuests: Quest[], currencyEarned: number } | null> {
     const currentUser = auth.currentUser;
     if (!currentUser) return null;
+    const statsBurst = consumeRateLimit('statsWrite', currentUser.uid);
+    if (!statsBurst.ok) {
+      logSecurityEvent('stats_burst_limited', { uid: currentUser.uid, retryAfterMs: statsBurst.retryAfterMs });
+      return null;
+    }
     if (!beginOperationWindow('stats', currentUser.uid)) {
       logSecurityEvent('stats_rate_limited', { uid: currentUser.uid });
       return null;
@@ -776,6 +886,11 @@ export class BackendService {
   static async purchaseItem(username: string, itemId: string): Promise<{ success: boolean, user?: User, error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Authentication missing' };
+    const purchaseBurst = consumeRateLimit('purchase', currentUser.uid);
+    if (!purchaseBurst.ok) {
+      logSecurityEvent('purchase_burst_limited', { uid: currentUser.uid, retryAfterMs: purchaseBurst.retryAfterMs, itemId });
+      return { success: false, error: rateLimitMessage(purchaseBurst.retryAfterMs, 'Armory requests are cooling down.') };
+    }
     if (!beginOperationWindow('purchase', currentUser.uid)) return { success: false, error: 'Armory sync cooling down' };
 
     const userDocPath = `users/${currentUser.uid}`;
@@ -823,6 +938,11 @@ export class BackendService {
   static async equipItem(username: string, itemId: string): Promise<{ success: boolean, user?: User, error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Credentials missing' };
+    const equipBurst = consumeRateLimit('equip', currentUser.uid);
+    if (!equipBurst.ok) {
+      logSecurityEvent('equip_burst_limited', { uid: currentUser.uid, retryAfterMs: equipBurst.retryAfterMs, itemId });
+      return { success: false, error: rateLimitMessage(equipBurst.retryAfterMs, 'Loadout changes are cooling down.') };
+    }
     if (!beginOperationWindow('equip', currentUser.uid)) return { success: false, error: 'Loadout sync cooling down' };
 
     const userDocPath = `users/${currentUser.uid}`;
@@ -877,6 +997,11 @@ export class BackendService {
   static async addSupportContribution(amount: number): Promise<{ success: boolean; user?: User; error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Credentials missing' };
+    const supportBurst = consumeRateLimit('support', currentUser.uid);
+    if (!supportBurst.ok) {
+      logSecurityEvent('support_burst_limited', { uid: currentUser.uid, retryAfterMs: supportBurst.retryAfterMs, amount });
+      return { success: false, error: rateLimitMessage(supportBurst.retryAfterMs, 'Support uplink is cooling down.') };
+    }
     if (!beginOperationWindow('support', currentUser.uid)) return { success: false, error: 'Support uplink cooling down' };
     const normalized = Math.max(1, Math.floor(amount || 0));
     const userDocRef = doc(db, 'users', currentUser.uid);
@@ -900,6 +1025,11 @@ export class BackendService {
   static async updateCallsign(nextCallsign: string): Promise<{ success: boolean; error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Credentials missing' };
+    const callsignBurst = consumeRateLimit('callsign', currentUser.uid);
+    if (!callsignBurst.ok) {
+      logSecurityEvent('callsign_burst_limited', { uid: currentUser.uid, retryAfterMs: callsignBurst.retryAfterMs });
+      return { success: false, error: rateLimitMessage(callsignBurst.retryAfterMs, 'Callsign updates are cooling down.') };
+    }
     if (!beginOperationWindow('callsign', currentUser.uid)) return { success: false, error: 'Callsign uplink cooling down' };
 
     const callsign = sanitizeCallsign(nextCallsign, '');
@@ -947,6 +1077,11 @@ export class BackendService {
     if (score <= 0) return;
 
     const actorId = userId || auth.currentUser?.uid || 'anonymous';
+    const scoreBurst = consumeRateLimit('scoreSubmit', actorId);
+    if (!scoreBurst.ok) {
+      logSecurityEvent('score_burst_limited', { actorId, retryAfterMs: scoreBurst.retryAfterMs, score });
+      return;
+    }
     if (!beginOperationWindow('score', actorId)) {
       logSecurityEvent('score_rate_limited', { actorId });
       return;
