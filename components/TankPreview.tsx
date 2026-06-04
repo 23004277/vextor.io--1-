@@ -13,7 +13,7 @@ interface TankPreviewProps {
     showArenaVfx?: boolean;
 }
 
-export const TankPreview: React.FC<TankPreviewProps> = ({ 
+const TankPreviewComponent: React.FC<TankPreviewProps> = ({ 
     tankClass, 
     color, 
     size = 60, 
@@ -652,5 +652,7 @@ export const TankPreview: React.FC<TankPreviewProps> = ({
         </svg>
     );
 };
+
+export const TankPreview = React.memo(TankPreviewComponent);
 
 

@@ -233,6 +233,9 @@ const AI_TUNING = {
   portalTransitCommitRadius: 340,
   contactForgetTicks: 600,
   dodgeForceMax: 1.5,
+  shotObstructionRadius: 42,
+  flankOffset: 145,
+  hostileRepelRadius: 430,
 };
 
 const RARE_RARITIES = new Set(['Legendary', 'Mythical', 'Eternal', 'Transcendent', 'Godly', 'Divine']);
@@ -687,6 +690,9 @@ export class AISystem {
       const sniperClosePenalty = memory.sessionArchetype === 'SNIPER' && distance < AI_TUNING.heavyMinRange ? 0.45 : 0;
       const rusherPressure = memory.sessionArchetype === 'RUSHER' && distance < 620 ? 0.45 : 0;
       const closePressure = distance < 460 ? 0.26 : 0;
+      const interceptPenalty = Math.min(0.55, Math.sqrt(Vector.magSq(e.vel || ZERO)) * (distance / 1500) * 0.08);
+      const hostileCoverPenalty = this.countEnemyCoverAt(e, neighbors, mode, bot) * 0.18;
+      const flankAffinity = this.getFlankAffinity(bot, e, memory);
 
       const score =
         proximityScore +
@@ -701,9 +707,12 @@ export class AISystem {
         revenge +
         bossHunter +
         rusherPressure +
-        closePressure -
+        closePressure +
+        flankAffinity -
         dangerPenalty -
-        sniperClosePenalty;
+        sniperClosePenalty -
+        interceptPenalty -
+        hostileCoverPenalty;
 
       if (this.tick < memory.targetLockUntilTick && memory.lastTargetId != null && e.id !== memory.lastTargetId) continue;
       if (score > bestScore) {
@@ -877,7 +886,8 @@ export class AISystem {
     const avoid = this.computeAvoidanceForce(bot, mode, world);
     const farmAvoid = this.computeFarmShapeAvoidanceForce(bot, neighbors, state);
     const dodge = this.computeDodgeForce(bot, frame);
-    const blendedAvoid = this.movement.composeSteering([avoid, farmAvoid, dodge], [1.0, 1.25, 1.2], 2.8);
+    const hostileRepel = this.computeHostileRepelForce(bot, neighbors, mode, target);
+    const blendedAvoid = this.movement.composeSteering([avoid, farmAvoid, dodge, hostileRepel], [1.0, 1.25, 1.2, 0.8], 2.8);
 
     return this.movement.composeSteeringWithPriority(blendedAvoid, squad, goal, AI_TUNING.maxSteering);
   }
@@ -899,7 +909,7 @@ export class AISystem {
     }
 
     if (state === AIState.COMBAT || state === AIState.FARM) {
-      return this.computeRangeControlForce(bot, target, state, memory);
+      return this.computeRangeControlForce(bot, target, state, memory, neighbors, mode);
     }
 
     if (state === AIState.HUNT || state === AIState.BODYGUARD) {
@@ -912,7 +922,7 @@ export class AISystem {
     return this.computeIdleClusterForce(bot, neighbors, memory);
   }
 
-  private computeRangeControlForce(bot: TankLike, target: any, state: AIState, memory: BotMemory): Vector2 {
+  private computeRangeControlForce(bot: TankLike, target: any, state: AIState, memory: BotMemory, neighbors: any[], mode: GameMode): Vector2 {
     const range = this.getPreferredRange(bot, state, target);
     const distanceSq = Vector.distSq(bot.pos, target.pos);
     if (state === AIState.FARM && this.isFarmTarget(target)) {
@@ -923,8 +933,10 @@ export class AISystem {
       }
     }
 
+    const anchor = this.computeEngageAnchor(bot, target, state, memory, neighbors, mode, range);
+
     if (distanceSq > range.max * range.max) {
-      return this.movement.arriveForce(bot.pos, target.pos, state === AIState.FARM ? 245 : 315);
+      return this.movement.arriveForce(bot.pos, anchor, state === AIState.FARM ? 245 : 315);
     }
 
     if (distanceSq < range.min * range.min) {
@@ -941,10 +953,11 @@ export class AISystem {
 
     const sideSign = memory.strafeDir;
     const strafe = { x: -toTarget.y * sideSign, y: toTarget.x * sideSign };
-    const hold = this.movement.arriveForce(bot.pos, target.pos, state === AIState.FARM ? 220 : 265, range.min);
+    const hold = this.movement.arriveForce(bot.pos, anchor, state === AIState.FARM ? 220 : 265, range.min * 0.82);
     const dodgeBias = this.getSmallDodgeBias(bot, target, memory);
+    const pressureBias = this.getPressureSidestep(bot, target, neighbors, mode);
 
-    return this.movement.composeSteering([strafe, hold, dodgeBias], [0.74, 0.38, 0.18], 1.35);
+    return this.movement.composeSteering([strafe, hold, dodgeBias, pressureBias], [0.74, 0.42, 0.18, 0.24], 1.35);
   }
 
   private computeFleeForce(bot: TankLike, target: any, neighbors: any[], mode: GameMode, memory: BotMemory): Vector2 {
@@ -976,6 +989,91 @@ export class AISystem {
     }
 
     return this.applyPanicFleeOffset(Vector.normalize({ x: fleeX, y: fleeY }), memory.panicFleeAngleOffset);
+  }
+
+  private computeEngageAnchor(
+    bot: TankLike,
+    target: any,
+    state: AIState,
+    memory: BotMemory,
+    neighbors: any[],
+    mode: GameMode,
+    range: { min: number; max: number }
+  ): Vector2 {
+    const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
+    const side = { x: -toTarget.y * memory.strafeDir, y: toTarget.x * memory.strafeDir };
+    const flankOffset = this.isSupportClass(bot.classType)
+      ? AI_TUNING.flankOffset * 1.1
+      : this.isHeavySniperClass(bot.classType)
+        ? AI_TUNING.flankOffset * 0.72
+        : AI_TUNING.flankOffset;
+
+    let enemyCenterX = 0;
+    let enemyCenterY = 0;
+    let enemyCount = 0;
+    let allySupport = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.id === bot.id || !this.isTankLike(e)) continue;
+      const nearTarget = Vector.distSq(e.pos, target.pos) <= 500 * 500;
+      if (!nearTarget) continue;
+      if (this.isFriendly(bot, e, mode)) allySupport++;
+      else if (e.id !== target.id) {
+        enemyCenterX += e.pos.x;
+        enemyCenterY += e.pos.y;
+        enemyCount++;
+      }
+    }
+
+    let coverBias = ZERO;
+    if (enemyCount > 0) {
+      const centroid = { x: enemyCenterX / enemyCount, y: enemyCenterY / enemyCount };
+      coverBias = this.movement.fleeForce(centroid, target.pos);
+    }
+
+    const coverDelta = Math.max(0, enemyCount - Math.max(0, allySupport - 1));
+    const pullback = range.min + coverDelta * 32 + (state === AIState.FARM ? 0 : 18);
+
+    return {
+      x: target.pos.x - toTarget.x * pullback + side.x * flankOffset + coverBias.x * 58,
+      y: target.pos.y - toTarget.y * pullback + side.y * flankOffset + coverBias.y * 58,
+    };
+  }
+
+  private getPressureSidestep(bot: TankLike, target: any, neighbors: any[], mode: GameMode): Vector2 {
+    let fx = 0;
+    let fy = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.id === bot.id || e.id === target.id || !this.isTankLike(e)) continue;
+      if (this.isFriendly(bot, e, mode)) continue;
+      const d2 = Vector.distSq(bot.pos, e.pos);
+      if (d2 > 360 * 360) continue;
+      const toEnemy = Vector.normalize(Vector.sub(e.pos, bot.pos));
+      fx += -toEnemy.y * 0.35;
+      fy += toEnemy.x * 0.35;
+    }
+    if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;
+    return Vector.normalize({ x: fx, y: fy });
+  }
+
+  private computeHostileRepelForce(bot: TankLike, neighbors: any[], mode: GameMode, target: any | null): Vector2 {
+    let fx = 0;
+    let fy = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.id === bot.id || !this.isTankLike(e)) continue;
+      if (this.isFriendly(bot, e, mode)) continue;
+      if (target && e.id === target.id) continue;
+      const d2 = Vector.distSq(bot.pos, e.pos);
+      if (d2 > AI_TUNING.hostileRepelRadius * AI_TUNING.hostileRepelRadius) continue;
+      const d = Math.sqrt(Math.max(1, d2));
+      const t = 1 - Math.min(1, d / AI_TUNING.hostileRepelRadius);
+      fx += ((bot.pos.x - e.pos.x) / d) * t;
+      fy += ((bot.pos.y - e.pos.y) / d) * t;
+    }
+    if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;
+    return Vector.normalize({ x: fx, y: fy });
   }
 
   private computeWanderForce(bot: TankLike, memory: BotMemory): Vector2 {
@@ -1268,6 +1366,7 @@ export class AISystem {
 
     const angleDiff = Math.abs(this.normalizeAngle(bot.aiTargetRot - bot.rotation));
     const fireCone = this.getFireCone(bot, target, distance);
+    if (!this.shouldTakeShot(bot, target, aimPos, local, distance, memory)) return;
 
     if (angleDiff < fireCone) {
       if (memory.shootHesitancyCounter < memory.shootHesitancyTicks) {
@@ -1295,6 +1394,51 @@ export class AISystem {
     if (this.isHeavySniperClass(bot.classType)) return distance > 580 ? 0.085 : 0.12;
     if (this.isDroneClass(bot.classType)) return 0.18;
     return 0.16;
+  }
+
+  private shouldTakeShot(bot: TankLike, target: any, aimPos: Vector2, neighbors: any[], distance: number, memory: BotMemory): boolean {
+    const range = this.getPreferredRange(bot, bot.aiState, target);
+    const maxRange = target.type === EntityType.SHAPE || target.type === EntityType.BOSS || target.type === EntityType.CRASHER
+      ? range.max * 1.05
+      : range.max * (this.isSupportClass(bot.classType) ? 1.2 : 1.35);
+    if (distance > maxRange) return false;
+    if (this.isShotLaneBlocked(bot, aimPos, neighbors)) return false;
+
+    const shotConfidence = this.getShotConfidence(bot, target, distance, memory);
+    const threshold = bot.aiState === AIState.FLEE ? 0.7 : target.type === EntityType.SHAPE ? 0.34 : 0.48;
+    return shotConfidence >= threshold;
+  }
+
+  private getShotConfidence(bot: TankLike, target: any, distance: number, memory: BotMemory): number {
+    const targetSpeed = Math.sqrt(Vector.magSq(target.vel || ZERO));
+    const travelPenalty = Math.min(0.55, (distance / Math.max(120, this.getPreferredRange(bot, bot.aiState, target).max)) * 0.35);
+    const lateralPenalty = Math.min(0.38, targetSpeed * 0.022);
+    const healthBonus = this.getEntityHpRatio(target) < 0.42 ? 0.14 : 0;
+    const finishBonus = this.canLikelyFinish(bot, target) ? 0.18 : 0;
+    const supportPenalty = bot.aiState === AIState.FLEE ? 0.16 : 0;
+    const accuracyBonus = Math.max(0, memory.accuracyBias) * 0.16;
+    const farmBonus = this.isFarmTarget(target) ? 0.24 : 0;
+    return Math.max(0, Math.min(1.2, 1 + healthBonus + finishBonus + accuracyBonus + farmBonus - travelPenalty - lateralPenalty - supportPenalty));
+  }
+
+  private isShotLaneBlocked(bot: TankLike, aimPos: Vector2, neighbors: any[]): boolean {
+    const line = Vector.sub(aimPos, bot.pos);
+    const len = Math.sqrt(Math.max(1, Vector.magSq(line)));
+    const dir = Vector.normalize(line);
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (ally.team !== bot.team) continue;
+      const rel = Vector.sub(ally.pos, bot.pos);
+      const forward = Vector.dot(rel, dir);
+      if (forward <= 28 || forward >= len - 24) continue;
+      const closest = { x: bot.pos.x + dir.x * forward, y: bot.pos.y + dir.y * forward };
+      const perp = Math.sqrt(Vector.distSq(ally.pos, closest));
+      const radius = typeof ally.radius === 'number' ? ally.radius : AI_TUNING.shotObstructionRadius;
+      if (perp <= Math.max(AI_TUNING.shotObstructionRadius, radius + 6)) return true;
+    }
+    return false;
   }
 
   private allocateStats(bot: TankLike, engine: EngineLike, priorities: Record<TankClass, StatType[]>): void {
@@ -1683,6 +1827,24 @@ export class AISystem {
     }
 
     return Math.min(1.05, pressure);
+  }
+
+  private countEnemyCoverAt(target: any, neighbors: any[], mode: GameMode, bot: TankLike): number {
+    let count = 0;
+    for (let i = 0; i < neighbors.length; i++) {
+      const e = neighbors[i];
+      if (!this.isValidEntity(e) || e.id === target.id || !this.isTankLike(e)) continue;
+      if (this.isFriendly(bot, e, mode)) continue;
+      if (Vector.distSq(e.pos, target.pos) <= 380 * 380) count++;
+    }
+    return Math.min(3, count);
+  }
+
+  private getFlankAffinity(bot: TankLike, target: any, memory: BotMemory): number {
+    const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
+    const desiredSide = { x: -toTarget.y * memory.strafeDir, y: toTarget.x * memory.strafeDir };
+    const targetVel = Vector.magSq(target.vel || ZERO) > 0.0001 ? Vector.normalize(target.vel || ZERO) : ZERO;
+    return Math.max(0, Vector.dot(desiredSide, targetVel)) * 0.18;
   }
 
   private canLikelyFinish(bot: TankLike, target: any): boolean {

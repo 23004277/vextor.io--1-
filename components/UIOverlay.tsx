@@ -201,6 +201,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       return () => clearTimeout(timer);
     }
   }, [availableStatPoints, showStandardUpgrades]);
+  const topFiveLeaderboard = useMemo(() => leaderboard.slice(0, 5), [leaderboard]);
 
   if (isDead) {
     return (
@@ -309,7 +310,6 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       ? Droplets
       : MousePointer2;
   const isTeamMode = gameMode === GameMode.TEAMS;
-  const topFiveLeaderboard = useMemo(() => leaderboard.slice(0, 5), [leaderboard]);
 
   return (
     <div 

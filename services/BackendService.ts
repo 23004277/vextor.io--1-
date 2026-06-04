@@ -50,6 +50,27 @@ const INITIAL_STATS: UserStats = {
   questsUnlocked: []
 };
 
+const SUPPORTER_RANKS = new Set(['standard', 'rank1', 'rank2', 'rank3']);
+const SHOP_ITEM_IDS = new Set(SHOP_ITEMS.map((item) => item.id));
+const TANK_CLASS_VALUES = new Set(Object.values(TankClass) as TankClass[]);
+const SECURITY_LOG_KEY = 'vextor_security_log';
+const OPERATION_COOLDOWNS_MS = {
+  stats: 1800,
+  purchase: 700,
+  equip: 250,
+  support: 900,
+  score: 1800,
+  callsign: 1500,
+} as const;
+const MAX_SESSION_SCORE = 25_000_000;
+const MAX_SESSION_LEVEL = 100;
+const MAX_SESSION_KILLS = 5_000;
+const MAX_SESSION_ELITE_KILLS = 250;
+const MAX_SESSION_TRANSFORMATIONS = 50;
+const MAX_SESSION_ELITE_DAMAGE = 25_000_000;
+const MAX_TOTAL_CURRENCY_REWARD = 500_000;
+const operationWindows = new Map<string, number>();
+
 // ─── Firestore custom error reporting ───────────────────────────────────────
 
 export enum OperationType {
@@ -158,6 +179,84 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback = min): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function sanitizeCallsign(value: unknown, fallback = 'PILOT_UNIT'): string {
+  const cleaned = String(value ?? '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_ -]/g, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 18);
+  return cleaned || fallback;
+}
+
+function logSecurityEvent(type: string, detail: Record<string, unknown>): void {
+  const payload = { type, detail, at: new Date().toISOString() };
+  console.warn('[Security]', payload);
+  if (typeof window === 'undefined') return;
+  try {
+    const current = JSON.parse(localStorage.getItem(SECURITY_LOG_KEY) || '[]');
+    const next = Array.isArray(current) ? current.slice(-24) : [];
+    next.push(payload);
+    localStorage.setItem(SECURITY_LOG_KEY, JSON.stringify(next.slice(-25)));
+  } catch {
+    // Ignore local telemetry persistence failures.
+  }
+}
+
+function beginOperationWindow(scope: keyof typeof OPERATION_COOLDOWNS_MS, actorId: string): boolean {
+  const key = `${scope}:${actorId}`;
+  const now = Date.now();
+  const until = operationWindows.get(key) || 0;
+  if (until > now) return false;
+  operationWindows.set(key, now + OPERATION_COOLDOWNS_MS[scope]);
+  return true;
+}
+
+function sanitizeUnlockedEliteSkins(unlockedSkins: TankClass[]): TankClass[] {
+  return Array.from(new Set((Array.isArray(unlockedSkins) ? unlockedSkins : []).filter((skin): skin is TankClass => TANK_CLASS_VALUES.has(skin))));
+}
+
+function isEliteSkinId(itemId: string): itemId is `elite_skin_${string}` {
+  return itemId.startsWith('elite_skin_');
+}
+
+function eliteSkinIdToClass(itemId: string): TankClass | null {
+  if (!isEliteSkinId(itemId)) return null;
+  const raw = itemId.slice('elite_skin_'.length);
+  return TANK_CLASS_VALUES.has(raw as TankClass) ? (raw as TankClass) : null;
+}
+
+function sanitizeInventory(inventory: unknown): string[] {
+  const values = Array.isArray(inventory) ? inventory : ['color_default'];
+  const next = Array.from(new Set(values.filter((item): item is string => typeof item === 'string' && SHOP_ITEM_IDS.has(item))));
+  return next.length > 0 ? next : ['color_default'];
+}
+
+function sanitizeSessionStats(gameData: Partial<UserStats>): Partial<UserStats> {
+  return {
+    totalGames: clampInt(gameData.totalGames, 0, 1, 0),
+    totalScore: clampInt(gameData.totalScore, 0, MAX_SESSION_SCORE, 0),
+    highScore: clampInt(gameData.highScore, 0, MAX_SESSION_SCORE, 0),
+    maxLevel: clampInt(gameData.maxLevel, 1, MAX_SESSION_LEVEL, 1),
+    totalKills: clampInt(gameData.totalKills, 0, MAX_SESSION_KILLS, 0),
+    totalDeaths: clampInt(gameData.totalDeaths, 0, 1, 0),
+    eliteKills: clampInt(gameData.eliteKills, 0, MAX_SESSION_ELITE_KILLS, 0),
+    transformations: clampInt(gameData.transformations, 0, MAX_SESSION_TRANSFORMATIONS, 0),
+    highestEliteDamage: clampInt(gameData.highestEliteDamage, 0, MAX_SESSION_ELITE_DAMAGE, 0),
+  };
+}
+
+function deriveCurrencyRewardFromSession(gameData: Partial<UserStats>): number {
+  const scoreReward = Math.floor((gameData.totalScore || 0) / 100);
+  const killReward = (gameData.totalKills || 0) * 10;
+  const eliteReward = (gameData.eliteKills || 0) * 100;
+  return clampInt(scoreReward + killReward + eliteReward, 0, MAX_TOTAL_CURRENCY_REWARD, 0);
 }
 
 function mapFirebaseAuthError(err: any): string {
@@ -554,6 +653,18 @@ export class BackendService {
   ): Promise<{ user: User, newlyUnlocked: Achievement[], newlyUnlockedQuests: Quest[], currencyEarned: number } | null> {
     const currentUser = auth.currentUser;
     if (!currentUser) return null;
+    if (!beginOperationWindow('stats', currentUser.uid)) {
+      logSecurityEvent('stats_rate_limited', { uid: currentUser.uid });
+      return null;
+    }
+
+    const sanitizedSession = sanitizeSessionStats(gameData);
+    const sanitizedUnlocks = sanitizeUnlockedEliteSkins(unlockedSkins);
+    const expectedReward = deriveCurrencyRewardFromSession(sanitizedSession);
+    const requestedReward = clampInt(currencyReward, 0, MAX_TOTAL_CURRENCY_REWARD, 0);
+    if (requestedReward !== expectedReward) {
+      logSecurityEvent('stats_reward_mismatch', { uid: currentUser.uid, requestedReward, expectedReward });
+    }
 
     const userDocPath = `users/${currentUser.uid}`;
     let userDoc: DocumentSnapshot;
@@ -569,15 +680,15 @@ export class BackendService {
     const current = user.stats;
 
     const updatedStats: UserStats = {
-      totalGames: current.totalGames + (gameData.totalGames || 0),
-      totalScore: current.totalScore + (gameData.totalScore || 0),
-      highScore: Math.max(current.highScore, gameData.highScore || 0),
-      maxLevel: Math.max(current.maxLevel, gameData.maxLevel || 0),
-      totalKills: current.totalKills + (gameData.totalKills || 0),
-      totalDeaths: current.totalDeaths + (gameData.totalDeaths || 0),
-      eliteKills: (current.eliteKills || 0) + (gameData.eliteKills || 0),
-      transformations: (current.transformations || 0) + (gameData.transformations || 0),
-      highestEliteDamage: Math.max(current.highestEliteDamage || 0, gameData.highestEliteDamage || 0),
+      totalGames: current.totalGames + (sanitizedSession.totalGames || 0),
+      totalScore: current.totalScore + (sanitizedSession.totalScore || 0),
+      highScore: Math.max(current.highScore, sanitizedSession.highScore || sanitizedSession.totalScore || 0),
+      maxLevel: Math.max(current.maxLevel, sanitizedSession.maxLevel || 1),
+      totalKills: current.totalKills + (sanitizedSession.totalKills || 0),
+      totalDeaths: current.totalDeaths + (sanitizedSession.totalDeaths || 0),
+      eliteKills: (current.eliteKills || 0) + (sanitizedSession.eliteKills || 0),
+      transformations: (current.transformations || 0) + (sanitizedSession.transformations || 0),
+      highestEliteDamage: Math.max(current.highestEliteDamage || 0, sanitizedSession.highestEliteDamage || 0),
       achievementsUnlocked: current.achievementsUnlocked || [],
       questsUnlocked: current.questsUnlocked || []
     };
@@ -599,7 +710,7 @@ export class BackendService {
       if (reached) {
         updatedStats.achievementsUnlocked.push(achievement.id);
         newlyUnlocked.push(achievement);
-        if (achievement.rewardSkinId && !user.inventory.includes(achievement.rewardSkinId)) {
+        if (achievement.rewardSkinId && !user.inventory.includes(achievement.rewardSkinId) && SHOP_ITEM_IDS.has(achievement.rewardSkinId)) {
           user.inventory.push(achievement.rewardSkinId);
         }
       }
@@ -622,22 +733,24 @@ export class BackendService {
       if (getQuestProgress(quest) < quest.requirement) continue;
       updatedStats.questsUnlocked.push(quest.id);
       newlyUnlockedQuests.push(quest);
-      if (quest.rewardSkinId && !user.inventory.includes(quest.rewardSkinId)) {
+      if (quest.rewardSkinId && !user.inventory.includes(quest.rewardSkinId) && SHOP_ITEM_IDS.has(quest.rewardSkinId)) {
         user.inventory.push(quest.rewardSkinId);
       }
     }
 
     const achievementBonus = newlyUnlocked.reduce((sum, a) => sum + (a.rewardCurrency || 0), 0);
     const questBonus = newlyUnlockedQuests.reduce((sum, q) => sum + (q.rewardCurrency || 0), 0);
-    const totalReward = currencyReward + achievementBonus + questBonus;
+    const totalReward = clampInt(expectedReward + achievementBonus + questBonus, 0, MAX_TOTAL_CURRENCY_REWARD, 0);
     const nextCurrency = (user.currency || 0) + totalReward;
 
     const nextUnlockedEliteSkins = [...(user.unlockedEliteSkins || [])];
-    for (const skin of unlockedSkins) {
+    for (const skin of sanitizedUnlocks) {
       if (!nextUnlockedEliteSkins.includes(skin)) {
         nextUnlockedEliteSkins.push(skin);
       }
     }
+
+    user.inventory = sanitizeInventory(user.inventory);
 
     try {
       await updateDoc(doc(db, 'users', currentUser.uid), {
@@ -663,6 +776,7 @@ export class BackendService {
   static async purchaseItem(username: string, itemId: string): Promise<{ success: boolean, user?: User, error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Authentication missing' };
+    if (!beginOperationWindow('purchase', currentUser.uid)) return { success: false, error: 'Armory sync cooling down' };
 
     const userDocPath = `users/${currentUser.uid}`;
     let userDoc: DocumentSnapshot;
@@ -675,14 +789,18 @@ export class BackendService {
     if (!userDoc!.exists()) return { success: false, error: 'Commander profile not found' };
 
     const user = this.migrateUser(userDoc!.data(), currentUser.uid);
-    const item = SHOP_ITEMS.find(i => i.id === itemId);
+    const normalizedItemId = typeof itemId === 'string' ? itemId.trim() : '';
+    const item = SHOP_ITEMS.find(i => i.id === normalizedItemId);
 
     if (!item) return { success: false, error: 'Item configuration not found' };
-    if (user.inventory.includes(itemId)) return { success: false, error: 'Equipment already owned' };
+    if (item.isAchievementReward) return { success: false, error: 'Reward skins unlock through gameplay only' };
+    if (item.type === 'elite_skin') return { success: false, error: 'Elite variants unlock through gameplay only' };
+    user.inventory = sanitizeInventory(user.inventory);
+    if (user.inventory.includes(normalizedItemId)) return { success: false, error: 'Equipment already owned' };
     if (user.currency < item.price) return { success: false, error: 'Insufficient command currency' };
 
     const nextCurrency = user.currency - item.price;
-    const nextInventory = [...user.inventory, itemId];
+    const nextInventory = sanitizeInventory([...user.inventory, normalizedItemId]);
 
     try {
       await updateDoc(doc(db, 'users', currentUser.uid), {
@@ -705,6 +823,7 @@ export class BackendService {
   static async equipItem(username: string, itemId: string): Promise<{ success: boolean, user?: User, error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Credentials missing' };
+    if (!beginOperationWindow('equip', currentUser.uid)) return { success: false, error: 'Loadout sync cooling down' };
 
     const userDocPath = `users/${currentUser.uid}`;
     let userDoc: DocumentSnapshot;
@@ -717,15 +836,24 @@ export class BackendService {
     if (!userDoc!.exists()) return { success: false, error: 'Pilot record not found' };
 
     const user = this.migrateUser(userDoc!.data(), currentUser.uid);
-    if (!user.inventory.includes(itemId)) return { success: false, error: 'Equipment is unacquired' };
+    const normalizedItemId = typeof itemId === 'string' ? itemId.trim() : '';
+    user.inventory = sanitizeInventory(user.inventory);
+
+    const eliteClass = eliteSkinIdToClass(normalizedItemId);
+    const hasEliteUnlock = eliteClass ? (user.unlockedEliteSkins || []).includes(eliteClass) : false;
+    const hasClassicUnlock = user.inventory.includes(normalizedItemId);
+    if (!hasClassicUnlock && !hasEliteUnlock) {
+      logSecurityEvent('equip_unowned_item', { uid: currentUser.uid, itemId: normalizedItemId });
+      return { success: false, error: 'Equipment is unacquired' };
+    }
 
     try {
-      await updateDoc(doc(db, 'users', currentUser.uid), { equippedItem: itemId });
+      await updateDoc(doc(db, 'users', currentUser.uid), { equippedItem: normalizedItemId });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, userDocPath);
     }
 
-    user.equippedItem = itemId;
+    user.equippedItem = normalizedItemId;
 
     return { success: true, user: { ...user, token: currentUser.uid } };
   }
@@ -749,6 +877,7 @@ export class BackendService {
   static async addSupportContribution(amount: number): Promise<{ success: boolean; user?: User; error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Credentials missing' };
+    if (!beginOperationWindow('support', currentUser.uid)) return { success: false, error: 'Support uplink cooling down' };
     const normalized = Math.max(1, Math.floor(amount || 0));
     const userDocRef = doc(db, 'users', currentUser.uid);
     try {
@@ -771,8 +900,9 @@ export class BackendService {
   static async updateCallsign(nextCallsign: string): Promise<{ success: boolean; error?: string }> {
     const currentUser = auth.currentUser;
     if (!currentUser) return { success: false, error: 'Credentials missing' };
+    if (!beginOperationWindow('callsign', currentUser.uid)) return { success: false, error: 'Callsign uplink cooling down' };
 
-    const callsign = nextCallsign.trim();
+    const callsign = sanitizeCallsign(nextCallsign, '');
     if (!callsign) return { success: false, error: 'Callsign cannot be empty' };
 
     try {
@@ -816,17 +946,27 @@ export class BackendService {
   static async submitHighScore(name: string, score: number, level: number, classType: TankClass, userId?: string): Promise<void> {
     if (score <= 0) return;
 
+    const actorId = userId || auth.currentUser?.uid || 'anonymous';
+    if (!beginOperationWindow('score', actorId)) {
+      logSecurityEvent('score_rate_limited', { actorId });
+      return;
+    }
+
     const recordId = `score_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const highScorePath = `highScores/${recordId}`;
     const resolvedUserId = userId || auth.currentUser?.uid || null;
+    const cleanScore = clampInt(score, 1, MAX_SESSION_SCORE, 1);
+    const cleanLevel = clampInt(level, 1, MAX_SESSION_LEVEL, 1);
+    const cleanName = sanitizeCallsign(name, 'ANONYMOUS_UNIT');
+    const cleanClassType = TANK_CLASS_VALUES.has(classType) ? classType : TankClass.BASIC;
 
     try {
       await setDoc(doc(db, 'highScores', recordId), {
         userId: resolvedUserId,
-        name: name || 'ANONYMOUS_UNIT',
-        score: Math.floor(score),
-        level,
-        classType,
+        name: cleanName,
+        score: cleanScore,
+        level: cleanLevel,
+        classType: cleanClassType,
         date: new Date().toISOString()
       });
     } catch (err) {
@@ -902,19 +1042,37 @@ export class BackendService {
   private static migrateUser(user: any, token: string = ''): User {
     const finalUser = { ...user };
     finalUser.token = token;
-    if (typeof finalUser.currency !== 'number') finalUser.currency = 0;
-    if (!Array.isArray(finalUser.inventory)) finalUser.inventory = ['color_default'];
-    if (!finalUser.equippedItem) finalUser.equippedItem = 'color_default';
-    if (!Array.isArray(finalUser.unlockedEliteSkins)) finalUser.unlockedEliteSkins = [];
-    if (typeof finalUser.supportTotal !== 'number') finalUser.supportTotal = 0;
-    if (!finalUser.supporterRank) finalUser.supporterRank = 'standard';
+    finalUser.username = sanitizeCallsign(finalUser.username, buildCleanUsername(undefined, undefined, 'PILOT'));
+    finalUser.currency = clampInt(finalUser.currency, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.inventory = sanitizeInventory(finalUser.inventory);
+    finalUser.equippedItem = typeof finalUser.equippedItem === 'string' && finalUser.equippedItem.trim()
+      ? finalUser.equippedItem.trim()
+      : 'color_default';
+    finalUser.unlockedEliteSkins = sanitizeUnlockedEliteSkins(finalUser.unlockedEliteSkins || []);
+    finalUser.supportTotal = clampInt(finalUser.supportTotal, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.supporterRank = SUPPORTER_RANKS.has(finalUser.supporterRank) ? finalUser.supporterRank : 'standard';
 
     if (!finalUser.stats) finalUser.stats = { ...INITIAL_STATS };
-    if (typeof finalUser.stats.eliteKills !== 'number') finalUser.stats.eliteKills = 0;
-    if (typeof finalUser.stats.transformations !== 'number') finalUser.stats.transformations = 0;
-    if (typeof finalUser.stats.highestEliteDamage !== 'number') finalUser.stats.highestEliteDamage = 0;
+    finalUser.stats.totalGames = clampInt(finalUser.stats.totalGames, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.stats.totalScore = clampInt(finalUser.stats.totalScore, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.stats.highScore = clampInt(finalUser.stats.highScore, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.stats.maxLevel = clampInt(finalUser.stats.maxLevel, 1, MAX_SESSION_LEVEL, 1);
+    finalUser.stats.totalKills = clampInt(finalUser.stats.totalKills, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.stats.totalDeaths = clampInt(finalUser.stats.totalDeaths, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.stats.eliteKills = clampInt(finalUser.stats.eliteKills, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.stats.transformations = clampInt(finalUser.stats.transformations, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.stats.highestEliteDamage = clampInt(finalUser.stats.highestEliteDamage, 0, Number.MAX_SAFE_INTEGER, 0);
     if (!Array.isArray(finalUser.stats.achievementsUnlocked)) finalUser.stats.achievementsUnlocked = [];
     if (!Array.isArray(finalUser.stats.questsUnlocked)) finalUser.stats.questsUnlocked = [];
+    finalUser.stats.achievementsUnlocked = Array.from(new Set(finalUser.stats.achievementsUnlocked.filter((id: unknown): id is string => typeof id === 'string')));
+    finalUser.stats.questsUnlocked = Array.from(new Set(finalUser.stats.questsUnlocked.filter((id: unknown): id is string => typeof id === 'string')));
+
+    const equippedEliteClass = eliteSkinIdToClass(finalUser.equippedItem);
+    const hasEquippedClassic = finalUser.inventory.includes(finalUser.equippedItem);
+    const hasEquippedElite = equippedEliteClass ? finalUser.unlockedEliteSkins.includes(equippedEliteClass) : false;
+    if (!hasEquippedClassic && !hasEquippedElite) {
+      finalUser.equippedItem = 'color_default';
+    }
 
     return finalUser as User;
   }

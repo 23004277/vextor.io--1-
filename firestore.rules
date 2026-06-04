@@ -22,21 +22,24 @@ service cloud.firestore {
 
     // 3. Document/Entity Validators for Schema Enforcement
     function isValidUser(data) {
-      return data.keys().hasAll(['username', 'createdAt', 'currency', 'inventory', 'equippedItem', 'unlockedEliteSkins', 'stats'])
-        && data.keys().size() == 7
+      return data.keys().hasAll(['username', 'createdAt', 'currency', 'inventory', 'equippedItem', 'unlockedEliteSkins', 'supportTotal', 'supporterRank', 'stats'])
+        && data.keys().size() == 9
         && data.username is string && data.username.size() >= 3 && data.username.size() <= 32
         && data.createdAt is string
         && data.currency is int && data.currency >= 0
-        && data.inventory is list && data.inventory.size() > 0 && data.inventory[0] is string
+        && data.inventory is list && data.inventory.size() > 0
         && data.equippedItem is string
         && data.unlockedEliteSkins is list
+        && data.supportTotal is int && data.supportTotal >= 0
+        && data.supporterRank is string
+        && (data.supporterRank == 'standard' || data.supporterRank == 'rank1' || data.supporterRank == 'rank2' || data.supporterRank == 'rank3')
         && data.stats is map
         && isValidUserStats(data.stats);
     }
 
     function isValidUserStats(stats) {
-      return stats.keys().hasAll(['totalGames', 'totalScore', 'highScore', 'maxLevel', 'totalKills', 'totalDeaths', 'eliteKills', 'transformations', 'highestEliteDamage', 'achievementsUnlocked'])
-        && stats.keys().size() == 10
+      return stats.keys().hasAll(['totalGames', 'totalScore', 'highScore', 'maxLevel', 'totalKills', 'totalDeaths', 'eliteKills', 'transformations', 'highestEliteDamage', 'achievementsUnlocked', 'questsUnlocked'])
+        && stats.keys().size() == 11
         && stats.totalGames is int && stats.totalGames >= 0
         && stats.totalScore is int && stats.totalScore >= 0
         && stats.highScore is int && stats.highScore >= 0
@@ -46,16 +49,18 @@ service cloud.firestore {
         && stats.eliteKills is int && stats.eliteKills >= 0
         && stats.transformations is int && stats.transformations >= 0
         && stats.highestEliteDamage is int && stats.highestEliteDamage >= 0
-        && stats.achievementsUnlocked is list;
+        && stats.achievementsUnlocked is list
+        && stats.questsUnlocked is list;
     }
 
     function isValidHighScore(data) {
-      return data.keys().hasAll(['name', 'score', 'level', 'classType', 'date'])
-        && data.keys().size() == 5
+      return data.keys().hasAll(['name', 'score', 'level', 'classType', 'date', 'userId'])
+        && data.keys().size() == 6
         && data.name is string && data.name.size() >= 3 && data.name.size() <= 32
         && data.score is int && data.score >= 0
         && data.level is int && data.level >= 1
         && data.classType is string
+        && (data.userId == null || data.userId is string)
         && data.date is string;
     }
 
@@ -70,7 +75,7 @@ service cloud.firestore {
                     && isValidUser(request.resource.data)
                     && request.resource.data.username == resource.data.username // Username Immutable
                     && request.resource.data.createdAt == resource.data.createdAt // Creation Date Immutable
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stats', 'currency', 'inventory', 'equippedItem', 'unlockedEliteSkins']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stats', 'currency', 'inventory', 'equippedItem', 'unlockedEliteSkins', 'supportTotal', 'supporterRank']);
       
       allow delete: if false; // Deny standard user deletion client-side
     }

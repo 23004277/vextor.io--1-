@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
     Activity,
     Aperture,
+    ArrowUp,
     Box,
     ChevronRight,
     Cpu,
@@ -10,6 +11,7 @@ import {
     Database,
     Eye,
     Info,
+    LayoutGrid,
     Lock,
     Search,
     Shield,
@@ -23,115 +25,73 @@ import {
 import { ShapeRarity, ShapeType, StatType, TankClass } from '../types';
 import { BOSS_STATS, RARITY_CONFIG, SHAPE_STATS, TANK_CONFIGS } from '../constants';
 import { ShapePreview } from './ShapePreview';
-import { TankPreview } from './TankPreview';
 
-// ─── Injected styles ────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// VEXTOR ALMANAC — Optimised / simplified / cleaner redesign
+// Major changes:
+// - Debounced global search so typing does not re-render every heavy section instantly.
+// - requestAnimationFrame throttled scroll progress instead of setState on every scroll tick.
+// - Performance Mode disables animated overlays, hover lift, heavy blur, and most motion.
+// - Safer data transforms for BOSS_STATS / missing shape stats / missing rarity config.
+// - Mobile tables now scroll horizontally instead of crushing or overflowing the modal.
+// - Density toggle, category shortcuts, clear search, back-to-top, and visible entry counter.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const ALMANAC_STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
 
 .vx-modal, .vx-modal * { font-family: 'Rajdhani', sans-serif; }
-.vx-mono  { font-family: 'Space Mono', monospace !important; }
+.vx-mono { font-family: 'Space Mono', monospace !important; }
 
-.vx-scanlines {
-    background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 3px,
-        rgba(0,0,0,0.1) 3px,
-        rgba(0,0,0,0.1) 4px
-    );
-    pointer-events: none;
-    z-index: 1;
-}
+.vx-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(251,191,36,.55) rgba(255,255,255,.06); }
+.vx-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
+.vx-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,.045); border-radius: 999px; }
+.vx-scrollbar::-webkit-scrollbar-thumb { background: rgba(251,191,36,.65); border: 3px solid rgba(3,5,8,.92); border-radius: 999px; }
+.vx-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(251,191,36,.86); }
 
-.vx-sweep {
-    position: relative;
-    overflow: hidden;
-}
-.vx-sweep::before {
-    content: '';
-    position: absolute;
-    left: 0; right: 0;
-    height: 140px;
-    background: linear-gradient(180deg, transparent, rgba(251,191,36,0.025), transparent);
-    animation: vx-sweep 5s linear infinite;
-    pointer-events: none;
-    z-index: 0;
-}
-@keyframes vx-sweep {
-    0%   { top: -140px; opacity: 0; }
-    5%   { opacity: 1; }
-    95%  { opacity: 1; }
-    100% { top: 100%; opacity: 0; }
-}
-
-@keyframes vx-blink {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0; }
-}
-.vx-blink { animation: vx-blink 1.1s step-end infinite; }
-
-@keyframes vx-data-in {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-.vx-data-in { animation: vx-data-in 0.28s cubic-bezier(0.16,1,0.3,1) both; }
-
-.vx-bracket { position: relative; }
-.vx-bracket::before, .vx-bracket::after { content: ''; position: absolute; width: 10px; height: 10px; pointer-events: none; }
-.vx-bracket::before { top: 0; left: 0; border-top: 1.5px solid currentColor; border-left: 1.5px solid currentColor; }
-.vx-bracket::after  { bottom: 0; right: 0; border-bottom: 1.5px solid currentColor; border-right: 1.5px solid currentColor; }
-
-.vx-card-hover { transition: border-color 0.18s, box-shadow 0.18s, transform 0.18s, background-color 0.18s; }
-.vx-card-hover:hover { transform: translateY(-3px); }
-
-.vx-compact .vx-card-hover { padding: 0.85rem !important; }
-.vx-compact .vx-card-hover p { line-height: 1.35 !important; }
-.vx-compact [class*='space-y-10'] { row-gap: 1.5rem; }
-
-.vx-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(251,191,36,0.55) rgba(255,255,255,0.055); }
-.vx-scrollbar::-webkit-scrollbar { width: 11px; height: 11px; }
-.vx-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.045); border-radius: 999px; }
-.vx-scrollbar::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, rgba(251,191,36,0.78), rgba(34,211,238,0.52));
-    border: 3px solid rgba(3,5,8,0.92);
-    border-radius: 999px;
-}
-.vx-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, rgba(251,191,36,0.95), rgba(34,211,238,0.74)); }
-.vx-scrollbar-light { scrollbar-width: thin; scrollbar-color: rgba(15,23,42,0.32) rgba(15,23,42,0.08); }
-.vx-scrollbar-light::-webkit-scrollbar { width: 11px; height: 11px; }
-.vx-scrollbar-light::-webkit-scrollbar-track { background: rgba(15,23,42,0.08); border-radius: 999px; }
-.vx-scrollbar-light::-webkit-scrollbar-thumb { background: rgba(15,23,42,0.28); border: 3px solid rgba(248,250,252,0.96); border-radius: 999px; }
-.vx-scrollbar-light::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,0.42); }
+.vx-scrollbar-light { scrollbar-width: thin; scrollbar-color: rgba(15,23,42,.32) rgba(15,23,42,.08); }
+.vx-scrollbar-light::-webkit-scrollbar { width: 10px; height: 10px; }
+.vx-scrollbar-light::-webkit-scrollbar-track { background: rgba(15,23,42,.08); border-radius: 999px; }
+.vx-scrollbar-light::-webkit-scrollbar-thumb { background: rgba(15,23,42,.28); border: 3px solid rgba(248,250,252,.96); border-radius: 999px; }
+.vx-scrollbar-light::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,.42); }
 
 .vx-no-scrollbar { scrollbar-width: none; }
 .vx-no-scrollbar::-webkit-scrollbar { display: none; }
 
+.vx-card { content-visibility: auto; contain-intrinsic-size: 1px 260px; }
+.vx-card-hover { transition: border-color .16s ease, background-color .16s ease, transform .16s ease, box-shadow .16s ease; }
+.vx-card-hover:hover { transform: translateY(-2px); }
+.vx-perf .vx-card-hover:hover { transform: none; }
+
+.vx-table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+.vx-table-grid { min-width: 720px; }
+.vx-table-grid-sm { min-width: 560px; }
+
 .vx-grid-bg {
     background-image:
-        linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
-    background-size: 44px 44px;
+        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 48px 48px;
 }
 
-.vx-noise::after {
+.vx-scanlines::after {
     content: '';
     position: absolute;
     inset: 0;
-    opacity: 0.045;
     pointer-events: none;
-    background-image: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.9) 0 1px, transparent 1px);
-    background-size: 18px 18px;
-    mix-blend-mode: screen;
+    background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.12) 3px 4px);
+    opacity: .5;
 }
 
+.vx-pulse-dot { animation: vx-pulse-dot 1.2s ease-in-out infinite; }
+@keyframes vx-pulse-dot { 0%,100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+
 @media (prefers-reduced-motion: reduce) {
-    .vx-sweep::before, .vx-blink, .vx-data-in { animation: none !important; }
+    .vx-pulse-dot { animation: none !important; }
     .vx-card-hover, .vx-card-hover:hover { transform: none !important; }
 }
 `;
 
-// ─── Types ───────────────────────────────────────────────────────────────────
 interface AlmanacModalProps {
     onClose: () => void;
     darkMode: boolean;
@@ -139,6 +99,9 @@ interface AlmanacModalProps {
 }
 
 type MainCategory = 'RESOURCES' | 'CHASSIS' | 'BOSSES' | 'THREATS' | 'VOID' | 'ABILITIES';
+type ToneName = 'cyan' | 'blue' | 'amber' | 'red' | 'purple' | 'emerald';
+type DensityMode = 'detailed' | 'compact';
+type SortMode = 'name' | 'xp' | 'health';
 
 type CategoryMeta = {
     id: MainCategory;
@@ -146,7 +109,7 @@ type CategoryMeta = {
     shortLabel: string;
     subtitle: string;
     icon: LucideIcon;
-    tone: 'cyan' | 'blue' | 'amber' | 'red' | 'purple' | 'emerald';
+    tone: ToneName;
 };
 
 type ToneStyle = {
@@ -156,248 +119,311 @@ type ToneStyle = {
     bgStrong: string;
     border: string;
     borderStrong: string;
-    glow: string;
-    line: string;
     button: string;
     buttonText: string;
-    shadow: string;
+    line: string;
     hex: string;
 };
 
-type ClassRole  = { label: string; desc: string; classes: TankClass[]; icon: LucideIcon; };
-type BossStatView = { id: string; name: string; description: string; health: number; xp: number; damage?: number; radius?: number; };
-type TraitCard  = { name: string; key: string; desc: string; icon: LucideIcon; };
+type ClassRole = {
+    label: string;
+    desc: string;
+    classes: TankClass[];
+    icon: LucideIcon;
+};
 
-// ─── Tone palette ─────────────────────────────────────────────────────────────
-const TONE: Record<CategoryMeta['tone'], ToneStyle> = {
+type BossStatView = {
+    id: string;
+    name: string;
+    description: string;
+    health: number;
+    xp: number;
+    damage?: number;
+    radius?: number;
+};
+
+type TraitCard = {
+    name: string;
+    key: string;
+    desc: string;
+    icon: LucideIcon;
+};
+
+const TONE: Record<ToneName, ToneStyle> = {
     cyan: {
-        text: 'text-cyan-400', softText: 'text-cyan-400/55',
-        bg: 'bg-cyan-400/[0.07]', bgStrong: 'bg-cyan-400',
-        border: 'border-cyan-400/25', borderStrong: 'border-cyan-400/75',
-        glow: 'shadow-cyan-400/20',
-        line: 'from-cyan-400 via-cyan-400/20 to-transparent',
-        button: 'bg-cyan-400/10 hover:bg-cyan-400/[0.16]', buttonText: 'text-cyan-300',
-        shadow: 'shadow-[0_0_20px_rgba(34,211,238,0.22)]',
-        hex: '#22d3ee',
+        text: 'text-cyan-400', softText: 'text-cyan-400/55', bg: 'bg-cyan-400/[0.075]', bgStrong: 'bg-cyan-400',
+        border: 'border-cyan-400/25', borderStrong: 'border-cyan-400/70', button: 'bg-cyan-400/10 hover:bg-cyan-400/[0.16]', buttonText: 'text-cyan-300',
+        line: 'from-cyan-400/70 via-cyan-400/15 to-transparent', hex: '#22d3ee',
     },
     blue: {
-        text: 'text-blue-400', softText: 'text-blue-400/55',
-        bg: 'bg-blue-400/[0.07]', bgStrong: 'bg-blue-400',
-        border: 'border-blue-400/25', borderStrong: 'border-blue-400/75',
-        glow: 'shadow-blue-400/20',
-        line: 'from-blue-400 via-blue-400/20 to-transparent',
-        button: 'bg-blue-400/10 hover:bg-blue-400/[0.16]', buttonText: 'text-blue-300',
-        shadow: 'shadow-[0_0_20px_rgba(96,165,250,0.22)]',
-        hex: '#60a5fa',
+        text: 'text-blue-400', softText: 'text-blue-400/55', bg: 'bg-blue-400/[0.075]', bgStrong: 'bg-blue-400',
+        border: 'border-blue-400/25', borderStrong: 'border-blue-400/70', button: 'bg-blue-400/10 hover:bg-blue-400/[0.16]', buttonText: 'text-blue-300',
+        line: 'from-blue-400/70 via-blue-400/15 to-transparent', hex: '#60a5fa',
     },
     amber: {
-        text: 'text-amber-400', softText: 'text-amber-400/55',
-        bg: 'bg-amber-400/[0.07]', bgStrong: 'bg-amber-400',
-        border: 'border-amber-400/25', borderStrong: 'border-amber-400/75',
-        glow: 'shadow-amber-400/20',
-        line: 'from-amber-400 via-amber-400/20 to-transparent',
-        button: 'bg-amber-400/10 hover:bg-amber-400/[0.16]', buttonText: 'text-amber-300',
-        shadow: 'shadow-[0_0_20px_rgba(251,191,36,0.22)]',
-        hex: '#fbbf24',
+        text: 'text-amber-400', softText: 'text-amber-400/55', bg: 'bg-amber-400/[0.075]', bgStrong: 'bg-amber-400',
+        border: 'border-amber-400/25', borderStrong: 'border-amber-400/70', button: 'bg-amber-400/10 hover:bg-amber-400/[0.16]', buttonText: 'text-amber-300',
+        line: 'from-amber-400/70 via-amber-400/15 to-transparent', hex: '#fbbf24',
     },
     red: {
-        text: 'text-red-400', softText: 'text-red-400/55',
-        bg: 'bg-red-400/[0.07]', bgStrong: 'bg-red-400',
-        border: 'border-red-400/25', borderStrong: 'border-red-400/75',
-        glow: 'shadow-red-400/20',
-        line: 'from-red-400 via-red-400/20 to-transparent',
-        button: 'bg-red-400/10 hover:bg-red-400/[0.16]', buttonText: 'text-red-300',
-        shadow: 'shadow-[0_0_20px_rgba(248,113,113,0.22)]',
-        hex: '#f87171',
+        text: 'text-red-400', softText: 'text-red-400/55', bg: 'bg-red-400/[0.075]', bgStrong: 'bg-red-400',
+        border: 'border-red-400/25', borderStrong: 'border-red-400/70', button: 'bg-red-400/10 hover:bg-red-400/[0.16]', buttonText: 'text-red-300',
+        line: 'from-red-400/70 via-red-400/15 to-transparent', hex: '#f87171',
     },
     purple: {
-        text: 'text-purple-400', softText: 'text-purple-400/55',
-        bg: 'bg-purple-400/[0.07]', bgStrong: 'bg-purple-400',
-        border: 'border-purple-400/25', borderStrong: 'border-purple-400/75',
-        glow: 'shadow-purple-400/20',
-        line: 'from-purple-400 via-purple-400/20 to-transparent',
-        button: 'bg-purple-400/10 hover:bg-purple-400/[0.16]', buttonText: 'text-purple-300',
-        shadow: 'shadow-[0_0_20px_rgba(192,132,252,0.22)]',
-        hex: '#c084fc',
+        text: 'text-purple-400', softText: 'text-purple-400/55', bg: 'bg-purple-400/[0.075]', bgStrong: 'bg-purple-400',
+        border: 'border-purple-400/25', borderStrong: 'border-purple-400/70', button: 'bg-purple-400/10 hover:bg-purple-400/[0.16]', buttonText: 'text-purple-300',
+        line: 'from-purple-400/70 via-purple-400/15 to-transparent', hex: '#c084fc',
     },
     emerald: {
-        text: 'text-emerald-400', softText: 'text-emerald-400/55',
-        bg: 'bg-emerald-400/[0.07]', bgStrong: 'bg-emerald-400',
-        border: 'border-emerald-400/25', borderStrong: 'border-emerald-400/75',
-        glow: 'shadow-emerald-400/20',
-        line: 'from-emerald-400 via-emerald-400/20 to-transparent',
-        button: 'bg-emerald-400/10 hover:bg-emerald-400/[0.16]', buttonText: 'text-emerald-300',
-        shadow: 'shadow-[0_0_20px_rgba(52,211,153,0.22)]',
-        hex: '#34d399',
+        text: 'text-emerald-400', softText: 'text-emerald-400/55', bg: 'bg-emerald-400/[0.075]', bgStrong: 'bg-emerald-400',
+        border: 'border-emerald-400/25', borderStrong: 'border-emerald-400/70', button: 'bg-emerald-400/10 hover:bg-emerald-400/[0.16]', buttonText: 'text-emerald-300',
+        line: 'from-emerald-400/70 via-emerald-400/15 to-transparent', hex: '#34d399',
     },
 };
 
-// ─── Static data ──────────────────────────────────────────────────────────────
 const CATEGORIES: CategoryMeta[] = [
-    { id: 'RESOURCES', label: 'Shape Archives',       shortLabel: 'Shapes',      subtitle: 'Resource values, rarity rolls, and farming targets.',         icon: Box,     tone: 'cyan'    },
-    { id: 'CHASSIS',   label: 'Chassis Database',     shortLabel: 'Chassis',     subtitle: 'Tank roles, class families, and weapon identities.',           icon: Shield,  tone: 'blue'    },
-    { id: 'BOSSES',    label: 'Commander Protocols',  shortLabel: 'Commanders',  subtitle: 'Rebirth titans and endgame chassis reports.',                  icon: Crown,   tone: 'amber'   },
-    { id: 'THREATS',   label: 'Threat Index',         shortLabel: 'Threats',     subtitle: 'Boss entities, elite incursions, and hostile automata.',       icon: Skull,   tone: 'red'     },
-    { id: 'VOID',      label: 'Void Research',        shortLabel: 'Void',        subtitle: 'Rift behaviour, instability, and boosted resource fields.',    icon: Aperture,tone: 'purple'  },
-    { id: 'ABILITIES', label: 'Tactical Traits',      shortLabel: 'Traits',      subtitle: 'Class passives, key abilities, and build synergies.',          icon: Cpu,     tone: 'emerald' },
+    { id: 'RESOURCES', label: 'Shape Archives', shortLabel: 'Shapes', subtitle: 'Resource values, rarity rolls, farming targets.', icon: Box, tone: 'cyan' },
+    { id: 'CHASSIS', label: 'Chassis Database', shortLabel: 'Chassis', subtitle: 'Tank roles, class families, weapon identities.', icon: Shield, tone: 'blue' },
+    { id: 'BOSSES', label: 'Commander Protocols', shortLabel: 'Commanders', subtitle: 'Rebirth titans and endgame chassis reports.', icon: Crown, tone: 'amber' },
+    { id: 'THREATS', label: 'Threat Index', shortLabel: 'Threats', subtitle: 'Boss entities, elite incursions, hostile automata.', icon: Skull, tone: 'red' },
+    { id: 'VOID', label: 'Void Research', shortLabel: 'Void', subtitle: 'Rift behaviour, instability, boosted resource fields.', icon: Aperture, tone: 'purple' },
+    { id: 'ABILITIES', label: 'Tactical Traits', shortLabel: 'Traits', subtitle: 'Passives, key abilities, and build synergies.', icon: Cpu, tone: 'emerald' },
 ];
 
-const SHAPE_STRATEGIES: Record<ShapeType, string[]> = {
-    [ShapeType.SQUARE]:   ['Starter farm target', 'Low durability', 'Safe early XP chain'],
-    [ShapeType.TRIANGLE]: ['Drifts faster than squares', 'Lead shots slightly', 'Good early-mid payout'],
+const SHAPE_STRATEGIES: Partial<Record<ShapeType, string[]>> = {
+    [ShapeType.SQUARE]: ['Starter farm target', 'Low durability', 'Safe early XP chain'],
+    [ShapeType.TRIANGLE]: ['Fast drifting shape', 'Lead shots slightly', 'Good early-mid payout'],
     [ShapeType.PENTAGON]: ['Tanky resource core', 'Central farming priority', 'Strong level 30+ XP source'],
-    [ShapeType.HEXAGON]:  ['High integrity shell', 'Rewards sustained DPS', 'Great for upgraded builds'],
-    [ShapeType.OCTAGON]:  ['Ancient relic target', 'Massive XP jackpot', 'Contestable high-value spawn'],
+    [ShapeType.HEXAGON]: ['High integrity shell', 'Rewards sustained DPS', 'Great for upgraded builds'],
+    [ShapeType.OCTAGON]: ['Ancient relic target', 'Massive XP jackpot', 'Contestable high-value spawn'],
 };
 
 const CLASS_ROLES: Record<string, ClassRole> = {
-    ASSAULT:   { label: 'Frontline Combatants',  desc: 'Bullet-density classes that win by flooding lanes, suppressing movement, and forcing mistakes.',                              classes: [TankClass.TWIN, TankClass.TRIPLE_SHOT, TankClass.PENTA_SHOT, TankClass.SPREAD_SHOT, TankClass.TRIPLE_TWIN],       icon: Zap     },
-    PRECISION: { label: 'Long-Range Interceptors',desc: 'High-velocity classes that punish bad positioning and delete fragile targets from range.',                                   classes: [TankClass.SNIPER, TankClass.ASSASSIN, TankClass.RANGER, TankClass.STALKER, TankClass.HUNTER],                   icon: Target  },
-    IMPACT:    { label: 'Heavy Ordnance',          desc: 'Huge projectile classes with intimidating burst damage, recoil movement, and area denial.',                                 classes: [TankClass.MACHINE_GUN, TankClass.DESTROYER, TankClass.ANNIHILATOR, TankClass.HYBRID, TankClass.SPRAYER],         icon: Activity},
-    TACTICAL:  { label: 'Advanced Command',        desc: 'Drone, turret, and control classes that dominate space through positioning and unit management.',                           classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.AUTO_GUNNER],          icon: Cpu     },
+    ASSAULT: {
+        label: 'Frontline Combatants',
+        desc: 'Bullet-density classes built for lane pressure, suppression, and constant chip damage.',
+        classes: [TankClass.TWIN, TankClass.TRIPLE_SHOT, TankClass.PENTA_SHOT, TankClass.SPREAD_SHOT, TankClass.TRIPLE_TWIN],
+        icon: Zap,
+    },
+    PRECISION: {
+        label: 'Long-Range Interceptors',
+        desc: 'High-velocity classes that punish bad positioning and fragile targets from range.',
+        classes: [TankClass.SNIPER, TankClass.ASSASSIN, TankClass.RANGER, TankClass.STALKER, TankClass.HUNTER],
+        icon: Target,
+    },
+    IMPACT: {
+        label: 'Heavy Ordnance',
+        desc: 'Large projectile classes with burst damage, recoil movement, and serious area denial.',
+        classes: [TankClass.MACHINE_GUN, TankClass.DESTROYER, TankClass.ANNIHILATOR, TankClass.HYBRID, TankClass.SPRAYER],
+        icon: Activity,
+    },
+    TACTICAL: {
+        label: 'Advanced Command',
+        desc: 'Drone, turret, and control classes that dominate space through positioning and unit management.',
+        classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.AUTO_GUNNER],
+        icon: Cpu,
+    },
 };
 
 const BOSS_TANK_DATA: Record<string, ClassRole> = {
-    COMMANDERS: { label: 'Rebirth Titans', desc: 'Massive level-60 chassis that trade mobility for absurd zone control, durability, and pressure.', classes: [TankClass.COLOSSAL, TankClass.LEVIATHAN, TankClass.WARLORD], icon: Crown },
+    COMMANDERS: {
+        label: 'Rebirth Titans',
+        desc: 'Level-60 chassis that trade simple handling for durability, map control, and endgame pressure.',
+        classes: [TankClass.COLOSSAL, TankClass.LEVIATHAN, TankClass.WARLORD],
+        icon: Crown,
+    },
 };
 
 const TACTICAL_TRAITS: TraitCard[] = [
-    { name: 'Sacrificial Goat', key: 'RMB / Right-Click', desc: 'Overlord and Manager classes can convert 50% current health into an aggressive combat state, heavily boosting drone pressure.', icon: Activity },
-    { name: 'Goliath Recoil',   key: 'Passive',           desc: 'Destroyer and Annihilator chassis use extreme recoil as both a weapon drawback and a movement tool.',                          icon: Zap      },
-    { name: 'Void Sync',        key: 'Dimensional',       desc: 'Void rifts boost rarity rolls dramatically, but the environment becomes unstable and harder to safely farm.',                   icon: Aperture },
-    { name: 'Siege Mode',       key: 'Key [X]',           desc: 'Warlord anchors into the grid, losing movement while gaining massive defensive and offensive pressure.',                        icon: Shield   },
-    { name: 'Shockwave',        key: 'Titan Passive',     desc: 'Leviathan periodically emits a pulse that helps deny close-range enemies and incoming projectile pressure.',                    icon: Sparkles },
-    { name: 'Rebirth Protocol', key: 'Level 60',          desc: 'Reset your level to gain access to Titan-class chassis and late-game commander mechanics.',                                     icon: Crown    },
+    { name: 'Sacrificial Goat', key: 'RMB / Right-Click', desc: 'Overlord and Manager convert 50% current health into a risky combat state that boosts drone pressure.', icon: Activity },
+    { name: 'Goliath Recoil', key: 'Passive', desc: 'Destroyer and Annihilator use huge recoil as both a drawback and a movement tool.', icon: Zap },
+    { name: 'Void Sync', key: 'Dimensional', desc: 'Void rifts massively boost rarity rolls, but the farm zone becomes unstable and harder to control.', icon: Aperture },
+    { name: 'Siege Mode', key: 'Key [X]', desc: 'Warlord anchors into the grid, losing movement while gaining heavy defensive and offensive control.', icon: Shield },
+    { name: 'Shockwave', key: 'Titan Passive', desc: 'Leviathan periodically emits a pulse that denies close-range enemies and projectile pressure.', icon: Sparkles },
+    { name: 'Rebirth Protocol', key: 'Level 60', desc: 'Reset your level to unlock Titan-class chassis and late-game commander mechanics.', icon: Crown },
 ];
 
-const RARITY_STYLE: Partial<Record<ShapeRarity, { text: string; bg: string; border: string; hex: string }>> = {
-    [ShapeRarity.COMMON]:       { text: 'text-slate-300',   bg: 'bg-slate-400/10',  border: 'border-slate-400/20',  hex: '#94a3b8' },
-    [ShapeRarity.UNCOMMON]:     { text: 'text-cyan-300',    bg: 'bg-cyan-400/10',   border: 'border-cyan-400/25',   hex: '#22d3ee' },
-    [ShapeRarity.RARE]:         { text: 'text-green-300',   bg: 'bg-green-400/10',  border: 'border-green-400/25',  hex: '#4ade80' },
-    [ShapeRarity.EPIC]:         { text: 'text-amber-300',   bg: 'bg-amber-400/10',  border: 'border-amber-400/25',  hex: '#fbbf24' },
-    [ShapeRarity.LEGENDARY]:    { text: 'text-orange-300',  bg: 'bg-orange-400/10', border: 'border-orange-400/25', hex: '#fb923c' },
-    [ShapeRarity.MYTHICAL]:     { text: 'text-indigo-300',  bg: 'bg-indigo-400/10', border: 'border-indigo-400/25', hex: '#818cf8' },
-    [ShapeRarity.ETERNAL]:      { text: 'text-sky-200',     bg: 'bg-sky-400/10',    border: 'border-sky-300/25',    hex: '#7dd3fc' },
-    [ShapeRarity.TRANSCENDENT]: { text: 'text-white',       bg: 'bg-white/10',      border: 'border-white/30',      hex: '#ffffff' },
+const RARITY_STYLE: Partial<Record<ShapeRarity, { text: string; bg: string; border: string }>> = {
+    [ShapeRarity.COMMON]: { text: 'text-slate-300', bg: 'bg-slate-400/10', border: 'border-slate-400/20' },
+    [ShapeRarity.UNCOMMON]: { text: 'text-cyan-300', bg: 'bg-cyan-400/10', border: 'border-cyan-400/25' },
+    [ShapeRarity.RARE]: { text: 'text-green-300', bg: 'bg-green-400/10', border: 'border-green-400/25' },
+    [ShapeRarity.EPIC]: { text: 'text-amber-300', bg: 'bg-amber-400/10', border: 'border-amber-400/25' },
+    [ShapeRarity.LEGENDARY]: { text: 'text-orange-300', bg: 'bg-orange-400/10', border: 'border-orange-400/25' },
+    [ShapeRarity.MYTHICAL]: { text: 'text-indigo-300', bg: 'bg-indigo-400/10', border: 'border-indigo-400/25' },
+    [ShapeRarity.ETERNAL]: { text: 'text-sky-200', bg: 'bg-sky-400/10', border: 'border-sky-300/25' },
+    [ShapeRarity.TRANSCENDENT]: { text: 'text-white', bg: 'bg-white/10', border: 'border-white/30' },
 };
 
-// ─── Utilities ────────────────────────────────────────────────────────────────
-const formatLabel    = (v: string) => v.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-const formatTankName = (tc: TankClass) => String(tc).replace(/ Tank$/i, '').replace(/_/g, ' ');
-const getShapePreviewType = (key: string): ShapeType => {
-    const values = ShapeType as unknown as Record<string, ShapeType>;
-    if (key === 'alpha_pentagon')   return values.ALPHA_PENTAGON    ?? ShapeType.PENTAGON;
-    if (key === 'grand_singularity') return values.GRAND_SINGULARITY ?? ShapeType.OCTAGON;
-    return ShapeType.PENTAGON;
-};
 const VOID_PORTAL_PREVIEW = ((ShapeType as unknown as Record<string, ShapeType>).VOID_PORTAL ?? ShapeType.OCTAGON) as ShapeType;
-const getTankComplexity = (tc: TankClass) => {
-    const n = TANK_CONFIGS[tc]?.length ?? 1;
-    if (n >= 6) return 5; if (n >= 4) return 4; if (n >= 3) return 3; if (n >= 2) return 2; return 1;
-};
-const getRarityStyle = (r: ShapeRarity) =>
-    RARITY_STYLE[r] ?? { text: 'text-slate-300', bg: 'bg-slate-400/10', border: 'border-slate-400/20', hex: '#94a3b8' };
+
+const formatLabel = (value: string) => value.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+const formatTankName = (tankClass: TankClass) => String(tankClass).replace(/ Tank$/i, '').replace(/_/g, ' ');
 const normalizeSearch = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+const getRarityStyle = (rarity: ShapeRarity) => RARITY_STYLE[rarity] ?? RARITY_STYLE[ShapeRarity.COMMON]!;
+const getShapeStrategy = (shape: ShapeType) => SHAPE_STRATEGIES[shape] ?? ['Resource target', 'Farm for XP', 'Watch nearby enemy pressure'];
+const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
+
 const matchesSearch = (query: string, ...fields: Array<string | number | undefined | null>) => {
     if (!query) return true;
-    const haystack = fields.map(v => String(v ?? '')).join(' ').toLowerCase().replace(/[\s_-]+/g, ' ');
+    const haystack = fields.map(field => String(field ?? '')).join(' ').toLowerCase().replace(/[\s_-]+/g, ' ');
     return haystack.includes(query);
 };
-const countClasses = (roles: Record<string, ClassRole>) => Object.values(roles).reduce((sum, role) => sum + role.classes.length, 0);
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+const getTankComplexity = (tankClass: TankClass) => {
+    const barrelCount = TANK_CONFIGS[tankClass]?.length ?? 1;
+    if (barrelCount >= 6) return 5;
+    if (barrelCount >= 4) return 4;
+    if (barrelCount >= 3) return 3;
+    if (barrelCount >= 2) return 2;
+    return 1;
+};
 
-/** Flat-surface card panel */
-const CardShell: React.FC<{ children: React.ReactNode; darkMode: boolean; className?: string; style?: React.CSSProperties }> = ({ children, darkMode, className = '', style }) => (
-    <div style={style} className={`min-w-0 rounded-lg border transition-colors ${darkMode ? 'border-white/10 bg-[#0b0d14]' : 'border-slate-300/70 bg-white/90'} ${className}`}>
+const countClasses = (roles: Record<string, ClassRole>) => Object.values(roles).reduce((total, role) => total + role.classes.length, 0);
+
+const useDebouncedValue = <T,>(value: T, delay = 130) => {
+    const [debounced, setDebounced] = useState(value);
+
+    useEffect(() => {
+        const timeout = window.setTimeout(() => setDebounced(value), delay);
+        return () => window.clearTimeout(timeout);
+    }, [delay, value]);
+
+    return debounced;
+};
+
+const getStoredBoolean = (key: string, fallback: boolean) => {
+    if (typeof window === 'undefined') return fallback;
+    const stored = window.localStorage.getItem(key);
+    if (stored === 'true') return true;
+    if (stored === 'false') return false;
+    return fallback;
+};
+
+const getStoredDensity = (): DensityMode => {
+    if (typeof window === 'undefined') return 'detailed';
+    const stored = window.localStorage.getItem('vextor_almanac_density');
+    return stored === 'compact' ? 'compact' : 'detailed';
+};
+
+const CardShell: React.FC<{
+    children: React.ReactNode;
+    darkMode: boolean;
+    className?: string;
+}> = ({ children, darkMode, className = '' }) => (
+    <div className={`vx-card min-w-0 rounded-xl border ${darkMode ? 'border-white/10 bg-[#090d14]' : 'border-slate-300/80 bg-white/95'} ${className}`}>
         {children}
     </div>
 );
 
-/** Compact category badge / pill */
-const DataPill: React.FC<{ children: React.ReactNode; tone: ToneStyle; className?: string }> = ({ children, tone, className = '' }) => (
-    <span className={`vx-mono inline-flex max-w-full items-center gap-2 rounded border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.22em] ${tone.bg} ${tone.border} ${tone.text} ${className}`}>
+const DataPill: React.FC<{
+    children: React.ReactNode;
+    tone: ToneStyle;
+    className?: string;
+}> = ({ children, tone, className = '' }) => (
+    <span className={`vx-mono inline-flex max-w-full items-center gap-2 rounded-md border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] ${tone.bg} ${tone.border} ${tone.text} ${className}`}>
         {children}
     </span>
 );
 
-/** Stat value box */
-const StatPanel: React.FC<{ label: string; value: React.ReactNode; tone: ToneStyle; darkMode: boolean; icon?: LucideIcon }> = ({ label, value, tone, darkMode, icon: Icon }) => (
-    <div className={`min-w-0 rounded-md border p-3 ${darkMode ? 'border-white/8 bg-black/40' : 'border-slate-200 bg-slate-50'}`}>
+const StatPanel: React.FC<{
+    label: string;
+    value: React.ReactNode;
+    darkMode: boolean;
+    tone: ToneStyle;
+    icon?: LucideIcon;
+}> = ({ label, value, darkMode, tone, icon: Icon }) => (
+    <div className={`min-w-0 rounded-lg border p-3 ${darkMode ? 'border-white/8 bg-black/30' : 'border-slate-200 bg-slate-50'}`}>
         <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
             {Icon && <Icon className={`h-3.5 w-3.5 shrink-0 ${tone.text}`} />}
-            <span className={`vx-mono truncate text-[9px] font-bold uppercase tracking-[0.24em] ${darkMode ? 'text-white/30' : 'text-slate-400'}`}>{label}</span>
+            <span className={`vx-mono truncate text-[9px] font-bold uppercase tracking-[0.22em] ${darkMode ? 'text-white/35' : 'text-slate-400'}`}>{label}</span>
         </div>
-        <div className={`vx-mono min-w-0 break-words text-xl font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{value}</div>
+        <div className={`vx-mono min-w-0 break-words text-lg font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{value}</div>
     </div>
 );
 
-/** Section header with icon + accent rule */
-const SectionTitle: React.FC<{ icon: LucideIcon; title: string; eyebrow: string; desc?: string; tone: ToneStyle; darkMode: boolean }> = ({ icon: Icon, title, eyebrow, desc, tone, darkMode }) => (
-    <div className="mb-6 flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center">
-        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-md border ${tone.bg} ${tone.border}`}>
+const SectionTitle: React.FC<{
+    icon: LucideIcon;
+    title: string;
+    eyebrow: string;
+    desc?: string;
+    darkMode: boolean;
+    tone: ToneStyle;
+}> = ({ icon: Icon, title, eyebrow, desc, darkMode, tone }) => (
+    <div className="mb-4 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border ${tone.bg} ${tone.border}`}>
             <Icon className={`h-5 w-5 ${tone.text}`} />
         </div>
         <div className="min-w-0 flex-1">
-            <p className={`vx-mono mb-1 text-[9px] font-bold uppercase tracking-[0.36em] ${tone.softText}`}>{eyebrow}</p>
-            <h3 className={`break-words text-2xl font-bold uppercase italic tracking-tight sm:text-3xl ${darkMode ? 'text-white' : 'text-slate-950'}`}>{title}</h3>
-            {desc && <p className={`mt-2 max-w-3xl text-sm leading-6 font-medium ${darkMode ? 'text-white/40' : 'text-slate-500'}`}>{desc}</p>}
+            <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.32em] ${tone.softText}`}>{eyebrow}</p>
+            <h3 className={`mt-1 break-words text-2xl font-bold uppercase italic tracking-tight sm:text-3xl ${darkMode ? 'text-white' : 'text-slate-950'}`}>{title}</h3>
+            {desc && <p className={`mt-1.5 max-w-4xl text-sm font-medium leading-6 ${darkMode ? 'text-white/46' : 'text-slate-500'}`}>{desc}</p>}
         </div>
-        <div className={`hidden h-px min-w-[100px] flex-1 bg-gradient-to-r ${tone.line} lg:block`} />
+        <div className={`hidden h-px min-w-[120px] flex-1 bg-gradient-to-r ${tone.line} xl:block`} />
     </div>
 );
 
-/** Sidebar navigation button */
-const CategoryButton: React.FC<{ category: CategoryMeta; isActive: boolean; darkMode: boolean; onClick: () => void }> = ({ category, isActive, darkMode, onClick }) => {
+const CategoryButton: React.FC<{
+    category: CategoryMeta;
+    isActive: boolean;
+    darkMode: boolean;
+    performanceMode: boolean;
+    onClick: () => void;
+}> = ({ category, isActive, darkMode, performanceMode, onClick }) => {
     const Icon = category.icon;
     const tone = TONE[category.tone];
+
     return (
         <button
             type="button"
             onClick={onClick}
             aria-current={isActive ? 'page' : undefined}
-            className={`group relative flex min-w-0 w-full items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-all duration-150
-                ${isActive
-                    ? `${tone.bg} ${tone.borderStrong} ${tone.shadow}`
-                    : darkMode
-                        ? 'border-transparent text-white/40 hover:border-white/10 hover:bg-white/[0.04] hover:text-white/80'
-                        : 'border-transparent text-slate-400 hover:border-slate-200 hover:bg-white hover:text-slate-800'}`}
+            className={`group relative flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors duration-150 ${isActive
+                ? `${tone.bg} ${tone.borderStrong}`
+                : darkMode
+                    ? 'border-transparent text-white/45 hover:border-white/10 hover:bg-white/[0.04] hover:text-white/85'
+                    : 'border-transparent text-slate-500 hover:border-slate-200 hover:bg-white hover:text-slate-900'}`}
         >
-            {isActive && (
+            {isActive && !performanceMode && (
                 <motion.span
-                    layoutId="almanac-rail"
-                    className={`absolute left-0 top-1/2 h-7 w-0.5 -translate-y-1/2 ${tone.bgStrong}`}
-                    transition={{ type: 'spring', stiffness: 480, damping: 38 }}
+                    layoutId="almanac-active-rail"
+                    className={`absolute left-0 top-1/2 h-7 w-0.5 -translate-y-1/2 rounded-full ${tone.bgStrong}`}
+                    transition={{ type: 'spring', stiffness: 500, damping: 42 }}
                 />
             )}
-            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${isActive ? `${tone.bg} ${tone.border}` : darkMode ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50'}`}>
+            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${isActive ? `${tone.bg} ${tone.border}` : darkMode ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50'}`}>
                 <Icon className={`h-4 w-4 ${isActive ? tone.text : 'text-current'}`} />
             </span>
-            <span className="hidden min-w-0 flex-1 lg:block">
+            <span className="hidden min-w-0 flex-1 xl:block">
                 <span className={`block truncate text-[11px] font-bold uppercase tracking-[0.2em] ${isActive ? tone.text : ''}`}>{category.shortLabel}</span>
-                <span className={`mt-0.5 block truncate text-[9px] font-medium ${darkMode ? 'text-white/22' : 'text-slate-400'}`}>{category.subtitle}</span>
+                <span className={`mt-0.5 block truncate text-[9px] font-semibold ${darkMode ? 'text-white/24' : 'text-slate-400'}`}>{category.subtitle}</span>
             </span>
+            <ChevronRight className={`hidden h-3.5 w-3.5 shrink-0 xl:block ${isActive ? tone.text : 'opacity-25'}`} />
         </button>
     );
 };
 
-
-const NoResults: React.FC<{ query: string; tone: ToneStyle; darkMode: boolean; onClear: () => void }> = ({ query, tone, darkMode, onClear }) => (
-    <CardShell darkMode={darkMode} className="flex min-h-[280px] items-center justify-center p-8 text-center">
+const NoResults: React.FC<{
+    query: string;
+    darkMode: boolean;
+    tone: ToneStyle;
+    onClear: () => void;
+}> = ({ query, darkMode, tone, onClear }) => (
+    <CardShell darkMode={darkMode} className="flex min-h-[260px] items-center justify-center p-8 text-center">
         <div className="max-w-md space-y-4">
-            <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-md border ${tone.bg} ${tone.border}`}>
+            <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-xl border ${tone.bg} ${tone.border}`}>
                 <Search className={`h-6 w-6 ${tone.text}`} />
             </div>
             <div>
                 <h3 className={`text-2xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>No Intel Found</h3>
-                <p className={`mt-2 text-sm font-medium leading-6 ${darkMode ? 'text-white/42' : 'text-slate-500'}`}>
-                    Nothing matched <span className={tone.text}>"{query}"</span> in this section. Clear the filter or try a class, rarity, boss, trait, or resource name.
+                <p className={`mt-2 text-sm font-medium leading-6 ${darkMode ? 'text-white/48' : 'text-slate-500'}`}>
+                    Nothing matched <span className={tone.text}>“{query}”</span>. Try a tank, rarity, boss, shape, trait, or ability name.
                 </p>
             </div>
             <button
                 type="button"
                 onClick={onClear}
-                className={`rounded-md border px-4 py-2 text-[10px] font-bold uppercase tracking-[0.22em] transition-all ${tone.button} ${tone.border} ${tone.buttonText}`}
+                className={`rounded-lg border px-4 py-2 text-[10px] font-bold uppercase tracking-[0.2em] transition-colors ${tone.button} ${tone.border} ${tone.buttonText}`}
             >
                 Clear Search
             </button>
@@ -405,694 +431,758 @@ const NoResults: React.FC<{ query: string; tone: ToneStyle; darkMode: boolean; o
     </CardShell>
 );
 
-const AlmanacOverview: React.FC<{
-    darkMode: boolean;
-    tone: ToneStyle;
-    activeMeta: CategoryMeta;
-    searchQuery: string;
-    compactMode: boolean;
-    onToggleCompact: () => void;
-}> = ({ darkMode, tone, activeMeta, searchQuery, compactMode, onToggleCompact }) => (
-    <div className={`mb-5 grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_auto]`}>
-        <CardShell darkMode={darkMode} className="relative overflow-hidden p-4 sm:p-5 vx-noise">
-            <div className="absolute inset-0" style={{ background: `linear-gradient(120deg, ${tone.hex}13, transparent 42%, ${tone.hex}08)` }} />
-            <div className="relative z-10 grid min-w-0 grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                <div className="min-w-0">
-                    <DataPill tone={tone}><Database className="h-3.5 w-3.5" /> Live Almanac Layer</DataPill>
-                    <h2 className={`mt-3 break-words text-2xl font-bold uppercase italic tracking-tight sm:text-3xl ${darkMode ? 'text-white' : 'text-slate-950'}`}>
-                        {activeMeta.shortLabel} tactical index
-                    </h2>
-                    <p className={`mt-1.5 max-w-3xl text-sm font-medium leading-6 ${darkMode ? 'text-white/40' : 'text-slate-500'}`}>
-                        Cleaner database view with stable scroll containment, searchable entries, compact mode, and safer responsive layouts to stop cards from cutting off.
-                    </p>
-                </div>
-                <div className="grid grid-cols-3 gap-2 sm:min-w-[330px]">
-                    <StatPanel label="Shapes" value={Object.values(ShapeType).length} tone={tone} darkMode={darkMode} icon={Box} />
-                    <StatPanel label="Classes" value={countClasses(CLASS_ROLES) + countClasses(BOSS_TANK_DATA)} tone={tone} darkMode={darkMode} icon={Shield} />
-                    <StatPanel label="Threats" value={Object.values(BOSS_STATS).length} tone={tone} darkMode={darkMode} icon={Skull} />
-                </div>
-            </div>
-        </CardShell>
-        <CardShell darkMode={darkMode} className="flex min-w-0 flex-col justify-between gap-3 p-4 sm:min-w-[240px]">
-            <div>
-                <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.24em] ${darkMode ? 'text-white/25' : 'text-slate-400'}`}>View Mode</p>
-                <p className={`mt-1 text-sm font-semibold ${darkMode ? 'text-white/65' : 'text-slate-600'}`}>{compactMode ? 'Compact density enabled' : 'Cinematic cards enabled'}</p>
-                {searchQuery && <p className={`mt-1 text-xs font-medium ${tone.softText}`}>Filter: {searchQuery}</p>}
-            </div>
-            <button
-                type="button"
-                onClick={onToggleCompact}
-                className={`rounded-md border px-4 py-2 text-[10px] font-bold uppercase tracking-[0.2em] transition-all ${tone.button} ${tone.border} ${tone.buttonText}`}
-            >
-                {compactMode ? 'Use Detail View' : 'Use Compact View'}
-            </button>
-        </CardShell>
-    </div>
-);
-
-// ─── Main component ───────────────────────────────────────────────────────────
 export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, playSound }) => {
+    const prefersReducedMotion = useReducedMotion();
     const [activeCategory, setActiveCategory] = useState<MainCategory>('RESOURCES');
-    const [selectedShape, setSelectedShape]   = useState<ShapeType>(ShapeType.SQUARE);
-    const [searchQuery, setSearchQuery]       = useState('');
-    const [compactMode, setCompactMode]       = useState(false);
+    const [selectedShape, setSelectedShape] = useState<ShapeType>(ShapeType.SQUARE);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [density, setDensity] = useState<DensityMode>(() => getStoredDensity());
+    const [performanceMode, setPerformanceMode] = useState(() => getStoredBoolean('vextor_almanac_performance', true));
+    const [shapeSort, setShapeSort] = useState<SortMode>('name');
     const [scrollProgress, setScrollProgress] = useState(0);
-    const searchInputRef = useRef<HTMLInputElement | null>(null);
+
     const contentRef = useRef<HTMLElement | null>(null);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const scrollFrameRef = useRef<number | null>(null);
 
-    const activeMeta = useMemo(() => CATEGORIES.find(c => c.id === activeCategory) ?? CATEGORIES[0], [activeCategory]);
+    const debouncedSearch = useDebouncedValue(searchQuery, 130);
+    const normalizedQuery = useMemo(() => normalizeSearch(debouncedSearch), [debouncedSearch]);
+    const lowMotion = Boolean(prefersReducedMotion || performanceMode);
+    const compactMode = density === 'compact';
+
+    const activeMeta = useMemo(() => CATEGORIES.find(category => category.id === activeCategory) ?? CATEGORIES[0], [activeCategory]);
     const activeTone = TONE[activeMeta.tone];
+    const ActiveIcon = activeMeta.icon;
 
-    const shapes   = useMemo(() => Object.values(ShapeType)  as ShapeType[],   []);
+    const shapes = useMemo(() => Object.values(ShapeType) as ShapeType[], []);
     const rarities = useMemo(() => Object.values(ShapeRarity) as ShapeRarity[], []);
-    const bosses   = useMemo(() => Object.values(BOSS_STATS)  as BossStatView[],[]);
-    const normalizedQuery = useMemo(() => normalizeSearch(searchQuery), [searchQuery]);
 
-    const filteredShapes = useMemo(
-        () => shapes.filter(shape => matchesSearch(normalizedQuery, shape, formatLabel(String(shape)), ...(SHAPE_STRATEGIES[shape] ?? []))),
-        [normalizedQuery, shapes]
-    );
+    const bosses = useMemo<BossStatView[]>(() => {
+        return Object.entries(BOSS_STATS).map(([id, raw]) => {
+            const boss = raw as Partial<BossStatView> & Record<string, unknown>;
+            return {
+                id,
+                name: String(boss.name ?? formatLabel(id)),
+                description: String(boss.description ?? 'Boss-tier entity with high durability and high reward value.'),
+                health: Number(boss.health ?? 0),
+                xp: Number(boss.xp ?? 0),
+                damage: typeof boss.damage === 'number' ? boss.damage : undefined,
+                radius: typeof boss.radius === 'number' ? boss.radius : undefined,
+            };
+        });
+    }, []);
+
+    const filteredShapes = useMemo(() => {
+        const results = shapes.filter(shape => {
+            const base = SHAPE_STATS[shape];
+            return matchesSearch(normalizedQuery, shape, formatLabel(String(shape)), base?.xp, base?.health, base?.damage, ...getShapeStrategy(shape));
+        });
+
+        return [...results].sort((a, b) => {
+            if (shapeSort === 'xp') return (SHAPE_STATS[b]?.xp ?? 0) - (SHAPE_STATS[a]?.xp ?? 0);
+            if (shapeSort === 'health') return (SHAPE_STATS[b]?.health ?? 0) - (SHAPE_STATS[a]?.health ?? 0);
+            return formatLabel(String(a)).localeCompare(formatLabel(String(b)));
+        });
+    }, [normalizedQuery, shapeSort, shapes]);
+
     const filteredClassRoles = useMemo(() => {
         return Object.entries(CLASS_ROLES)
             .map(([role, data]) => ({
                 role,
                 data: {
                     ...data,
-                    classes: data.classes.filter(cls => matchesSearch(normalizedQuery, role, data.label, data.desc, cls, formatTankName(cls))),
+                    classes: data.classes.filter(tankClass => matchesSearch(normalizedQuery, role, data.label, data.desc, tankClass, formatTankName(tankClass), TANK_CONFIGS[tankClass]?.length)),
                 },
             }))
             .filter(({ data }) => data.classes.length > 0 || matchesSearch(normalizedQuery, data.label, data.desc));
     }, [normalizedQuery]);
+
     const filteredBossRoles = useMemo(() => {
         return Object.entries(BOSS_TANK_DATA)
             .map(([role, data]) => ({
                 role,
                 data: {
                     ...data,
-                    classes: data.classes.filter(cls => matchesSearch(normalizedQuery, role, data.label, data.desc, cls, formatTankName(cls))),
+                    classes: data.classes.filter(tankClass => matchesSearch(normalizedQuery, role, data.label, data.desc, tankClass, formatTankName(tankClass))),
                 },
             }))
             .filter(({ data }) => data.classes.length > 0 || matchesSearch(normalizedQuery, data.label, data.desc));
     }, [normalizedQuery]);
-    const filteredBosses = useMemo(
-        () => bosses.filter(boss => matchesSearch(normalizedQuery, boss.id, boss.name, boss.description, boss.health, boss.xp)),
-        [bosses, normalizedQuery]
-    );
-    const filteredTraits = useMemo(
-        () => TACTICAL_TRAITS.filter(trait => matchesSearch(normalizedQuery, trait.name, trait.key, trait.desc)),
-        [normalizedQuery]
-    );
+
+    const filteredBosses = useMemo(() => {
+        return bosses.filter(boss => matchesSearch(normalizedQuery, boss.id, boss.name, boss.description, boss.health, boss.xp, boss.damage, boss.radius));
+    }, [bosses, normalizedQuery]);
+
+    const filteredTraits = useMemo(() => {
+        return TACTICAL_TRAITS.filter(trait => matchesSearch(normalizedQuery, trait.name, trait.key, trait.desc));
+    }, [normalizedQuery]);
+
+    const visibleEntryCount = useMemo(() => {
+        switch (activeCategory) {
+            case 'RESOURCES': return filteredShapes.length + rarities.length;
+            case 'CHASSIS': return filteredClassRoles.reduce((total, section) => total + section.data.classes.length, 0);
+            case 'BOSSES': return filteredBossRoles.reduce((total, section) => total + section.data.classes.length, 0);
+            case 'THREATS': return filteredBosses.length + 5;
+            case 'VOID': return 4;
+            case 'ABILITIES': return filteredTraits.length + 3;
+            default: return 0;
+        }
+    }, [activeCategory, filteredBossRoles, filteredBosses.length, filteredClassRoles, filteredShapes.length, filteredTraits.length, rarities.length]);
 
     useEffect(() => {
-        const prev = document.body.style.overflow;
+        window.localStorage.setItem('vextor_almanac_density', density);
+    }, [density]);
+
+    useEffect(() => {
+        window.localStorage.setItem('vextor_almanac_performance', String(performanceMode));
+    }, [performanceMode]);
+
+    useEffect(() => {
+        const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-                e.preventDefault();
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onClose();
+
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+                event.preventDefault();
                 searchInputRef.current?.focus();
             }
+
+            if (event.altKey) {
+                const index = Number(event.key) - 1;
+                if (Number.isInteger(index) && CATEGORIES[index]) {
+                    event.preventDefault();
+                    setActiveCategory(CATEGORIES[index].id);
+                    requestAnimationFrame(() => contentRef.current?.scrollTo({ top: 0, behavior: 'auto' }));
+                }
+            }
         };
-        window.addEventListener('keydown', onKey);
-        return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', onKey); };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener('keydown', handleKeyDown);
+            if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+        };
     }, [onClose]);
 
-    const handleCategoryChange = (c: MainCategory) => {
+    const scrollToTop = useCallback(() => {
         playSound?.();
-        setActiveCategory(c);
+        contentRef.current?.scrollTo({ top: 0, behavior: lowMotion ? 'auto' : 'smooth' });
+    }, [lowMotion, playSound]);
+
+    const handleCategoryChange = useCallback((category: MainCategory) => {
+        playSound?.();
+        setActiveCategory(category);
         setScrollProgress(0);
-        requestAnimationFrame(() => contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
-    };
-    const handleShapeChange    = (s: ShapeType)    => { playSound?.(); setSelectedShape(s); };
-    const handleContentScroll = (e: React.UIEvent<HTMLElement>) => {
-        const el = e.currentTarget;
-        const max = el.scrollHeight - el.clientHeight;
-        setScrollProgress(max <= 0 ? 0 : Math.min(1, Math.max(0, el.scrollTop / max)));
-    };
+        requestAnimationFrame(() => contentRef.current?.scrollTo({ top: 0, behavior: lowMotion ? 'auto' : 'smooth' }));
+    }, [lowMotion, playSound]);
 
-    // ── Render sections ────────────────────────────────────────────────────────
-    const renderResources = () => {
-        const visibleShape = filteredShapes.includes(selectedShape) ? selectedShape : (filteredShapes[0] ?? selectedShape);
-        const base       = SHAPE_STATS[visibleShape];
-        const strategies = SHAPE_STRATEGIES[visibleShape] ?? ['Neutral target', 'Resource entity', 'Farm for XP'];
-        if (normalizedQuery && filteredShapes.length === 0) {
-            return <NoResults query={searchQuery} tone={activeTone} darkMode={darkMode} onClear={() => setSearchQuery('')} />;
-        }
-        return (
-            <div className="space-y-6">
-                {/* Shape selector */}
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-                    {filteredShapes.map(shape => {
-                        const active = shape === visibleShape;
-                        return (
-                            <button key={shape} type="button" onClick={() => handleShapeChange(shape)}
-                                className={`group relative min-w-0 overflow-hidden rounded-lg border p-4 transition-all duration-150
-                                    ${active
-                                        ? `${activeTone.bg} ${activeTone.borderStrong} ${activeTone.shadow}`
-                                        : darkMode
-                                            ? 'border-white/8 bg-white/[0.03] hover:border-white/18 hover:bg-white/[0.055]'
-                                            : 'border-slate-200 bg-white hover:border-cyan-300/60 hover:bg-cyan-50/30'}`}
-                            >
-                                <div className="flex flex-col items-center gap-3">
-                                    <div className={`flex h-20 w-20 items-center justify-center rounded-md border ${darkMode ? 'border-white/8 bg-black/30' : 'border-slate-200 bg-white'}`}>
-                                        <ShapePreview type={shape} rarity={ShapeRarity.COMMON} size={54} />
-                                    </div>
-                                    <span className={`vx-mono w-full truncate text-center text-[9px] font-bold uppercase tracking-[0.2em] ${active ? activeTone.text : darkMode ? 'text-white/40 group-hover:text-white/70' : 'text-slate-400 group-hover:text-slate-700'}`}>
-                                        {formatLabel(String(shape))}
-                                    </span>
-                                </div>
-                            </button>
-                        );
-                    })}
+    const handleContentScroll = useCallback((event: React.UIEvent<HTMLElement>) => {
+        const element = event.currentTarget;
+        if (scrollFrameRef.current !== null) return;
+
+        scrollFrameRef.current = window.requestAnimationFrame(() => {
+            const max = element.scrollHeight - element.clientHeight;
+            setScrollProgress(max <= 0 ? 0 : clamp(element.scrollTop / max));
+            scrollFrameRef.current = null;
+        });
+    }, []);
+
+    const clearSearch = useCallback(() => setSearchQuery(''), []);
+
+    const renderOverview = () => (
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <CardShell darkMode={darkMode} className="overflow-hidden p-4 sm:p-5">
+                <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                    <div className="min-w-0">
+                        <DataPill tone={activeTone}><Database className="h-3.5 w-3.5" /> Tactical Index</DataPill>
+                        <h2 className={`mt-3 break-words text-2xl font-bold uppercase italic tracking-tight sm:text-3xl ${darkMode ? 'text-white' : 'text-slate-950'}`}>{activeMeta.label}</h2>
+                        <p className={`mt-1.5 max-w-3xl text-sm font-medium leading-6 ${darkMode ? 'text-white/45' : 'text-slate-500'}`}>
+                            Cleaner field-guide layout, faster search, safer scrolling, reduced effects, and readable data tables that do not nuke the screen on mobile.
+                        </p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 sm:min-w-[340px]">
+                        <StatPanel label="Shapes" value={shapes.length} darkMode={darkMode} tone={activeTone} icon={Box} />
+                        <StatPanel label="Classes" value={countClasses(CLASS_ROLES) + countClasses(BOSS_TANK_DATA)} darkMode={darkMode} tone={activeTone} icon={Shield} />
+                        <StatPanel label="Visible" value={visibleEntryCount} darkMode={darkMode} tone={activeTone} icon={Eye} />
+                    </div>
                 </div>
+            </CardShell>
 
-                {/* Detail + rarity grid */}
-                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                    {/* Left: shape detail */}
-                    <CardShell darkMode={darkMode} className="relative overflow-hidden p-6 vx-bracket" style={{ color: activeTone.hex }}>
-                        <div className={`absolute left-0 top-0 h-0.5 w-full bg-gradient-to-r ${activeTone.line}`} />
-                        <div className="flex flex-col items-center gap-5">
-                            <div className={`relative flex h-48 w-full max-w-[240px] items-center justify-center rounded-lg border ${darkMode ? 'border-white/10 bg-black/40' : 'border-slate-200 bg-slate-50'}`}>
-                                <div className="absolute inset-0 rounded-lg" style={{ background: `radial-gradient(circle at center, ${activeTone.hex}18, transparent 68%)` }} />
-                                <ShapePreview type={visibleShape} rarity={ShapeRarity.COMMON} size={140} />
+            <CardShell darkMode={darkMode} className="p-4 sm:p-5">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.24em] ${darkMode ? 'text-white/30' : 'text-slate-400'}`}>Optimisation</p>
+                        <h3 className={`mt-1 text-lg font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{performanceMode ? 'Performance mode on' : 'Visual mode on'}</h3>
+                        <p className={`mt-1 text-xs font-semibold leading-5 ${darkMode ? 'text-white/42' : 'text-slate-500'}`}>
+                            Performance mode removes the expensive glow/scanline stuff. Keep this on if the modal used to stutter.
+                        </p>
+                    </div>
+                    <Activity className={`h-5 w-5 shrink-0 ${performanceMode ? 'text-emerald-400' : activeTone.text}`} />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setPerformanceMode(value => !value)}
+                        className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors ${performanceMode ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-300' : `${activeTone.button} ${activeTone.border} ${activeTone.buttonText}`}`}
+                    >
+                        {performanceMode ? 'Perf On' : 'Perf Off'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setDensity(value => value === 'compact' ? 'detailed' : 'compact')}
+                        className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors ${activeTone.button} ${activeTone.border} ${activeTone.buttonText}`}
+                    >
+                        {compactMode ? 'Detailed' : 'Compact'}
+                    </button>
+                </div>
+            </CardShell>
+        </div>
+    );
+
+    const renderResources = () => {
+        if (normalizedQuery && filteredShapes.length === 0) {
+            return <NoResults query={debouncedSearch} darkMode={darkMode} tone={activeTone} onClear={clearSearch} />;
+        }
+
+        const visibleShape = filteredShapes.includes(selectedShape) ? selectedShape : (filteredShapes[0] ?? selectedShape);
+        const base = SHAPE_STATS[visibleShape];
+        const strategies = getShapeStrategy(visibleShape);
+
+        return (
+            <div className="space-y-4">
+                <CardShell darkMode={darkMode} className="p-4 sm:p-5">
+                    <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                        <SectionTitle icon={Box} title="Resource Index" eyebrow="Shape families" desc="Inspect base XP, durability, rarity scaling, and farming notes without the old bloated card spam." tone={activeTone} darkMode={darkMode} />
+                        <div className="flex flex-wrap gap-2">
+                            {(['name', 'xp', 'health'] as SortMode[]).map(mode => (
+                                <button
+                                    key={mode}
+                                    type="button"
+                                    onClick={() => setShapeSort(mode)}
+                                    className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors ${shapeSort === mode ? `${activeTone.bg} ${activeTone.borderStrong} ${activeTone.text}` : darkMode ? 'border-white/8 bg-white/[0.03] text-white/50 hover:text-white' : 'border-slate-200 bg-white text-slate-500 hover:text-slate-900'}`}
+                                >
+                                    Sort {mode}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                        {filteredShapes.map(shape => {
+                            const active = shape === visibleShape;
+                            const shapeStats = SHAPE_STATS[shape];
+                            return (
+                                <button
+                                    key={shape}
+                                    type="button"
+                                    onClick={() => { playSound?.(); setSelectedShape(shape); }}
+                                    className={`vx-card-hover min-w-0 rounded-lg border p-3 text-left ${active ? `${activeTone.bg} ${activeTone.borderStrong}` : darkMode ? 'border-white/8 bg-white/[0.03] text-white/60 hover:text-white' : 'border-slate-200 bg-white text-slate-600 hover:text-slate-950'}`}
+                                >
+                                    <p className={`truncate text-sm font-bold uppercase tracking-[0.14em] ${active ? activeTone.text : ''}`}>{formatLabel(String(shape))}</p>
+                                    <p className={`mt-1 truncate text-[11px] font-semibold ${darkMode ? 'text-white/32' : 'text-slate-400'}`}>{shapeStats?.xp?.toLocaleString() ?? 0} XP</p>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </CardShell>
+
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+                    <CardShell darkMode={darkMode} className="p-4 sm:p-5">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-slate-50'}`}>
+                                <ShapePreview type={visibleShape} rarity={ShapeRarity.COMMON} size={46} />
                             </div>
-                            <div className="min-w-0 w-full text-center">
-                                <DataPill tone={activeTone}>Primary Resource</DataPill>
-                                <h3 className={`mt-3 break-words text-2xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>
-                                    {formatLabel(String(visibleShape))} Core
-                                </h3>
-                                <p className={`mt-1.5 text-sm leading-6 font-medium ${darkMode ? 'text-white/38' : 'text-slate-500'}`}>
-                                    Rarity scaling, XP efficiency, and farming route analysis.
-                                </p>
+                            <div className="min-w-0">
+                                <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${activeTone.softText}`}>Selected Resource</p>
+                                <h3 className={`truncate text-2xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatLabel(String(visibleShape))}</h3>
                             </div>
-                            <div className="grid w-full gap-1.5">
-                                {strategies.map(tip => (
-                                    <div key={tip} className={`flex min-w-0 items-center gap-2.5 rounded border px-3 py-2 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white'}`}>
-                                        <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${activeTone.text}`} />
-                                        <span className={`min-w-0 break-words text-xs font-semibold uppercase tracking-[0.08em] ${darkMode ? 'text-white/55' : 'text-slate-500'}`}>{tip}</span>
-                                    </div>
-                                ))}
-                            </div>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-2 gap-2">
+                            <StatPanel label="Base XP" value={base?.xp?.toLocaleString() ?? '0'} darkMode={darkMode} tone={activeTone} />
+                            <StatPanel label="Base HP" value={base?.health?.toLocaleString() ?? '0'} darkMode={darkMode} tone={activeTone} />
+                            <StatPanel label="Sides" value={String(base?.sides ?? 0)} darkMode={darkMode} tone={activeTone} />
+                            <StatPanel label="Damage" value={String(base?.damage ?? 0)} darkMode={darkMode} tone={activeTone} />
+                        </div>
+
+                        <div className="mt-4 space-y-2">
+                            {strategies.map(tip => (
+                                <div key={tip} className={`rounded-lg border px-3 py-2 text-xs font-semibold leading-5 ${darkMode ? 'border-white/8 bg-black/25 text-white/58' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                                    {tip}
+                                </div>
+                            ))}
                         </div>
                     </CardShell>
 
-                    {/* Right: rarity cards */}
-                    <div className="min-w-0">
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-                            {rarities.map(rarity => {
-                                const config = RARITY_CONFIG[rarity];
-                                if (!base || !config) return null;
-                                const style       = getRarityStyle(rarity);
-                                const xpValue     = Math.round(base.xp * config.xpMult);
-                                const hpValue     = Math.round(base.health * config.hpMult);
-                                const chanceLabel = typeof config.chance === 'number' ? `${config.chance}%` : '???';
-                                return (
-                                    <motion.div key={rarity} layout whileHover={{ y: -3 }}
-                                        className={`min-w-0 overflow-hidden rounded-lg border p-4 transition-colors ${style.bg} ${style.border} ${darkMode ? '' : 'bg-white'}`}
-                                        style={{ boxShadow: `0 0 18px ${style.hex}18` }}
-                                    >
-                                        <div className="flex min-w-0 items-center gap-3">
-                                            <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-md border ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-white'}`}>
-                                                <ShapePreview type={visibleShape} rarity={rarity} size={52} />
-                                            </div>
-                                            <div className="min-w-0 flex-1">
-                                                <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-                                                    <h4 className={`vx-mono truncate text-[10px] font-bold uppercase tracking-[0.18em] ${style.text}`}>{formatLabel(String(rarity))}</h4>
-                                                    <span className={`vx-mono shrink-0 rounded border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${darkMode ? 'border-white/8 bg-black/30 text-white/30' : 'border-slate-200 bg-slate-100 text-slate-400'}`}>{chanceLabel}</span>
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-1.5">
-                                                    <StatPanel label="XP" value={xpValue.toLocaleString()} tone={activeTone} darkMode={darkMode} />
-                                                    <StatPanel label="HP" value={hpValue.toLocaleString()} tone={activeTone} darkMode={darkMode} />
-                                                </div>
-                                            </div>
+                    <CardShell darkMode={darkMode} className="overflow-hidden">
+                        <div className="vx-table-scroll vx-scrollbar">
+                            <div className="vx-table-grid-sm">
+                                <div className={`grid grid-cols-[1.1fr_.8fr_.8fr_.7fr] gap-3 border-b px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/40' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                                    <span>Rarity</span><span>XP</span><span>HP</span><span>Chance</span>
+                                </div>
+                                {rarities.map(rarity => {
+                                    const config = RARITY_CONFIG[rarity];
+                                    if (!base || !config) return null;
+                                    const style = getRarityStyle(rarity);
+                                    const xpValue = Math.round(base.xp * config.xpMult);
+                                    const hpValue = Math.round(base.health * config.hpMult);
+                                    const chanceLabel = typeof config.chance === 'number' ? `${config.chance}%` : '???';
+
+                                    return (
+                                        <div key={rarity} className={`grid grid-cols-[1.1fr_.8fr_.8fr_.7fr] gap-3 border-b px-4 py-3 text-sm last:border-b-0 ${darkMode ? 'border-white/6 text-white/70' : 'border-slate-200 text-slate-700'}`}>
+                                            <span className={`font-bold uppercase tracking-[0.12em] ${style.text}`}>{formatLabel(String(rarity))}</span>
+                                            <span className="vx-mono">{xpValue.toLocaleString()}</span>
+                                            <span className="vx-mono">{hpValue.toLocaleString()}</span>
+                                            <span className="vx-mono">{chanceLabel}</span>
                                         </div>
-                                    </motion.div>
-                                );
-                            })}
+                                    );
+                                })}
+                            </div>
                         </div>
-                    </div>
+                    </CardShell>
                 </div>
             </div>
         );
     };
 
-    const renderChassis = () => (
-        <div className="space-y-10">
-            {filteredClassRoles.length === 0 ? <NoResults query={searchQuery} tone={activeTone} darkMode={darkMode} onClear={() => setSearchQuery('')} /> : filteredClassRoles.map(({ role, data }) => {
-                const Icon = data.icon;
-                return (
-                    <section key={role} className="min-w-0">
-                        <SectionTitle icon={Icon} title={role} eyebrow={data.label} desc={data.desc} tone={activeTone} darkMode={darkMode} />
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-                            {data.classes.map(tankClass => {
-                                const complexity = getTankComplexity(tankClass);
-                                const barrels    = TANK_CONFIGS[tankClass]?.length ?? 1;
-                                return (
-                                    <motion.div key={tankClass} whileHover={{ y: -4 }}
-                                        className={`group min-w-0 overflow-hidden rounded-lg border p-4 transition-all vx-card-hover
-                                            ${darkMode ? 'border-white/8 bg-white/[0.03] hover:border-blue-400/40 hover:bg-blue-400/[0.06]'
-                                                       : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/30'}`}
-                                    >
-                                        <div className={`mb-4 flex h-28 items-center justify-center rounded-md border ${darkMode ? 'border-white/8 bg-black/30' : 'border-slate-200 bg-slate-50'}`}>
-                                            <div className="transition-transform duration-300 group-hover:scale-110">
-                                                <TankPreview tankClass={tankClass} size={84} />
-                                            </div>
-                                        </div>
-                                        <div className="min-w-0 text-center">
-                                            <h4 className={`truncate text-sm font-bold uppercase tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatTankName(tankClass)}</h4>
-                                            <p className={`vx-mono mt-0.5 text-[9px] font-bold uppercase tracking-[0.2em] ${activeTone.softText}`}>{barrels} barrel{barrels === 1 ? '' : 's'}</p>
-                                            <div className="mt-3 flex items-center justify-center gap-1" aria-label={`Complexity ${complexity}/5`}>
-                                                {[1,2,3,4,5].map(d => (
-                                                    <span key={d} className={`h-1 w-5 rounded-sm ${d <= complexity ? activeTone.bgStrong : darkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </motion.div>
-                                );
-                            })}
-                        </div>
-                    </section>
-                );
-            })}
-        </div>
-    );
+    const renderChassis = () => {
+        if (filteredClassRoles.length === 0) return <NoResults query={debouncedSearch} darkMode={darkMode} tone={activeTone} onClear={clearSearch} />;
 
-    const renderBosses = () => (
-        <div className="space-y-10">
-            {filteredBossRoles.length === 0 ? <NoResults query={searchQuery} tone={activeTone} darkMode={darkMode} onClear={() => setSearchQuery('')} /> : filteredBossRoles.map(({ role, data }) => {
-                const Icon = data.icon;
-                return (
-                    <section key={role} className="min-w-0">
-                        <SectionTitle icon={Icon} title={role} eyebrow={data.label} desc={data.desc} tone={activeTone} darkMode={darkMode} />
-                        <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-                            {data.classes.map(tankClass => (
-                                <motion.div key={tankClass} whileHover={{ y: -6, scale: 1.01 }}
-                                    className={`group relative min-w-0 overflow-hidden rounded-lg border p-5 transition-all
-                                        ${darkMode ? 'border-white/8 bg-white/[0.03] hover:border-amber-400/45 hover:bg-amber-400/[0.06]'
-                                                   : 'border-slate-200 bg-white hover:border-amber-300 hover:bg-amber-50/40'}`}
-                                >
-                                    <Crown className={`absolute -right-6 -top-6 h-28 w-28 opacity-[0.05] ${activeTone.text}`} />
-                                    <div className="relative z-10 flex flex-col items-center gap-5">
-                                        <div className={`flex h-40 w-full items-center justify-center rounded-md border ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-slate-50'}`}>
-                                            <div className="transition-transform duration-300 group-hover:scale-110">
-                                                <TankPreview tankClass={tankClass} size={124} />
+        return (
+            <div className="space-y-4">
+                {filteredClassRoles.map(({ role, data }) => {
+                    const Icon = data.icon;
+                    return (
+                        <CardShell key={role} darkMode={darkMode} className="overflow-hidden">
+                            <div className="px-4 py-4 sm:px-5">
+                                <SectionTitle icon={Icon} title={role} eyebrow={data.label} desc={data.desc} tone={activeTone} darkMode={darkMode} />
+                            </div>
+                            <div className="vx-table-scroll vx-scrollbar">
+                                <div className="vx-table-grid">
+                                    <div className={`grid grid-cols-[1.1fr_.55fr_.65fr_1.6fr] gap-3 border-y px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/40' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                                        <span>Class</span><span>Barrels</span><span>Complexity</span><span>Role Note</span>
+                                    </div>
+                                    {data.classes.map(tankClass => {
+                                        const barrels = TANK_CONFIGS[tankClass]?.length ?? 1;
+                                        return (
+                                            <div key={tankClass} className={`grid grid-cols-[1.1fr_.55fr_.65fr_1.6fr] gap-3 border-b px-4 py-3 text-sm last:border-b-0 ${darkMode ? 'border-white/6 text-white/70' : 'border-slate-200 text-slate-700'}`}>
+                                                <span className={`font-bold uppercase tracking-[0.12em] ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatTankName(tankClass)}</span>
+                                                <span className="vx-mono">{barrels}</span>
+                                                <span className="vx-mono">{getTankComplexity(tankClass)}/5</span>
+                                                <span className={darkMode ? 'text-white/50' : 'text-slate-500'}>{data.desc}</span>
                                             </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </CardShell>
+                    );
+                })}
+            </div>
+        );
+    };
+
+    const renderBosses = () => {
+        if (filteredBossRoles.length === 0) return <NoResults query={debouncedSearch} darkMode={darkMode} tone={activeTone} onClear={clearSearch} />;
+
+        return (
+            <div className="space-y-4">
+                {filteredBossRoles.map(({ role, data }) => {
+                    const Icon = data.icon;
+                    return (
+                        <CardShell key={role} darkMode={darkMode} className="p-4 sm:p-5">
+                            <SectionTitle icon={Icon} title={role} eyebrow={data.label} desc={data.desc} tone={activeTone} darkMode={darkMode} />
+                            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                                {data.classes.map(tankClass => (
+                                    <div key={tankClass} className={`vx-card-hover rounded-xl border p-4 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-slate-50'}`}>
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${activeTone.softText}`}>Titan Class</p>
+                                                <h4 className={`truncate text-xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatTankName(tankClass)}</h4>
+                                            </div>
+                                            <Crown className={`h-5 w-5 shrink-0 ${activeTone.text}`} />
                                         </div>
-                                        <div className="min-w-0 w-full text-center">
-                                            <DataPill tone={activeTone}>Titan Class</DataPill>
-                                            <h4 className={`mt-2.5 break-words text-xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatTankName(tankClass)}</h4>
-                                        </div>
-                                        <p className={`vx-mono min-h-[88px] w-full rounded-md border p-3.5 text-center text-[11px] font-medium leading-6 ${darkMode ? 'border-white/8 bg-black/30 text-white/42' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
-                                            {tankClass === TankClass.COLOSSAL   && 'A mobile fortress with overwhelming cannon pressure and deck turrets. Slow, brutal, impossible to ignore.'}
-                                            {tankClass === TankClass.LEVIATHAN  && 'Area-control titan using shockwaves to disrupt close threats, projectiles, and swarm pressure.'}
-                                            {tankClass === TankClass.WARLORD    && 'Siege commander with repair drones and lockdown potential. Best holding territory and forcing bad trades.'}
+                                        <p className={`mt-3 text-sm leading-6 ${darkMode ? 'text-white/50' : 'text-slate-500'}`}>
+                                            {tankClass === TankClass.COLOSSAL && 'Mobile fortress: huge cannon pressure, hull control, and brutal lane denial.'}
+                                            {tankClass === TankClass.LEVIATHAN && 'Area-control titan: shockwave disruption and anti-cluster pressure.'}
+                                            {tankClass === TankClass.WARLORD && 'Siege commander: trades mobility for lockdown pressure, sustain, and territory control.'}
                                         </p>
                                     </div>
-                                </motion.div>
+                                ))}
+                            </div>
+                        </CardShell>
+                    );
+                })}
+            </div>
+        );
+    };
+
+    const renderThreats = () => {
+        if (filteredBosses.length === 0) return <NoResults query={debouncedSearch} darkMode={darkMode} tone={activeTone} onClear={clearSearch} />;
+
+        return (
+            <div className="space-y-4">
+                <CardShell darkMode={darkMode} className="overflow-hidden">
+                    <div className="px-4 py-4 sm:px-5">
+                        <SectionTitle icon={Skull} title="Threat Register" eyebrow="Hostile entities" desc="Boss-tier targets, elite frames, and objective defenders arranged as a quick combat register." tone={activeTone} darkMode={darkMode} />
+                    </div>
+                    <div className="vx-table-scroll vx-scrollbar">
+                        <div className="vx-table-grid">
+                            <div className={`grid grid-cols-[1fr_.8fr_.7fr_1.8fr] gap-3 border-y px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/40' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                                <span>Threat</span><span>Integrity</span><span>XP</span><span>Notes</span>
+                            </div>
+                            {filteredBosses.map(boss => (
+                                <div key={boss.id} className={`grid grid-cols-[1fr_.8fr_.7fr_1.8fr] gap-3 border-b px-4 py-3 text-sm last:border-b-0 ${darkMode ? 'border-white/6 text-white/70' : 'border-slate-200 text-slate-700'}`}>
+                                    <div className="min-w-0">
+                                        <p className={`truncate font-bold uppercase tracking-[0.12em] ${darkMode ? 'text-white' : 'text-slate-950'}`}>{boss.name}</p>
+                                        <p className={`mt-1 text-[10px] font-bold uppercase tracking-[0.16em] ${activeTone.text}`}>{formatLabel(boss.id)}</p>
+                                    </div>
+                                    <span className="vx-mono">{boss.health.toLocaleString()} HP</span>
+                                    <span className="vx-mono">{boss.xp.toLocaleString()}</span>
+                                    <span className={darkMode ? 'text-white/50' : 'text-slate-500'}>{boss.description}</span>
+                                </div>
                             ))}
                         </div>
-                    </section>
-                );
-            })}
-        </div>
-    );
-
-    const renderThreats = () => (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                {filteredBosses.length === 0 ? <NoResults query={searchQuery} tone={activeTone} darkMode={darkMode} onClear={() => setSearchQuery('')} /> : filteredBosses.map(boss => {
-                    const previewType = getShapePreviewType(boss.id);
-                    return (
-                        <motion.div key={boss.id} whileHover={{ y: -3 }}
-                            className={`group relative min-w-0 overflow-hidden rounded-lg border p-5 transition-all
-                                ${darkMode ? 'border-red-400/20 bg-red-400/[0.05] hover:border-red-400/40'
-                                           : 'border-red-200 bg-white hover:bg-red-50/40'}`}
-                        >
-                            <Skull className="absolute -right-5 -top-6 h-28 w-28 text-red-400 opacity-[0.07]" />
-                            <div className="relative z-10 grid min-w-0 grid-cols-1 gap-4 md:grid-cols-[160px_minmax(0,1fr)]">
-                                <div className={`flex h-40 items-center justify-center rounded-md border ${darkMode ? 'border-white/8 bg-black/35' : 'border-red-100 bg-red-50/60'}`}>
-                                    <ShapePreview type={previewType} rarity={ShapeRarity.COMMON} size={138} />
-                                </div>
-                                <div className="min-w-0 space-y-3">
-                                    <div className="min-w-0">
-                                        <div className="mb-2.5 flex flex-wrap items-center gap-2">
-                                            <DataPill tone={activeTone}>Class Omega</DataPill>
-                                            <span className={`vx-mono rounded border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.2em] ${darkMode ? 'border-red-400/25 bg-red-400/10 text-red-300' : 'border-red-200 bg-red-100 text-red-500'}`}>Major Threat</span>
-                                        </div>
-                                        <h3 className={`break-words text-2xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{boss.name}</h3>
-                                        <p className={`mt-2 text-xs font-medium italic leading-6 ${darkMode ? 'text-white/38' : 'text-slate-500'}`}>"{boss.description}"</p>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <StatPanel label="Integrity"  value={`${boss.health.toLocaleString()} HP`} tone={activeTone} darkMode={darkMode} icon={Shield} />
-                                        <StatPanel label="XP Payout"  value={boss.xp.toLocaleString()}              tone={activeTone} darkMode={darkMode} icon={Zap}    />
-                                    </div>
-                                </div>
-                            </div>
-                        </motion.div>
-                    );
-                })}
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <CardShell darkMode={darkMode} className="relative overflow-hidden p-5">
-                    <div className="absolute left-0 top-0 h-full w-0.5 bg-amber-400/70" />
-                    <SectionTitle icon={Zap} title="Elite Incursions" eyebrow="Spectral mimic wave"
-                        desc="Advanced chassis variants can manifest as aggressive elites with boosted firepower and harsh punishment windows."
-                        tone={TONE.amber} darkMode={darkMode} />
-                    <div className="grid grid-cols-3 gap-2">
-                        {[TankClass.DESTROYER, TankClass.SNIPER, TankClass.OVERLORD].map(tc => (
-                            <div key={tc} className={`flex min-w-0 items-center gap-2 rounded-md border p-2.5 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white'}`}>
-                                <TankPreview tankClass={tc} size={34} />
-                                <span className={`truncate text-[9px] font-bold uppercase tracking-[0.14em] ${darkMode ? 'text-white/50' : 'text-slate-500'}`}>{formatTankName(tc)}</span>
-                            </div>
-                        ))}
                     </div>
                 </CardShell>
-                <CardShell darkMode={darkMode} className="relative overflow-hidden p-5">
-                    <div className="absolute left-0 top-0 h-full w-0.5 bg-red-400/70" />
-                    <SectionTitle icon={Shield} title="Security Automata" eyebrow="Objective defense drones"
-                        desc="Defensive drones aggregate around high-value zones and use pressure, body-blocking, and ramming to punish careless routing."
-                        tone={TONE.red} darkMode={darkMode} />
-                    <div className="grid grid-cols-2 gap-2">
-                        <StatPanel label="Crasher Frame" value="40 HP"  tone={TONE.red} darkMode={darkMode} icon={Activity} />
-                        <StatPanel label="Alpha Frame"   value="250 HP" tone={TONE.red} darkMode={darkMode} icon={Crown}    />
-                    </div>
-                </CardShell>
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <CardShell darkMode={darkMode} className="p-4 sm:p-5">
+                        <SectionTitle icon={Zap} title="Elite Incursions" eyebrow="Mimic threats" desc="Advanced class variants that punish greedy rotations and weak positioning." tone={TONE.amber} darkMode={darkMode} />
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            {[TankClass.DESTROYER, TankClass.SNIPER, TankClass.OVERLORD].map(tankClass => (
+                                <div key={tankClass} className={`rounded-lg border px-3 py-2 text-sm font-bold uppercase tracking-[0.1em] ${darkMode ? 'border-white/8 bg-black/25 text-white/65' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                                    {formatTankName(tankClass)}
+                                </div>
+                            ))}
+                        </div>
+                    </CardShell>
+                    <CardShell darkMode={darkMode} className="p-4 sm:p-5">
+                        <SectionTitle icon={Shield} title="Security Automata" eyebrow="Objective defense" desc="Crasher and alpha frames protect critical zones through contact pressure and area denial." tone={TONE.red} darkMode={darkMode} />
+                        <div className="grid grid-cols-2 gap-2">
+                            <StatPanel label="Crasher" value="40 HP" darkMode={darkMode} tone={TONE.red} icon={Activity} />
+                            <StatPanel label="Alpha" value="250 HP" darkMode={darkMode} tone={TONE.red} icon={Crown} />
+                        </div>
+                    </CardShell>
+                </div>
             </div>
-        </div>
-    );
+        );
+    };
 
     const renderVoid = () => (
-        <div className="grid min-h-full grid-cols-1 items-center gap-8 xl:grid-cols-[minmax(260px,480px)_minmax(0,1fr)]">
-            <div className="flex min-w-0 justify-center">
-                <div className="relative flex aspect-square w-full max-w-[400px] items-center justify-center">
-                    <motion.div animate={{ rotate: 360 }} transition={{ duration: 38, repeat: Infinity, ease: 'linear' }} className="absolute inset-4 rounded-full border border-purple-400/12" />
-                    <motion.div animate={{ rotate: -360 }} transition={{ duration: 55, repeat: Infinity, ease: 'linear' }} className="absolute inset-12 rounded-full border border-purple-400/8" />
-                    <motion.div
-                        animate={{ scale: [1, 1.03, 1], rotate: [0, 2, -2, 0] }}
-                        transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}
-                        className={`relative flex h-[76%] w-[76%] items-center justify-center rounded-full border-2 ${darkMode ? 'border-purple-400/25 bg-[#030508] shadow-[0_0_100px_rgba(192,132,252,0.28)]' : 'border-purple-300 bg-slate-950 shadow-[0_0_80px_rgba(192,132,252,0.22)]'}`}
-                    >
-                        <div className="absolute inset-0 rounded-full" style={{ background: 'radial-gradient(circle at center, rgba(192,132,252,0.2), transparent 60%)' }} />
-                        <ShapePreview type={VOID_PORTAL_PREVIEW} rarity={ShapeRarity.COMMON} size={340} />
-                    </motion.div>
-                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-purple-400/35 bg-purple-600 px-4 py-1.5 text-[9px] font-bold uppercase tracking-[0.36em] text-white vx-mono shadow-[0_0_28px_rgba(192,132,252,0.4)]">
-                        Null Space Detected
+        <div className="space-y-4">
+            <CardShell darkMode={darkMode} className="p-4 sm:p-5">
+                <SectionTitle icon={Aperture} title="Dimensional Rift" eyebrow="Void research" desc="A readable summary of rift farming without trying to run an entire animated scene inside the modal." tone={activeTone} darkMode={darkMode} />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                    <div className={`flex h-44 items-center justify-center rounded-xl border ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-slate-50'}`}>
+                        <ShapePreview type={VOID_PORTAL_PREVIEW} rarity={ShapeRarity.COMMON} size={112} />
                     </div>
-                </div>
-            </div>
-            <div className="min-w-0 space-y-5">
-                <DataPill tone={activeTone}><Aperture className="h-3.5 w-3.5" /> Rift Analysis</DataPill>
-                <div className="min-w-0">
-                    <h3 className={`break-words text-4xl font-bold uppercase italic tracking-tight sm:text-5xl ${darkMode ? 'text-white' : 'text-slate-950'}`}>Dimensional Rift</h3>
-                    <p className={`mt-3.5 max-w-3xl text-sm font-medium leading-7 ${darkMode ? 'text-purple-100/45' : 'text-slate-600'}`}>
-                        A parallel resource field where the grid collapses into unstable matter. Void farming can spike rewards hard, but the space is volatile and punishes slow reactions.
-                    </p>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                    <StatPanel label="Yield Gain" value="1000%"    tone={activeTone} darkMode={darkMode} icon={Zap}      />
-                    <StatPanel label="Stability"  value="Volatile" tone={activeTone} darkMode={darkMode} icon={Activity} />
-                    <StatPanel label="Cycle Rate" value="5:00m"    tone={activeTone} darkMode={darkMode} icon={Database} />
-                </div>
-                <CardShell darkMode={darkMode} className="p-5">
-                    <div className="flex min-w-0 gap-3.5">
-                        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-md border ${activeTone.bg} ${activeTone.border}`}>
-                            <Info className={`h-5 w-5 ${activeTone.text}`} />
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            <StatPanel label="Yield Gain" value="1000%" darkMode={darkMode} tone={activeTone} icon={Zap} />
+                            <StatPanel label="Stability" value="Volatile" darkMode={darkMode} tone={activeTone} icon={Activity} />
+                            <StatPanel label="Cycle Rate" value="5:00m" darkMode={darkMode} tone={activeTone} icon={Database} />
                         </div>
-                        <div className="min-w-0">
-                            <h4 className={`text-base font-bold uppercase tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>Field Note</h4>
-                            <p className={`mt-1.5 text-xs font-medium leading-6 ${darkMode ? 'text-white/42' : 'text-slate-500'}`}>
-                                Void routes are high-risk farming lanes. Enter with enough movement speed to disengage, and avoid tunnelling on resource rolls when hostile tanks are nearby.
-                            </p>
+                        <div className="grid grid-cols-1 gap-2">
+                            {[
+                                'Void routes massively increase farming yield, but greed gets punished fast.',
+                                'Movement speed, disengage tools, and map awareness matter more than raw DPS.',
+                                'Rare drops are bait if enemy tanks can collapse on your route.',
+                            ].map(note => (
+                                <div key={note} className={`rounded-lg border px-3 py-2 text-sm font-medium leading-6 ${darkMode ? 'border-white/8 bg-black/25 text-white/55' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                                    {note}
+                                </div>
+                            ))}
                         </div>
-                    </div>
-                </CardShell>
-            </div>
-        </div>
-    );
-
-    const renderAbilities = () => (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                {filteredTraits.length === 0 ? <NoResults query={searchQuery} tone={activeTone} darkMode={darkMode} onClear={() => setSearchQuery('')} /> : filteredTraits.map(trait => {
-                    const Icon = trait.icon;
-                    return (
-                        <motion.article key={trait.name} whileHover={{ y: -3 }}
-                            className={`group relative min-w-0 overflow-hidden rounded-lg border p-5 transition-all vx-card-hover
-                                ${darkMode ? 'border-white/8 bg-white/[0.03] hover:border-emerald-400/35 hover:bg-emerald-400/[0.05]'
-                                           : 'border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40'}`}
-                        >
-                            <Icon className={`absolute -right-6 -top-6 h-28 w-28 opacity-[0.05] ${activeTone.text}`} />
-                            <div className="relative z-10 flex min-w-0 flex-col gap-4">
-                                <div className="flex min-w-0 items-start justify-between gap-3">
-                                    <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-md border ${activeTone.bg} ${activeTone.border}`}>
-                                        <Icon className={`h-6 w-6 ${activeTone.text}`} />
-                                    </div>
-                                    <span className={`vx-mono max-w-[54%] break-words rounded border px-3 py-1.5 text-right text-[9px] font-bold uppercase tracking-[0.2em] ${darkMode ? 'border-white/8 bg-black/30 text-white/38' : 'border-slate-200 bg-slate-50 text-slate-400'}`}>
-                                        {trait.key}
-                                    </span>
-                                </div>
-                                <div className="min-w-0">
-                                    <h4 className={`break-words text-xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{trait.name}</h4>
-                                    <p className={`mt-2 text-xs font-medium leading-6 ${darkMode ? 'text-white/42' : 'text-slate-500'}`}>{trait.desc}</p>
-                                </div>
-                            </div>
-                        </motion.article>
-                    );
-                })}
-            </div>
-
-            <CardShell darkMode={darkMode} className="relative overflow-hidden p-5 sm:p-6">
-                <div className="absolute inset-0 rounded-lg" style={{ background: `radial-gradient(circle at top right, ${activeTone.hex}10, transparent 50%)` }} />
-                <div className="relative z-10 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-                    <div className="min-w-0">
-                        <SectionTitle icon={Info} title="Pilot Synergy Protocols" eyebrow="Build discipline"
-                            desc="Match upgrades with your chassis identity. Precision builds scale harder with projectile speed, assault classes love reload and damage, command classes need unit pressure."
-                            tone={activeTone} darkMode={darkMode} />
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                        {[StatType.RELOAD, StatType.BULLET_SPEED, StatType.MOVEMENT_SPEED].map(stat => (
-                            <div key={stat} className={`flex h-24 w-full min-w-[76px] flex-col items-center justify-center gap-2 rounded-md border px-2 py-3 text-center ${darkMode ? 'border-white/8 bg-black/30' : 'border-slate-200 bg-white'}`}>
-                                <div className={`h-7 w-7 rounded-sm ${activeTone.bgStrong} opacity-55 shadow-lg ${activeTone.glow}`} />
-                                <span className={`vx-mono line-clamp-2 text-[8px] font-bold uppercase leading-3 tracking-wider ${darkMode ? 'text-white/38' : 'text-slate-400'}`}>{formatLabel(String(stat))}</span>
-                            </div>
-                        ))}
                     </div>
                 </div>
             </CardShell>
         </div>
     );
 
+    const renderAbilities = () => {
+        if (filteredTraits.length === 0) return <NoResults query={debouncedSearch} darkMode={darkMode} tone={activeTone} onClear={clearSearch} />;
+
+        return (
+            <div className="space-y-4">
+                <CardShell darkMode={darkMode} className="overflow-hidden">
+                    <div className="px-4 py-4 sm:px-5">
+                        <SectionTitle icon={Cpu} title="Tactical Traits" eyebrow="Ability register" desc="Passives and actives as a clean operations list instead of laggy oversized cards." tone={activeTone} darkMode={darkMode} />
+                    </div>
+                    <div className="divide-y divide-white/6">
+                        {filteredTraits.map(trait => {
+                            const Icon = trait.icon;
+                            return (
+                                <div key={trait.name} className={`grid grid-cols-[auto_minmax(0,1fr)] gap-3 px-4 py-3 lg:grid-cols-[auto_minmax(160px,.65fr)_minmax(0,1fr)] ${darkMode ? 'text-white/70' : 'text-slate-700'}`}>
+                                    <div className={`flex h-10 w-10 items-center justify-center rounded-lg border ${activeTone.bg} ${activeTone.border}`}>
+                                        <Icon className={`h-4 w-4 ${activeTone.text}`} />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className={`font-bold uppercase tracking-[0.12em] ${darkMode ? 'text-white' : 'text-slate-950'}`}>{trait.name}</p>
+                                        <p className={`vx-mono mt-1 text-[10px] font-bold uppercase tracking-[0.18em] ${activeTone.softText}`}>{trait.key}</p>
+                                    </div>
+                                    <p className={`col-span-2 text-sm leading-6 lg:col-span-1 ${darkMode ? 'text-white/50' : 'text-slate-500'}`}>{trait.desc}</p>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </CardShell>
+
+                <CardShell darkMode={darkMode} className="p-4 sm:p-5">
+                    <SectionTitle icon={Info} title="Pilot Synergy Protocols" eyebrow="Build discipline" desc="Strong builds are focused. Pick anchor stats instead of trying to max absolutely everything." tone={activeTone} darkMode={darkMode} />
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        {[StatType.RELOAD, StatType.BULLET_SPEED, StatType.MOVEMENT_SPEED].map(stat => (
+                            <StatPanel key={stat} label="Priority" value={formatLabel(String(stat))} darkMode={darkMode} tone={activeTone} />
+                        ))}
+                    </div>
+                </CardShell>
+            </div>
+        );
+    };
+
     const renderContent = () => {
         switch (activeCategory) {
             case 'RESOURCES': return renderResources();
-            case 'CHASSIS':   return renderChassis();
-            case 'BOSSES':    return renderBosses();
-            case 'THREATS':   return renderThreats();
-            case 'VOID':      return renderVoid();
+            case 'CHASSIS': return renderChassis();
+            case 'BOSSES': return renderBosses();
+            case 'THREATS': return renderThreats();
+            case 'VOID': return renderVoid();
             case 'ABILITIES': return renderAbilities();
-            default:          return renderResources();
+            default: return renderResources();
         }
     };
 
-    const ActiveIcon = activeMeta.icon;
-
-    // ── Render ─────────────────────────────────────────────────────────────────
     return (
         <>
             <style dangerouslySetInnerHTML={{ __html: ALMANAC_STYLES }} />
             <motion.div
                 className="fixed inset-0 z-[1000] flex items-center justify-center overflow-hidden p-1 sm:p-4 lg:p-6"
-                style={{ background: 'rgba(0,0,0,0.88)' }}
-                initial={{ opacity: 0 }}
+                style={{ background: 'rgba(0,0,0,.86)' }}
+                initial={lowMotion ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                exit={lowMotion ? { opacity: 1 } : { opacity: 0 }}
                 onMouseDown={onClose}
             >
                 <motion.div
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="almanac-title"
-                    className={`vx-modal vx-grid-bg relative flex h-[calc(100dvh-0.5rem)] max-h-[94dvh] w-full max-w-[1640px] min-w-0 overflow-hidden rounded-xl border shadow-2xl sm:h-[94dvh]
-                        ${darkMode ? 'border-white/12 bg-[#030508] text-white shadow-black' : 'border-slate-300 bg-[#f4f0e8] text-slate-950 shadow-slate-900/20'}`}
-                    initial={{ scale: 0.97, y: 20, opacity: 0 }}
+                    onMouseDown={event => event.stopPropagation()}
+                    className={`vx-modal ${performanceMode ? 'vx-perf' : 'vx-grid-bg vx-scanlines'} relative flex h-[calc(100dvh-.5rem)] max-h-[94dvh] w-full max-w-[1640px] min-w-0 overflow-hidden rounded-2xl border shadow-2xl sm:h-[94dvh] ${darkMode ? 'border-white/12 bg-[#030508] text-white shadow-black' : 'border-slate-300 bg-[#f5f2ea] text-slate-950 shadow-slate-900/20'}`}
+                    initial={lowMotion ? false : { scale: .985, y: 16, opacity: 0 }}
                     animate={{ scale: 1, y: 0, opacity: 1 }}
-                    exit={{ scale: 0.97, y: 16, opacity: 0 }}
-                    transition={{ type: 'spring', stiffness: 240, damping: 28 }}
-                    onMouseDown={e => e.stopPropagation()}
+                    exit={lowMotion ? { opacity: 1 } : { scale: .985, y: 12, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 280, damping: 32 }}
                 >
-                    {/* Scan-line overlay */}
-                    {darkMode && <div className="vx-scanlines pointer-events-none absolute inset-0 z-[2]" />}
+                    {!performanceMode && (
+                        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                            <div className={`absolute -left-24 -top-24 h-72 w-72 rounded-full blur-3xl opacity-30 ${activeTone.bg}`} />
+                            <div className={`absolute -bottom-32 right-8 h-80 w-80 rounded-full blur-3xl opacity-25 ${activeTone.bg}`} />
+                        </div>
+                    )}
 
-                    {/* Ambient glow orbs */}
-                    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                        <div className={`absolute -left-24 -top-24 h-72 w-72 rounded-full blur-3xl opacity-40 ${activeTone.bg}`} />
-                        <div className={`absolute -bottom-32 right-8 h-80 w-80 rounded-full blur-3xl opacity-30 ${activeTone.bg}`} />
-                        {darkMode && (
-                            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_0%,rgba(251,191,36,0.04),transparent_60%)]" />
-                        )}
-                    </div>
-
-                    {/* ── Sidebar ────────────────────────────────────────────── */}
-                    <aside className={`relative z-10 hidden w-[96px] shrink-0 flex-col border-r p-3 lg:flex xl:w-[288px]
-                        ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-white/60'}`}
-                    >
-                        {/* Brand */}
-                        <div className={`mb-3 flex min-w-0 items-center gap-3 rounded-md border p-3 ${darkMode ? 'border-amber-400/20 bg-amber-400/[0.06]' : 'border-amber-300/40 bg-amber-50/60'}`}>
-                            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded border ${darkMode ? 'border-amber-400/25 bg-amber-400/10' : 'border-amber-300/50 bg-amber-100/60'}`}>
+                    <aside className={`relative z-10 hidden w-[92px] shrink-0 flex-col border-r p-3 lg:flex xl:w-[304px] ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-white/60'}`}>
+                        <div className={`mb-3 flex min-w-0 items-center gap-3 rounded-xl border p-3 ${darkMode ? 'border-amber-400/20 bg-amber-400/[0.06]' : 'border-amber-300/40 bg-amber-50/70'}`}>
+                            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${darkMode ? 'border-amber-400/25 bg-amber-400/10' : 'border-amber-300/50 bg-amber-100/70'}`}>
                                 <Database className="h-5 w-5 text-amber-400" />
                             </div>
                             <div className="hidden min-w-0 xl:block">
                                 <h2 className={`vx-mono truncate text-base font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>VEXTOR_OS</h2>
-                                <p className="vx-mono truncate text-[9px] font-bold uppercase tracking-[0.3em] text-amber-400/55">Tactical Database</p>
+                                <p className="vx-mono truncate text-[9px] font-bold uppercase tracking-[0.3em] text-amber-400/60">Tactical Database</p>
                             </div>
                         </div>
 
-                        {/* Nav */}
-                        <nav className={`min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 ${darkMode ? 'vx-scrollbar' : 'vx-scrollbar-light'}`}>
-                            {CATEGORIES.map(cat => (
-                                <CategoryButton key={cat.id} category={cat} isActive={activeCategory === cat.id} darkMode={darkMode} onClick={() => handleCategoryChange(cat.id)} />
+                        <nav className={`min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 ${darkMode ? 'vx-scrollbar' : 'vx-scrollbar-light'}`} aria-label="Almanac categories">
+                            {CATEGORIES.map(category => (
+                                <CategoryButton
+                                    key={category.id}
+                                    category={category}
+                                    isActive={activeCategory === category.id}
+                                    darkMode={darkMode}
+                                    performanceMode={performanceMode}
+                                    onClick={() => handleCategoryChange(category.id)}
+                                />
                             ))}
                         </nav>
 
-                        {/* Close */}
-                        <button type="button" onClick={onClose}
-                            className={`mt-3 flex w-full items-center justify-center gap-2.5 rounded-md border p-3 transition-all duration-150
-                                ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/38 hover:border-red-400/35 hover:bg-red-400/[0.07] hover:text-red-300'
-                                           : 'border-slate-200 bg-white text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-500'}`}
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className={`mt-3 flex w-full items-center justify-center gap-2.5 rounded-xl border p-3 transition-colors ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/45 hover:border-red-400/35 hover:bg-red-400/[0.07] hover:text-red-300' : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-500'}`}
                         >
                             <X className="h-4 w-4" />
-                            <span className="hidden text-[10px] font-bold uppercase tracking-[0.2em] xl:block">Close Terminal</span>
+                            <span className="hidden text-[10px] font-bold uppercase tracking-[0.2em] xl:block">Close</span>
                         </button>
                     </aside>
 
-                    {/* ── Main content ───────────────────────────────────────── */}
                     <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
-                        {/* Header */}
-                        <header className={`shrink-0 border-b px-4 py-3 sm:px-6 ${darkMode ? 'border-white/8 bg-black/20' : 'border-slate-200 bg-white/50'}`}>
+                        <header className={`shrink-0 border-b px-4 py-3 sm:px-6 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white/55'}`}>
                             <div className="flex min-w-0 items-start justify-between gap-3">
                                 <div className="flex min-w-0 flex-1 items-start gap-3">
-                                    <div className={`hidden h-12 w-12 shrink-0 items-center justify-center rounded-md border sm:flex ${activeTone.bg} ${activeTone.border}`}>
+                                    <div className={`hidden h-12 w-12 shrink-0 items-center justify-center rounded-xl border sm:flex ${activeTone.bg} ${activeTone.border}`}>
                                         <ActiveIcon className={`h-6 w-6 ${activeTone.text}`} />
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                        <div className="flex items-center gap-2">
-                                            <DataPill tone={activeTone}><Search className="h-3 w-3" /> {activeCategory}</DataPill>
-                                        </div>
-                                        <h1 id="almanac-title" className={`mt-1.5 break-words text-2xl font-bold uppercase italic tracking-tight sm:text-3xl lg:text-4xl ${darkMode ? 'text-white' : 'text-slate-950'}`}>
-                                            {activeMeta.label}
-                                        </h1>
-                                        <p className={`mt-1 max-w-2xl text-xs font-medium leading-5 ${darkMode ? 'text-white/38' : 'text-slate-500'}`}>{activeMeta.subtitle}</p>
+                                        <DataPill tone={activeTone}><Search className="h-3 w-3" /> {activeMeta.shortLabel}</DataPill>
+                                        <h1 id="almanac-title" className={`mt-1.5 break-words text-2xl font-bold uppercase italic tracking-tight sm:text-3xl lg:text-4xl ${darkMode ? 'text-white' : 'text-slate-950'}`}>{activeMeta.label}</h1>
+                                        <p className={`mt-1 max-w-2xl text-xs font-semibold leading-5 ${darkMode ? 'text-white/40' : 'text-slate-500'}`}>{activeMeta.subtitle}</p>
                                     </div>
                                 </div>
-                                <div className={`hidden min-w-[260px] max-w-[420px] flex-1 items-center gap-2 rounded-md border px-3 py-2 xl:flex ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white'}`}>
+
+                                <div className={`hidden min-w-[260px] max-w-[440px] flex-1 items-center gap-2 rounded-xl border px-3 py-2 xl:flex ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white'}`}>
                                     <Search className={`h-4 w-4 shrink-0 ${activeTone.text}`} />
                                     <input
                                         ref={searchInputRef}
                                         value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        onChange={event => setSearchQuery(event.target.value)}
                                         placeholder="Search tanks, traits, bosses..."
-                                        className={`min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none placeholder:font-medium ${darkMode ? 'text-white placeholder:text-white/22' : 'text-slate-900 placeholder:text-slate-400'}`}
+                                        className={`min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none placeholder:font-medium ${darkMode ? 'text-white placeholder:text-white/24' : 'text-slate-900 placeholder:text-slate-400'}`}
                                     />
                                     {searchQuery && (
-                                        <button type="button" onClick={() => setSearchQuery('')} className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-white/35 hover:text-white' : 'text-slate-400 hover:text-slate-900'}`}>
+                                        <button type="button" onClick={clearSearch} className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-white/40 hover:text-white' : 'text-slate-400 hover:text-slate-900'}`}>
                                             Clear
                                         </button>
                                     )}
-                                    <span className={`vx-mono rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest ${darkMode ? 'border-white/8 text-white/20' : 'border-slate-200 text-slate-400'}`}>Ctrl K</span>
+                                    <span className={`vx-mono rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest ${darkMode ? 'border-white/8 text-white/25' : 'border-slate-200 text-slate-400'}`}>Ctrl K</span>
                                 </div>
+
                                 <div className="flex shrink-0 items-center gap-2">
-                                    <div className={`hidden items-center gap-2.5 rounded-md border px-3 py-2 md:flex ${darkMode ? 'border-emerald-400/20 bg-emerald-400/[0.06]' : 'border-emerald-300/40 bg-emerald-50/60'}`}>
-                                        <Activity className="h-3.5 w-3.5 text-emerald-400" />
+                                    <div className={`hidden items-center gap-2.5 rounded-xl border px-3 py-2 md:flex ${performanceMode ? darkMode ? 'border-emerald-400/20 bg-emerald-400/[0.06]' : 'border-emerald-300/40 bg-emerald-50/70' : darkMode ? 'border-amber-400/20 bg-amber-400/[0.06]' : 'border-amber-300/40 bg-amber-50/70'}`}>
+                                        <Activity className={`h-3.5 w-3.5 ${performanceMode ? 'text-emerald-400' : 'text-amber-400'}`} />
                                         <div className="text-right">
-                                            <p className={`vx-mono text-[8px] font-bold uppercase tracking-[0.2em] ${darkMode ? 'text-white/25' : 'text-slate-400'}`}>System</p>
-                                            <p className="vx-mono text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-400">
-                                                Synced<span className="vx-blink">_</span>
-                                            </p>
+                                            <p className={`vx-mono text-[8px] font-bold uppercase tracking-[0.2em] ${darkMode ? 'text-white/28' : 'text-slate-400'}`}>Mode</p>
+                                            <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.2em] ${performanceMode ? 'text-emerald-400' : 'text-amber-400'}`}>{performanceMode ? 'Fast' : 'Visual'}</p>
                                         </div>
                                     </div>
-                                    <button type="button" onClick={onClose}
-                                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md border transition-all duration-150 hover:rotate-90
-                                            ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/55 hover:border-red-400/35 hover:bg-red-400/[0.07] hover:text-red-300'
-                                                       : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-500'}`}
+                                    <button
+                                        type="button"
+                                        onClick={onClose}
                                         aria-label="Close almanac"
+                                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-colors ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/60 hover:border-red-400/35 hover:bg-red-400/[0.07] hover:text-red-300' : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-500'}`}
                                     >
                                         <X className="h-4 w-4" />
                                     </button>
                                 </div>
                             </div>
+
                             <div className="mt-3 grid grid-cols-1 gap-2 xl:hidden">
-                                <div className={`flex min-w-0 items-center gap-2 rounded-md border px-3 py-2 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white'}`}>
+                                <div className={`flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white'}`}>
                                     <Search className={`h-4 w-4 shrink-0 ${activeTone.text}`} />
                                     <input
                                         ref={searchInputRef}
                                         value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        onChange={event => setSearchQuery(event.target.value)}
                                         placeholder="Search almanac..."
-                                        className={`min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none placeholder:font-medium ${darkMode ? 'text-white placeholder:text-white/22' : 'text-slate-900 placeholder:text-slate-400'}`}
+                                        className={`min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none placeholder:font-medium ${darkMode ? 'text-white placeholder:text-white/24' : 'text-slate-900 placeholder:text-slate-400'}`}
                                     />
-                                    {searchQuery && (
-                                        <button type="button" onClick={() => setSearchQuery('')} className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-white/35 hover:text-white' : 'text-slate-400 hover:text-slate-900'}`}>
-                                            Clear
-                                        </button>
-                                    )}
+                                    {searchQuery && <button type="button" onClick={clearSearch} className="text-[10px] font-bold uppercase tracking-widest opacity-60 hover:opacity-100">Clear</button>}
                                 </div>
                             </div>
+
                             <div className={`mt-3 h-1 overflow-hidden rounded-full ${darkMode ? 'bg-white/[0.06]' : 'bg-slate-200'}`} aria-hidden="true">
-                                <motion.div className={`h-full ${activeTone.bgStrong}`} animate={{ width: `${Math.round(scrollProgress * 100)}%` }} transition={{ duration: 0.12 }} />
+                                <div className={`h-full ${activeTone.bgStrong}`} style={{ width: `${Math.round(scrollProgress * 100)}%`, transition: lowMotion ? 'none' : 'width .12s linear' }} />
                             </div>
                         </header>
 
-                        {/* Mobile category nav */}
-                        <nav aria-label="Almanac categories" className={`relative z-20 shrink-0 border-b py-2 lg:hidden ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white/55'}`}>
-                            <div className="vx-no-scrollbar flex min-w-0 snap-x gap-1.5 overflow-x-auto px-4 pb-1 pt-1">
-                                {CATEGORIES.map(cat => {
-                                    const tone   = TONE[cat.tone];
-                                    const Icon   = cat.icon;
-                                    const active = activeCategory === cat.id;
+                        <nav className={`relative z-20 shrink-0 border-b py-2 lg:hidden ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white/55'}`} aria-label="Almanac categories">
+                            <div className="vx-no-scrollbar flex min-w-0 snap-x gap-1.5 overflow-x-auto px-4 py-1">
+                                {CATEGORIES.map(category => {
+                                    const Icon = category.icon;
+                                    const tone = TONE[category.tone];
+                                    const active = activeCategory === category.id;
                                     return (
-                                        <button key={cat.id} type="button" onClick={() => handleCategoryChange(cat.id)} aria-current={active ? 'page' : undefined}
-                                            className={`flex shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.14em] transition-all duration-150
-                                                ${active
-                                                    ? `${tone.bg} ${tone.borderStrong} ${tone.text}`
-                                                    : darkMode
-                                                        ? 'border-white/8 bg-white/[0.03] text-white/38 hover:text-white/70'
-                                                        : 'border-slate-200 bg-white text-slate-400 hover:text-slate-700'}`}
+                                        <button
+                                            key={category.id}
+                                            type="button"
+                                            onClick={() => handleCategoryChange(category.id)}
+                                            aria-current={active ? 'page' : undefined}
+                                            className={`flex shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${active ? `${tone.bg} ${tone.borderStrong} ${tone.text}` : darkMode ? 'border-white/8 bg-white/[0.03] text-white/42 hover:text-white/75' : 'border-slate-200 bg-white text-slate-500 hover:text-slate-800'}`}
                                         >
-                                            <Icon className="h-3.5 w-3.5 shrink-0" />
-                                            <span>{cat.shortLabel}</span>
+                                            <Icon className="h-3.5 w-3.5" />
+                                            {category.shortLabel}
                                         </button>
                                     );
                                 })}
                             </div>
                         </nav>
 
-                        {/* Content area */}
-                        <section ref={contentRef} onScroll={handleContentScroll} className={`vx-sweep min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 lg:px-7 lg:py-7 ${darkMode ? 'vx-scrollbar' : 'vx-scrollbar-light'}`}>
-                            <AlmanacOverview darkMode={darkMode} tone={activeTone} activeMeta={activeMeta} searchQuery={searchQuery} compactMode={compactMode} onToggleCompact={() => setCompactMode(v => !v)} />
-                            <AnimatePresence mode="wait">
-                                <motion.div
-                                    key={activeCategory}
-                                    initial={{ opacity: 0, x: 14 }}
-                                    animate={{ opacity: 1, x: 0 }}
-                                    exit={{ opacity: 0, x: -14 }}
-                                    transition={{ duration: 0.2, ease: 'easeOut' }}
-                                    className={`relative z-10 min-h-full min-w-0 ${compactMode ? 'vx-compact text-[0.95rem]' : ''}`}
+                        <section
+                            ref={contentRef}
+                            onScroll={handleContentScroll}
+                            className={`relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 lg:px-7 lg:py-7 ${darkMode ? 'vx-scrollbar' : 'vx-scrollbar-light'}`}
+                        >
+                            <div className={`mx-auto flex w-full max-w-[1320px] min-w-0 flex-col gap-4 ${compactMode ? 'text-[.94rem]' : ''}`}>
+                                <div className={`sticky top-0 z-20 rounded-xl border px-3 py-3 backdrop-blur-xl sm:px-4 ${darkMode ? 'border-white/8 bg-[#030508]/90' : 'border-slate-200/90 bg-[#f5f2ea]/94'}`}>
+                                    <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                            <DataPill tone={activeTone}><Database className="h-3.5 w-3.5" /> {activeMeta.shortLabel}</DataPill>
+                                            <DataPill tone={activeTone} className={darkMode ? 'text-white/75' : 'text-slate-700'}><Info className="h-3.5 w-3.5" /> {visibleEntryCount} visible</DataPill>
+                                            {searchQuery && <DataPill tone={activeTone}><Search className="h-3.5 w-3.5" /> {searchQuery}</DataPill>}
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setPerformanceMode(value => !value)}
+                                                className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors ${performanceMode ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' : `${activeTone.button} ${activeTone.border} ${activeTone.buttonText}`}`}
+                                            >
+                                                {performanceMode ? 'Perf On' : 'Visuals On'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setDensity(value => value === 'compact' ? 'detailed' : 'compact')}
+                                                className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors ${activeTone.button} ${activeTone.border} ${activeTone.buttonText}`}
+                                            >
+                                                <span className="inline-flex items-center gap-2"><LayoutGrid className="h-3.5 w-3.5" /> {compactMode ? 'Detailed' : 'Compact'}</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={scrollToTop}
+                                                className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/55 hover:text-white' : 'border-slate-200 bg-white text-slate-600 hover:text-slate-950'}`}
+                                            >
+                                                <span className="inline-flex items-center gap-2"><ArrowUp className="h-3.5 w-3.5" /> Top</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {renderOverview()}
+
+                                <AnimatePresence mode="wait">
+                                    <motion.div
+                                        key={`${activeCategory}-${density}-${performanceMode ? 'fast' : 'visual'}`}
+                                        initial={lowMotion ? false : { opacity: 0, y: 8 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={lowMotion ? { opacity: 1 } : { opacity: 0, y: -8 }}
+                                        transition={lowMotion ? { duration: 0 } : { duration: .16, ease: 'easeOut' }}
+                                        className="min-w-0"
+                                    >
+                                        {renderContent()}
+                                    </motion.div>
+                                </AnimatePresence>
+                            </div>
+
+                            {scrollProgress > .18 && (
+                                <button
+                                    type="button"
+                                    onClick={scrollToTop}
+                                    className={`sticky bottom-4 ml-auto mr-1 mt-4 flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-bold uppercase tracking-[0.18em] shadow-lg transition-colors ${darkMode ? 'border-white/10 bg-black/75 text-white/75 hover:text-white' : 'border-slate-200 bg-white/95 text-slate-700 hover:text-slate-950'}`}
                                 >
-                                    {renderContent()}
-                                </motion.div>
-                            </AnimatePresence>
+                                    <ArrowUp className="h-3.5 w-3.5" /> Back To Top
+                                </button>
+                            )}
                         </section>
 
-                        {/* Footer */}
-                        <footer className={`hidden shrink-0 items-center justify-between gap-4 border-t px-6 py-3 md:flex ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white/50'}`}>
+                        <footer className={`hidden shrink-0 items-center justify-between gap-4 border-t px-6 py-3 md:flex ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white/55'}`}>
                             <div className="flex min-w-0 items-center gap-3">
-                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeTone.bgStrong} vx-blink`} />
-                                <span className={`vx-mono truncate text-[9px] font-bold uppercase tracking-[0.24em] ${darkMode ? 'text-white/18' : 'text-slate-400'}`}>Terminal Active</span>
+                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${performanceMode ? 'bg-emerald-400' : activeTone.bgStrong} ${performanceMode ? '' : 'vx-pulse-dot'}`} />
+                                <span className={`vx-mono truncate text-[9px] font-bold uppercase tracking-[0.24em] ${darkMode ? 'text-white/22' : 'text-slate-400'}`}>Terminal Active</span>
                                 <span className={darkMode ? 'text-white/10' : 'text-slate-300'}>/</span>
-                                <span className={`vx-mono truncate text-[9px] font-bold italic ${darkMode ? 'text-white/12' : 'text-slate-300'}`}>REF_ID: 0xDE4B_SYNC</span>
+                                <span className={`vx-mono truncate text-[9px] font-bold italic ${darkMode ? 'text-white/16' : 'text-slate-300'}`}>ALT + 1-6 categories · CTRL + K search</span>
                             </div>
-                            <div className={`flex shrink-0 items-center gap-2 vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${darkMode ? 'text-white/18' : 'text-slate-400'}`}>
+                            <div className={`flex shrink-0 items-center gap-2 vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${darkMode ? 'text-white/22' : 'text-slate-400'}`}>
                                 <Eye className="h-3 w-3" />
                                 <span>Vextor_OS Almanac</span>
                                 <Lock className="h-3 w-3" />

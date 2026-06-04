@@ -86,6 +86,9 @@ const TUNING = {
   combatRangeSniper: 620,
   combatRangeRusher: 220,
   laneWeight: 0.8,
+  shotObstructionRadius: 42,
+  flankOffset: 150,
+  hostileRepelRadius: 440,
 };
 
 export class TDMAISystem {
@@ -140,23 +143,28 @@ export class TDMAISystem {
       const retreatPos = this.getSafeZoneCenter(bot.team);
       goal = this.movement.arriveForce(bot.pos, retreatPos, 420, 20);
       bot.aiState = AIState.FLEE;
-      bot.aiShooting = false;
       bot.aiTargetId = target?.id ?? null;
-      if (target) bot.aiTargetRot = this.angleTo(bot.pos, this.computeInterceptPoint(bot, target));
+      if (target) {
+        const retreatAim = this.computeInterceptPoint(bot, target);
+        bot.aiTargetRot = this.angleTo(bot.pos, retreatAim);
+        bot.aiShooting = this.shouldTakeShot(bot, target, retreatAim, sensed.allies, AIState.FLEE);
+      } else {
+        bot.aiShooting = false;
+      }
     } else if (state === AIState.COMBAT && target) {
       const aim = this.computeInterceptPoint(bot, target);
-      goal = this.computeCombatGoal(bot, target, aim, mem);
+      goal = this.computeCombatGoal(bot, target, aim, mem, sensed.enemies);
       bot.aiState = AIState.COMBAT;
       bot.aiTargetId = target.id;
-      bot.aiShooting = true;
+      bot.aiShooting = this.shouldTakeShot(bot, target, aim, sensed.allies, AIState.COMBAT);
       bot.aiTargetRot = this.angleTo(bot.pos, aim);
     } else {
       if (farmTarget) {
         goal = this.movement.arriveForce(bot.pos, farmTarget.pos, 300, 20);
         bot.aiState = AIState.FARM;
         bot.aiTargetId = farmTarget.id;
-        bot.aiShooting = true;
         const aim = this.computeInterceptPoint(bot, farmTarget);
+        bot.aiShooting = this.shouldTakeShot(bot, farmTarget, aim, sensed.allies, AIState.FARM);
         bot.aiTargetRot = this.angleTo(bot.pos, aim);
       } else {
         goal = this.computeDefenseGoal(bot, mem);
@@ -169,6 +177,7 @@ export class TDMAISystem {
 
     const sep = this.movement.separationForce(bot.pos, sensed.allies.map((a) => ({ pos: a.pos })), TUNING.separationRadius);
     const crowdRepel = this.computeCrowdRepulsion(bot, sensed.allies, TUNING.crowdSeparationRadius);
+    const hostileRepel = this.computeHostileRepulsion(bot, sensed.enemies, TUNING.hostileRepelRadius, this.getIdealRange(bot.classType));
     const align = this.movement.alignmentForce(bot.vel, sensed.allies.map((a) => a.vel));
     const coh = this.movement.cohesionForce(bot.pos, sensed.allies.map((a) => ({ pos: a.pos })), TUNING.cohesionRadius);
     const bulletAvoid = this.computeBulletAvoid(bot, sensed.bullets);
@@ -187,6 +196,7 @@ export class TDMAISystem {
     steering = this.movement.blendSteering(steering, goal, shouldRetreat ? 1.45 : 1.2);
     steering = this.movement.blendSteering(steering, sep, boids.separation);
     steering = this.movement.blendSteering(steering, crowdRepel, 1.5);
+    steering = this.movement.blendSteering(steering, hostileRepel, state === AIState.COMBAT ? 0.82 : 0.45);
     steering = this.movement.blendSteering(steering, align, boids.alignment);
     steering = this.movement.blendSteering(steering, coh, boids.cohesion);
     steering = this.movement.blendSteering(steering, laneForce, TUNING.laneWeight);
@@ -284,7 +294,10 @@ export class TDMAISystem {
       const focus = e.aiTargetId === bot.id ? 0.4 : 0;
       const focusPenalty = this.getAllyFocusPenalty(e.id, allies);
       const laneAffinity = this.getLaneAffinity(bot, mem, e.pos);
-      const score = 900000 / d2 + lowHp + focus + laneAffinity - focusPenalty;
+      const supportWindow = this.countFriendlyPressureAt(e.pos, allies, 310);
+      const coverWindow = this.countEnemyPressureAt(e.id, e.pos, enemies, 310);
+      const interceptPenalty = this.getInterceptDifficulty(bot, e);
+      const score = 900000 / d2 + lowHp + focus + laneAffinity + supportWindow - coverWindow - interceptPenalty - focusPenalty;
       if (score > bestScore) {
         best = e;
         bestScore = score;
@@ -317,7 +330,7 @@ export class TDMAISystem {
     return mem.stateLock;
   }
 
-  private computeCombatGoal(bot: IAITank, target: Player, aimPoint: Vector2, mem: Memory): Vector2 {
+  private computeCombatGoal(bot: IAITank, target: Player, aimPoint: Vector2, mem: Memory, enemies: Player[]): Vector2 {
     const toTarget = Vector.sub(target.pos, bot.pos);
     const dist = Math.max(1, Math.sqrt(Vector.magSq(toTarget)));
     const dir = Vector.normalize(toTarget);
@@ -328,13 +341,15 @@ export class TDMAISystem {
     }
 
     const strafe = { x: -dir.y * mem.strafeDir, y: dir.x * mem.strafeDir };
-    const toward = this.movement.seekForce(bot.pos, aimPoint);
+    const anchor = this.computeCombatAnchor(bot, target, aimPoint, mem, enemies);
+    const toward = this.movement.arriveForce(bot.pos, anchor, 320, 18);
     const away = this.movement.fleeForce(bot.pos, target.pos);
     const ideal = this.getIdealRange(bot.classType);
+    const sidestep = this.computeLocalSidestep(bot, enemies, target);
 
-    if (dist < ideal * 0.78) return this.movement.composeSteering([away, strafe], [1.0, 0.7], 1.4);
-    if (dist > ideal * 1.22) return this.movement.composeSteering([toward, strafe], [1.05, 0.52], 1.4);
-    return this.movement.composeSteering([strafe, toward], [0.95, 0.32], 1.2);
+    if (dist < ideal * 0.78) return this.movement.composeSteering([away, strafe, sidestep], [1.0, 0.7, 0.4], 1.45);
+    if (dist > ideal * 1.22) return this.movement.composeSteering([toward, strafe, sidestep], [1.02, 0.58, 0.34], 1.45);
+    return this.movement.composeSteering([strafe, toward, sidestep], [0.92, 0.44, 0.28], 1.25);
   }
 
   private computeDefenseGoal(bot: IAITank, mem: Memory): Vector2 {
@@ -419,6 +434,125 @@ export class TDMAISystem {
     if (this.isSupport(cls)) return { separation: 1.8, alignment: 0.55, cohesion: 0.18 };
     if (this.isRusher(cls)) return { separation: 1.45, alignment: 0.4, cohesion: 0.1 };
     return { separation: 1.6, alignment: 0.45, cohesion: 0.14 };
+  }
+
+  private computeHostileRepulsion(bot: IAITank, enemies: Player[], radius: number, idealRange: number): Vector2 {
+    const r2 = radius * radius;
+    let fx = 0;
+    let fy = 0;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      const dx = bot.pos.x - e.pos.x;
+      const dy = bot.pos.y - e.pos.y;
+      const d2 = Math.max(1, dx * dx + dy * dy);
+      if (d2 > r2 || d2 > idealRange * idealRange) continue;
+      const d = Math.sqrt(d2);
+      const w = (1 - Math.min(1, d / radius)) * 1.35;
+      fx += (dx / d) * w;
+      fy += (dy / d) * w;
+    }
+    if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;
+    return Vector.normalize({ x: fx, y: fy });
+  }
+
+  private computeCombatAnchor(bot: IAITank, target: Player, aimPoint: Vector2, mem: Memory, enemies: Player[]): Vector2 {
+    const ideal = this.getIdealRange(bot.classType);
+    const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
+    const side = { x: -toTarget.y * mem.strafeDir, y: toTarget.x * mem.strafeDir };
+    let coverBias = ZERO;
+    let count = 0;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (e.id === target.id) continue;
+      if (Vector.distSq(e.pos, target.pos) > 520 * 520) continue;
+      cx += e.pos.x;
+      cy += e.pos.y;
+      count++;
+    }
+    if (count > 0) {
+      const centroid = { x: cx / count, y: cy / count };
+      coverBias = this.movement.fleeForce(centroid, target.pos);
+    }
+    const flank = this.isSupport(bot.classType) ? TUNING.flankOffset * 1.1 : this.isRusher(bot.classType) ? TUNING.flankOffset * 0.72 : TUNING.flankOffset;
+    return {
+      x: aimPoint.x - toTarget.x * (ideal * 0.76) + side.x * flank + coverBias.x * 55,
+      y: aimPoint.y - toTarget.y * (ideal * 0.76) + side.y * flank + coverBias.y * 55,
+    };
+  }
+
+  private computeLocalSidestep(bot: IAITank, enemies: Player[], target: Player): Vector2 {
+    let fx = 0;
+    let fy = 0;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (e.id === target.id) continue;
+      const d2 = Vector.distSq(bot.pos, e.pos);
+      if (d2 > 360 * 360) continue;
+      const toEnemy = Vector.normalize(Vector.sub(e.pos, bot.pos));
+      fx += -toEnemy.y * 0.35;
+      fy += toEnemy.x * 0.35;
+    }
+    if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;
+    return Vector.normalize({ x: fx, y: fy });
+  }
+
+  private countFriendlyPressureAt(point: Vector2, allies: IAITank[], radius: number): number {
+    let count = 0;
+    const r2 = radius * radius;
+    for (let i = 0; i < allies.length; i++) {
+      if (Vector.distSq(point, allies[i].pos) <= r2) count++;
+    }
+    return Math.min(0.75, count * 0.18);
+  }
+
+  private countEnemyPressureAt(targetId: number, point: Vector2, enemies: Player[], radius: number): number {
+    let count = 0;
+    const r2 = radius * radius;
+    for (let i = 0; i < enemies.length; i++) {
+      if (enemies[i].id === targetId) continue;
+      if (Vector.distSq(point, enemies[i].pos) <= r2) count++;
+    }
+    return Math.min(0.95, count * 0.22);
+  }
+
+  private getInterceptDifficulty(bot: IAITank, target: Player): number {
+    const bulletSpeed = 5 + (bot.stats?.[StatType.BULLET_SPEED] ?? 0) * 0.8;
+    const rel = Vector.sub(target.pos, bot.pos);
+    const dist = Math.max(1, Math.sqrt(Vector.magSq(rel)));
+    const travel = dist / Math.max(1, bulletSpeed);
+    const targetSpeed = Math.sqrt(Vector.magSq(target.vel ?? ZERO));
+    return Math.min(0.9, targetSpeed * travel * 0.018);
+  }
+
+  private shouldTakeShot(bot: IAITank, target: Player, aimPoint: Vector2, allies: IAITank[], state: AIState): boolean {
+    const dist = Math.sqrt(Math.max(1, Vector.distSq(bot.pos, target.pos)));
+    const ideal = this.getIdealRange(bot.classType);
+    const maxRange = target.type === 'SHAPE' || target.type === 'CRASHER' || target.type === 'BOSS'
+      ? ideal * 1.1
+      : this.isSupport(bot.classType)
+        ? ideal * 1.25
+        : ideal * 1.45;
+    if (dist > maxRange) return false;
+    if (state === AIState.FLEE && dist > ideal * 0.82 && ((target.health ?? 100) / Math.max(1, target.maxHealth ?? 100)) > 0.38) return false;
+    return !this.hasFriendlyObstruction(bot.pos, aimPoint, allies);
+  }
+
+  private hasFriendlyObstruction(from: Vector2, to: Vector2, allies: IAITank[]): boolean {
+    const line = Vector.sub(to, from);
+    const len = Math.sqrt(Math.max(1, Vector.magSq(line)));
+    const dir = Vector.normalize(line);
+    for (let i = 0; i < allies.length; i++) {
+      const ally = allies[i];
+      const rel = Vector.sub(ally.pos, from);
+      const forward = Vector.dot(rel, dir);
+      if (forward <= 30 || forward >= len - 24) continue;
+      const closest = { x: from.x + dir.x * forward, y: from.y + dir.y * forward };
+      const perp = Math.sqrt(Vector.distSq(ally.pos, closest));
+      if (perp <= TUNING.shotObstructionRadius) return true;
+    }
+    return false;
   }
 
   private computeDangerPressure(bot: IAITank, enemies: Player[], bullets: Player[]): number {

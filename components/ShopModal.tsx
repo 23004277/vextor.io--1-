@@ -130,6 +130,8 @@ const rarityVisuals: Record<RarityKey, RarityVisual> = {
   },
 };
 
+const CREDIT_FORMATTER = new Intl.NumberFormat('en-GB');
+
 function getRarityKey(rarity?: string): RarityKey {
   const key = (rarity || 'common').toLowerCase();
   if (key === 'rare' || key === 'epic' || key === 'legendary' || key === 'elite') return key;
@@ -137,7 +139,13 @@ function getRarityKey(rarity?: string): RarityKey {
 }
 
 function formatCredits(value: number): string {
-  return new Intl.NumberFormat('en-GB').format(Math.max(0, Math.floor(value || 0)));
+  return CREDIT_FORMATTER.format(Math.max(0, Math.floor(value || 0)));
+}
+
+function getRewardUnlockLabel(item: ShopItem): string {
+  const description = (item.description || '').trim();
+  if (!description) return 'Unlock via combat progression';
+  return description;
 }
 
 function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
@@ -190,21 +198,27 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
   const equippedItemId = user?.equippedItem || null;
   const credits = user?.currency || 0;
   const eliteSkins = user?.unlockedEliteSkins || [];
+  const ownedItemIdSet = useMemo(() => new Set(ownedItemIds), [ownedItemIds]);
+  const eliteSkinSet = useMemo(() => new Set(eliteSkins), [eliteSkins]);
+  const marketItems = useMemo(() => SHOP_ITEMS.filter((item) => !item.isAchievementReward), []);
+  const rewardItems = useMemo(() => SHOP_ITEMS.filter((item) => item.isAchievementReward), []);
 
   const sortedShopItems = useMemo(() => {
-    return [...SHOP_ITEMS].sort((a, b) => {
-      const aOwned = ownedItemIds.includes(a.id) ? 1 : 0;
-      const bOwned = ownedItemIds.includes(b.id) ? 1 : 0;
+    return [...marketItems].sort((a, b) => {
+      const aOwned = ownedItemIdSet.has(a.id) ? 1 : 0;
+      const bOwned = ownedItemIdSet.has(b.id) ? 1 : 0;
       if (aOwned !== bOwned) return bOwned - aOwned;
       return a.price - b.price;
     });
-  }, [ownedItemIds]);
+  }, [marketItems, ownedItemIdSet]);
 
   const eliteClasses = useMemo(() => Object.values(TankClass) as TankClass[], []);
   const eliteSkinsCount = eliteSkins.length;
   const totalEliteSkins = Math.max(1, eliteClasses.length);
   const progressPercentage = Math.min(100, Math.round((eliteSkinsCount / totalEliteSkins) * 100));
-  const classicOwnedCount = sortedShopItems.filter((item) => ownedItemIds.includes(item.id)).length;
+  const classicOwnedCount = useMemo(() => sortedShopItems.reduce((sum, item) => sum + (ownedItemIdSet.has(item.id) ? 1 : 0), 0), [ownedItemIdSet, sortedShopItems]);
+  const rewardOwnedCount = useMemo(() => rewardItems.reduce((sum, item) => sum + (ownedItemIdSet.has(item.id) ? 1 : 0), 0), [ownedItemIdSet, rewardItems]);
+  const equippedClassicItem = useMemo(() => SHOP_ITEMS.find((item) => item.id === equippedItemId) || null, [equippedItemId]);
 
   const activeTabMeta = tabs.find((tab) => tab.id === activeTab) || tabs[0];
   const panelBg = darkMode ? 'bg-[#050507] text-white' : 'bg-[#f7f8fb] text-slate-950';
@@ -328,7 +342,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
   );
 
   const renderPrimaryAction = (item: ShopItem) => {
-    const isOwned = ownedItemIds.includes(item.id);
+    const isOwned = ownedItemIdSet.has(item.id);
     const isEquipped = equippedItemId === item.id;
     const canAfford = credits >= item.price;
     const isLoading = loadingId === item.id;
@@ -353,6 +367,17 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
       };
     }
 
+    if (item.isAchievementReward) {
+      return {
+        label: 'Unlock In Game',
+        disabled: true,
+        className: darkMode
+          ? 'bg-white/5 text-white/25 border-white/5 cursor-not-allowed'
+          : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed',
+        onClick: () => undefined,
+      };
+    }
+
     return {
       label: canAfford ? `Buy ${formatCredits(item.price)}` : `Need ${formatCredits(Math.max(0, item.price - credits))}`,
       disabled: isLoading || !canAfford || !user,
@@ -366,6 +391,45 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
       onClick: () => handlePurchase(item),
     };
   };
+
+  const classicCards = useMemo(() => {
+    return sortedShopItems.map((item) => {
+      const isOwned = ownedItemIdSet.has(item.id);
+      const isEquipped = equippedItemId === item.id;
+      const canAfford = credits >= item.price;
+      const action = renderPrimaryAction(item);
+      const isLoading = loadingId === item.id;
+      return { item, isOwned, isEquipped, canAfford, action, isLoading };
+    });
+  }, [sortedShopItems, ownedItemIdSet, equippedItemId, credits, loadingId, handleEquip, handlePurchase, darkMode, user]);
+
+  const rewardCards = useMemo(() => {
+    return rewardItems.map((item) => {
+      const isOwned = ownedItemIdSet.has(item.id);
+      const isEquipped = equippedItemId === item.id;
+      const isLoading = loadingId === item.id;
+      return { item, isOwned, isEquipped, isLoading };
+    });
+  }, [rewardItems, ownedItemIdSet, equippedItemId, loadingId]);
+
+  const eliteCards = useMemo(() => {
+    return eliteClasses.map((cls) => {
+      const isUnlocked = eliteSkinSet.has(cls);
+      const skinId = `elite_skin_${cls}`;
+      const isEquipped = equippedItemId === skinId;
+      const isLoading = loadingId === skinId;
+      const eliteItem = {
+        id: skinId,
+        name: `Elite ${cls}`,
+        type: 'elite_skin',
+        value: cls as string,
+        price: 0,
+        description: `Elite chassis trophy for ${cls}.`,
+        rarity: 'elite',
+      } as ShopItem;
+      return { cls, isUnlocked, skinId, isEquipped, isLoading, eliteItem };
+    });
+  }, [eliteClasses, eliteSkinSet, equippedItemId, loadingId]);
 
   return (
     <motion.div
@@ -438,7 +502,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
           <nav className="space-y-3" role="tablist" aria-label="Shop sections">
             {tabs.map((tab, index) => {
               const active = activeTab === tab.id;
-              const stat = tab.id === 'classic' ? `${classicOwnedCount}/${SHOP_ITEMS.length}` : `${eliteSkinsCount}/${totalEliteSkins}`;
+              const stat = tab.id === 'classic' ? `${classicOwnedCount + rewardOwnedCount}/${marketItems.length + rewardItems.length}` : `${eliteSkinsCount}/${totalEliteSkins}`;
               return (
                 <button
                   key={tab.id}
@@ -500,6 +564,20 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
               </div>
 
               <div className="flex shrink-0 items-center gap-3">
+                {activeTab === 'classic' && (
+                  <div className={`hidden min-w-[16rem] items-center gap-4 rounded-[1.4rem] border px-4 py-3 lg:flex ${surface}`}>
+                    <div className={`flex h-20 w-20 items-center justify-center rounded-[1.1rem] border ${darkMode ? 'border-white/8 bg-black/30' : 'border-slate-200 bg-slate-50'}`}>
+                      <TankPreview tankClass={TankClass.BASIC} color={equippedClassicItem?.value || '#00b2e1'} size={72} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`text-[0.58rem] font-black uppercase tracking-[0.18em] ${softText}`}>Loadout Bay</p>
+                      <p className="truncate text-lg font-black uppercase italic tracking-tight">{equippedClassicItem?.name || 'Classic Blue'}</p>
+                      <p className={`mt-1 text-[0.64rem] font-black uppercase tracking-[0.18em] ${softText}`}>
+                        Market {classicOwnedCount}/{marketItems.length} | Rewards {rewardOwnedCount}/{rewardItems.length}
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {user && (
                   <div className={`hidden rounded-2xl border px-4 py-3 text-right sm:block ${surface}`}>
                     <p className={`text-[0.58rem] font-black uppercase tracking-[0.18em] ${softText}`}>Credits</p>
@@ -567,24 +645,27 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                   initial="hidden"
                   animate="visible"
                   exit={{ opacity: 0, x: -18 }}
-                  className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+                  className="space-y-8"
                 >
-                  {sortedShopItems.length === 0 ? (
-                    <EmptyState darkMode={darkMode} label="No skins available" description="Add items to SHOP_ITEMS to populate the armory market." />
-                  ) : (
-                    sortedShopItems.map((item) => {
-                      const rarity = rarityVisuals[getRarityKey(item.rarity)];
-                      const isOwned = ownedItemIds.includes(item.id);
-                      const isEquipped = equippedItemId === item.id;
-                      const canAfford = credits >= item.price;
-                      const action = renderPrimaryAction(item);
-                      const isLoading = loadingId === item.id;
+                    <section>
+                      <div className="mb-4 flex items-end justify-between gap-4">
+                        <div>
+                          <p className="text-[0.68rem] font-black uppercase italic tracking-[0.3em] text-cyan-400">Market Skins</p>
+                          <h4 className="mt-1 text-2xl font-black uppercase italic tracking-tight">Purchase Bay</h4>
+                        </div>
+                        <p className={`text-[0.68rem] font-black uppercase tracking-[0.18em] ${softText}`}>{classicOwnedCount}/{marketItems.length} owned</p>
+                      </div>
+                      {classicCards.length === 0 ? (
+                      <EmptyState darkMode={darkMode} label="No skins available" description="Add items to SHOP_ITEMS to populate the armory market." />
+                    ) : (
+                      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                      {classicCards.map(({ item, isOwned, isEquipped, canAfford, action, isLoading }) => {
+                        const rarity = rarityVisuals[getRarityKey(item.rarity)];
 
-                      return (
+                        return (
                         <motion.article
                           key={item.id}
                           variants={cardVariants}
-                          whileHover={{ y: -6 }}
                           className={`group relative flex min-h-[26rem] flex-col overflow-hidden rounded-[1.75rem] border p-4 transition-all duration-300 ${
                             darkMode ? 'border-white/6 bg-white/[0.035] shadow-black/30 hover:bg-white/[0.055]' : 'border-slate-200/80 bg-white shadow-sm hover:shadow-xl'
                           } ${isEquipped ? 'ring-2 ring-cyan-400/50' : ''}`}
@@ -600,13 +681,9 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                                 Owned
                               </div>
                             )}
-                            <motion.div
-                              animate={{ y: [0, -7, 0], rotate: [0, -1.5, 0] }}
-                              transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut' }}
-                              className="drop-shadow-[0_24px_35px_rgba(0,0,0,0.35)]"
-                            >
-                              <TankPreview tankClass={TankClass.BASIC} color={item.value} size={120} />
-                            </motion.div>
+                            <div className="drop-shadow-[0_24px_35px_rgba(0,0,0,0.35)] transition-transform duration-300 group-hover:-translate-y-1">
+                              <TankPreview tankClass={TankClass.BASIC} color={item.value} size={104} />
+                            </div>
                           </div>
 
                           <div className="relative flex min-h-0 flex-1 flex-col">
@@ -636,8 +713,80 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                           </div>
                         </motion.article>
                       );
-                    })
+                    })}
+                    </div>
                   )}
+                  </section>
+
+                  <section>
+                    <div className="mb-4 flex items-end justify-between gap-4">
+                      <div>
+                        <p className="text-[0.68rem] font-black uppercase italic tracking-[0.3em] text-amber-300">Service Rewards</p>
+                        <h4 className="mt-1 text-2xl font-black uppercase italic tracking-tight">Combat Unlocks</h4>
+                      </div>
+                      <p className={`text-[0.68rem] font-black uppercase tracking-[0.18em] ${softText}`}>{rewardOwnedCount}/{rewardItems.length} acquired</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                      {rewardCards.map(({ item, isOwned, isEquipped, isLoading }) => {
+                        const rarity = rarityVisuals[getRarityKey(item.rarity)];
+                        return (
+                          <motion.article
+                            key={item.id}
+                            variants={cardVariants}
+                            className={`group relative flex min-h-[24rem] flex-col overflow-hidden rounded-[1.75rem] border p-4 transition-all duration-300 ${
+                              darkMode ? 'border-amber-400/10 bg-white/[0.03]' : 'border-amber-100 bg-white'
+                            } ${isEquipped ? 'ring-2 ring-amber-300/60' : ''}`}
+                          >
+                            <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${rarity.softBg}`} />
+                            <div className={`relative mb-4 flex aspect-square items-center justify-center overflow-hidden rounded-[1.4rem] border ${darkMode ? 'border-white/5 bg-black/30' : 'border-slate-100 bg-slate-50'}`}>
+                              <div className={`absolute left-3 top-3 rounded-full border px-3 py-1 text-[0.58rem] font-black uppercase tracking-[0.16em] backdrop-blur-xl ${rarity.badge}`}>
+                                Reward
+                              </div>
+                              {!isOwned && (
+                                <div className="absolute right-3 top-3 rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-[0.58rem] font-black uppercase tracking-[0.16em] text-amber-300">
+                                  Locked
+                                </div>
+                              )}
+                              <div className={`drop-shadow-[0_24px_35px_rgba(0,0,0,0.35)] transition-transform duration-300 ${isOwned ? 'group-hover:-translate-y-1' : 'opacity-70 grayscale'}`}>
+                                <TankPreview tankClass={TankClass.BASIC} color={item.value} size={104} />
+                              </div>
+                            </div>
+                            <div className="relative flex min-h-0 flex-1 flex-col">
+                              <div className="mb-4">
+                                <h4 className="text-xl font-black uppercase italic tracking-tight">{item.name}</h4>
+                                <p className={`mt-2 min-h-[4.2rem] text-sm font-semibold leading-relaxed ${softText}`}>{getRewardUnlockLabel(item)}</p>
+                              </div>
+                              <div className="mt-auto space-y-3">
+                                <div className={`flex items-center justify-between rounded-2xl border px-4 py-3 ${mutedSurface}`}>
+                                  <span className={`text-[0.62rem] font-black uppercase tracking-[0.18em] ${softText}`}>Source</span>
+                                  <span className={`text-sm font-black ${isOwned ? 'text-emerald-300' : 'text-amber-300'}`}>{isOwned ? 'Acquired' : 'Gameplay'}</span>
+                                </div>
+                                <motion.button
+                                  type="button"
+                                  disabled={!isOwned || isEquipped || isLoading}
+                                  onClick={() => isOwned && handleEquip(item)}
+                                  whileTap={isOwned && !isEquipped ? { scale: 0.96 } : undefined}
+                                  className={`flex w-full items-center justify-center gap-2 rounded-2xl border px-4 py-4 text-[0.72rem] font-black uppercase tracking-[0.18em] transition-all ${
+                                    isEquipped
+                                      ? darkMode
+                                        ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-300'
+                                        : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                      : isOwned
+                                        ? 'border-amber-300 bg-amber-300 text-black hover:bg-amber-200'
+                                        : darkMode
+                                          ? 'border-white/5 bg-white/5 text-white/20 cursor-not-allowed'
+                                          : 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                                  }`}
+                                >
+                                  {isLoading ? <Spinner /> : isEquipped ? 'Equipped' : isOwned ? 'Equip Reward' : 'Unlock In Game'}
+                                </motion.button>
+                              </div>
+                            </div>
+                          </motion.article>
+                        );
+                      })}
+                    </div>
+                  </section>
                 </motion.div>
               ) : (
                 <motion.div
@@ -658,7 +807,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                         <p className="text-[0.68rem] font-black uppercase italic tracking-[0.34em] text-red-300">Elite Collection</p>
                         <h4 className="mt-2 text-3xl font-black uppercase italic tracking-tight md:text-5xl">Boss Trophy Arsenal</h4>
                         <p className={`mt-3 text-sm font-semibold leading-relaxed ${softText}`}>
-                          Defeat elite tanks to unlock premium metallic variants. Locked cards reveal their target class so progression stays readable without becoming cluttered.
+                          Defeat elite tanks to unlock premium metallic variants. This bay is progression-only, so none of these can be claimed for free through the market.
                         </p>
                       </div>
                       <div className="min-w-[14rem]">
@@ -681,26 +830,11 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                   </section>
 
                   <motion.div variants={gridVariants} initial="hidden" animate="visible" className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                    {eliteClasses.map((cls) => {
-                      const isUnlocked = eliteSkins.includes(cls);
-                      const skinId = `elite_skin_${cls}`;
-                      const isEquipped = equippedItemId === skinId;
-                      const isLoading = loadingId === skinId;
-                      const eliteItem = {
-                        id: skinId,
-                        name: `Elite ${cls}`,
-                        type: 'elite_skin',
-                        value: cls as string,
-                        price: 0,
-                        description: `Elite chassis trophy for ${cls}.`,
-                        rarity: 'elite',
-                      } as ShopItem;
-
+                    {eliteCards.map(({ cls, isUnlocked, isEquipped, isLoading, eliteItem }) => {
                       return (
                         <motion.article
                           key={cls}
                           variants={cardVariants}
-                          whileHover={isUnlocked ? { y: -6 } : undefined}
                           className={`group relative overflow-hidden rounded-[1.75rem] border p-4 transition-all duration-300 ${
                             isUnlocked
                               ? darkMode
@@ -722,13 +856,9 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                                 </span>
                               </div>
                             )}
-                            <motion.div
-                              animate={isUnlocked ? { y: [0, -7, 0], scale: [1, 1.03, 1] } : undefined}
-                              transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut' }}
-                              className={isUnlocked ? 'drop-shadow-[0_0_30px_rgba(239,68,68,0.45)]' : 'scale-90 grayscale opacity-35'}
-                            >
-                              <TankPreview tankClass={cls} color={isUnlocked ? '#202020' : '#595959'} size={120} />
-                            </motion.div>
+                            <div className={`${isUnlocked ? 'drop-shadow-[0_0_30px_rgba(239,68,68,0.45)] group-hover:-translate-y-1' : 'scale-90 grayscale opacity-35'} transition-transform duration-300`}>
+                              <TankPreview tankClass={cls} color={isUnlocked ? '#202020' : '#595959'} size={104} />
+                            </div>
                           </div>
 
                           <div className="space-y-3 text-center">
@@ -772,6 +902,8 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
 
 const CelebrationOverlay: React.FC<{ item: ShopItem; onClose: () => void }> = ({ item, onClose }) => {
   const rarity = rarityVisuals[getRarityKey(item.rarity)];
+  const previewClass = item.type === 'elite_skin' ? (item.value as TankClass) : TankClass.BASIC;
+  const previewColor = item.type === 'elite_skin' ? '#202020' : item.value;
   const particles = useMemo(
     () =>
       Array.from({ length: 34 }, (_, i) => ({
@@ -832,7 +964,7 @@ const CelebrationOverlay: React.FC<{ item: ShopItem; onClose: () => void }> = ({
             className={`absolute inset-0 rounded-[3rem] border-2 ${rarity.ring}`}
           />
           <motion.div animate={{ y: [0, -14, 0], rotate: [0, -2, 0] }} transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}>
-            <TankPreview tankClass={TankClass.BASIC} color={item.value} size={178} />
+            <TankPreview tankClass={previewClass} color={previewColor} size={178} />
           </motion.div>
           <div className="absolute -top-4 right-6 rounded-full bg-white px-5 py-2 text-[0.7rem] font-black uppercase tracking-[0.22em] text-black shadow-2xl">
             Acquired

@@ -4208,6 +4208,14 @@ class EliteTank extends Tank {
     patrolPos: Vector2;
     damageDealtBy: Map<number, number> = new Map();
     classTypeOriginal: TankClass;
+    eliteBrain: 'SIEGE' | 'HUNTER' | 'SKIRMISHER' | 'SUMMONER' | 'BARRAGE';
+    combatAnchor: Vector2;
+    strafeSign: number;
+    tacticalTimer: number = 0;
+    repathTimer: number = 0;
+    aggressionBias: number;
+    orbitPhase: number;
+    patrolRadius: number;
 
     constructor(id: number, x: number, y: number, cls: TankClass) {
         super(id, x, y, false, Team.NONE);
@@ -4222,6 +4230,17 @@ class EliteTank extends Tank {
         this.damage = 60;
         this.mass = 500;
         this.patrolPos = { x, y };
+        this.combatAnchor = { x, y };
+        this.strafeSign = Math.random() > 0.5 ? 1 : -1;
+        this.aggressionBias = 0.9 + Math.random() * 0.45;
+        this.orbitPhase = Math.random() * Math.PI * 2;
+        this.patrolRadius = 280 + Math.random() * 320;
+        this.eliteBrain =
+            cls === TankClass.DESTROYER ? 'SIEGE' :
+            cls === TankClass.SNIPER ? 'HUNTER' :
+            cls === TankClass.OVERLORD ? 'SUMMONER' :
+            cls === TankClass.MACHINE_GUN ? 'BARRAGE' :
+            'SKIRMISHER';
         this.visionRange = 1200;
         this.barrels = TANK_CONFIGS[cls];
         this.barrelCooldowns = new Array(this.barrels.length).fill(0);
@@ -4455,6 +4474,8 @@ class Shape extends Entity {
   deathScale: number = 1;
   isDying: boolean = false;
   deathTimer: number = 0;
+  spawnFlash: number = 0;
+  deathFlash: number = 0;
   static SPAWN_DURATION = 0.5;
   static DEATH_DURATION = 0.4;
 
@@ -4497,6 +4518,7 @@ class Shape extends Entity {
     this.hueTimer = Math.random() * 360;
     this.pulseTimer = Math.random() * Math.PI * 2;
     this.ambientTimer = Math.random() * 1000;
+    this.spawnFlash = 1;
   }
 
   override takeDamage(amount: number, sourceId: number | null = null) {
@@ -4518,8 +4540,13 @@ class Shape extends Entity {
   override update(dt: number) {
     if (this.isDying) {
         this.deathTimer += dt;
-        this.deathScale = Math.max(0, 1 - (this.deathTimer / Shape.DEATH_DURATION));
-        this.visualScale = this.deathScale * (1.1 + Math.sin(this.deathTimer * 20) * 0.1); 
+        const deathProgress = Math.min(1, this.deathTimer / Shape.DEATH_DURATION);
+        this.deathScale = Math.max(0, 1 - deathProgress);
+        this.deathFlash = Math.max(0, 1 - deathProgress * 1.8);
+        const collapseScale = 1.08 - deathProgress * 0.9;
+        const wobble = Math.sin(deathProgress * Math.PI * 3.5) * 0.12 * this.deathScale;
+        this.visualScale = Math.max(0, collapseScale + wobble);
+        this.rotation += 0.03 + deathProgress * 0.04;
         this.vel.x *= 0.9;
         this.vel.y *= 0.9;
         if (this.deathTimer >= Shape.DEATH_DURATION) {
@@ -4536,8 +4563,12 @@ class Shape extends Entity {
     this.acc.x += this.driftVec.x;
     this.acc.y += this.driftVec.y;
     this.pulseTimer += dt * 3; 
-    
-    this.visualScale = this.spawnScale * (1.0 + Math.sin(this.pulseTimer) * 0.04);
+    this.spawnFlash = Math.max(0, this.spawnFlash - dt * 2.6);
+    const spawnProgress = this.spawnScale;
+    const easedSpawn = 1 - Math.pow(1 - spawnProgress, 3);
+    const overshoot = Math.sin(Math.min(1, spawnProgress) * Math.PI) * 0.16;
+    const settlePulse = Math.sin(this.pulseTimer) * 0.04;
+    this.visualScale = Math.max(0.05, easedSpawn * (1.0 + overshoot + settlePulse));
 
     if (this.rarity === ShapeRarity.TRANSCENDENT) { this.hueTimer += dt * 120; this.rotation += 0.025; }
     else if (this.rarity === ShapeRarity.ETERNAL || this.rarity === ShapeRarity.MYTHICAL) this.rotation += 0.04;
@@ -4586,6 +4617,34 @@ class Shape extends Entity {
     if (this.rarity === ShapeRarity.ETERNAL) this.drawEternalVisuals(ctx);
 
     if (glowBlur > 0) { ctx.shadowBlur = glowBlur; ctx.shadowColor = glowColor; }
+
+    if (!this.isDying && this.spawnFlash > 0.01) {
+        ctx.save();
+        ctx.globalAlpha *= this.spawnFlash * 0.45;
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 4;
+        ctx.shadowBlur = 20 + this.spawnFlash * 22;
+        ctx.shadowColor = glowColor !== 'transparent' ? glowColor : strokeColor;
+        ctx.beginPath();
+        const ringRadius = this.radius * (1.12 + (1 - this.spawnFlash) * 0.55);
+        ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    if (this.isDying && this.deathFlash > 0.01) {
+        ctx.save();
+        ctx.globalAlpha *= this.deathFlash * 0.65;
+        ctx.strokeStyle = glowColor !== 'transparent' ? glowColor : fillColor;
+        ctx.lineWidth = 5;
+        ctx.shadowBlur = 26 + this.deathFlash * 30;
+        ctx.shadowColor = glowColor !== 'transparent' ? glowColor : fillColor;
+        ctx.beginPath();
+        const burstRadius = this.radius * (1.08 + (1 - this.deathScale) * 1.15);
+        ctx.arc(0, 0, burstRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
     this.traceShape(ctx, sides, this.radius);
     
     const glintPos = (Math.sin(Date.now() / 2000) + 1) / 2; 
@@ -6563,9 +6622,9 @@ export class GameEngine {
     if (this.gameMode === GameMode.TEAMS) {
       const midBias = 1 - distNorm;
       const octThresh = 0.0012 + midBias * 0.008;
-      const hexThresh = octThresh + (0.009 + midBias * 0.024);
-      const pentThresh = hexThresh + (0.048 + midBias * 0.07);
-      const triThresh = pentThresh + 0.52;
+      const hexThresh = octThresh + (0.007 + midBias * 0.018);
+      const pentThresh = hexThresh + (0.036 + midBias * 0.05);
+      const triThresh = pentThresh + 0.61;
       if (roll < octThresh) return ShapeType.OCTAGON;
       if (roll < hexThresh) return ShapeType.HEXAGON;
       if (roll < pentThresh) return ShapeType.PENTAGON;
@@ -6573,10 +6632,10 @@ export class GameEngine {
       return ShapeType.SQUARE;
     }
 
-    if (roll < 0.0018) return ShapeType.OCTAGON;
-    if (roll < 0.01) return ShapeType.HEXAGON;
-    if (roll < 0.038) return ShapeType.PENTAGON;
-    if (roll < 0.46) return ShapeType.TRIANGLE;
+     if (roll < 0.0018) return ShapeType.OCTAGON;
+    if (roll < 0.0085) return ShapeType.HEXAGON;
+    if (roll < 0.028) return ShapeType.PENTAGON;
+    if (roll < 0.57) return ShapeType.TRIANGLE;
     return ShapeType.SQUARE;
   }
 
@@ -6890,12 +6949,34 @@ export class GameEngine {
   }
 
   spawnElite() {
-      const pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
-      const classes = [TankClass.TWIN, TankClass.DESTROYER, TankClass.SNIPER, TankClass.OVERLORD, TankClass.MACHINE_GUN];
-      const chosenClass = classes[Math.floor(Math.random() * classes.length)];
+      const currentElites = this.entities.filter((e) => e.type === EntityType.ELITE_TANK && !e.isDead).length;
+      const eliteCap = this.gameMode === GameMode.TEAMS ? 3 : 2;
+      if (currentElites >= eliteCap) return;
+
+      let pos: Vector2 | null = null;
+      for (let i = 0; i < 18; i++) {
+          const candidate = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
+          const farEnoughFromPlayer = Vector.dist(candidate, this.player.pos) > (this.gameMode === GameMode.TEAMS ? 1300 : 1100);
+          const localCrowding = this.entities.some((e) =>
+              !e.isDead &&
+              Vector.dist(candidate, e.pos) < 260 &&
+              (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER || e.type === EntityType.ELITE_TANK || e.type === EntityType.BOSS)
+          );
+          if (farEnoughFromPlayer && !localCrowding) {
+              pos = candidate;
+              break;
+          }
+      }
+      if (!pos) pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
+
+      const classes = [TankClass.TWIN, TankClass.DESTROYER, TankClass.SNIPER, TankClass.OVERLORD, TankClass.MACHINE_GUN, TankClass.HUNTER, TankClass.TRI_ANGLE];
+      const weightedPool = this.player.level >= 30 && Math.random() < 0.45
+          ? [TankClass.DESTROYER, TankClass.SNIPER, TankClass.OVERLORD, TankClass.MACHINE_GUN]
+          : classes;
+      const chosenClass = weightedPool[Math.floor(Math.random() * weightedPool.length)];
       const elite = new EliteTank(this.nextId(), pos.x, pos.y, chosenClass);
       this.entities.push(elite);
-      this.addNotification(`⚠️ ELITE ${chosenClass.toUpperCase()} DETECTED ⚠️`, "#ff4444");
+      this.addNotification(`ELITE ${chosenClass.toUpperCase()} VARIANT DETECTED`, "#ff4444");
       this.sound.playLevelUp();
   }
 
@@ -7849,7 +7930,7 @@ export class GameEngine {
         }
 
         this.eliteSpawnTimer += dt;
-        if (this.eliteSpawnTimer > 600 && this.gameMode !== GameMode.SANDBOX) { 
+        if (this.eliteSpawnTimer > 145 && this.gameMode !== GameMode.SANDBOX) { 
             this.spawnElite();
             this.eliteSpawnTimer = 0;
         }
@@ -8510,64 +8591,190 @@ export class GameEngine {
     }
   }
 
-  updateEliteAI(elite: EliteTank, dt: number) {
-      const targets = this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && Vector.dist(e.pos, elite.pos) < elite.visionRange);
-      const nearest = this.findNearest(elite, targets) as Tank | null;
+  private getElitePreferredRange(elite: EliteTank): { min: number; max: number; strafe: number } {
+      switch (elite.eliteBrain) {
+          case 'SIEGE': return { min: 360, max: 620, strafe: 1.2 };
+          case 'HUNTER': return { min: 520, max: 860, strafe: 1.7 };
+          case 'SUMMONER': return { min: 420, max: 700, strafe: 1.35 };
+          case 'BARRAGE': return { min: 260, max: 520, strafe: 1.55 };
+          default: return { min: 220, max: 460, strafe: 1.9 };
+      }
+  }
 
+  private pickEliteTarget(elite: EliteTank, targets: Tank[]): Tank | null {
+      let best: Tank | null = null;
+      let bestScore = -Infinity;
+      for (const target of targets) {
+          const distance = Math.max(1, Vector.dist(elite.pos, target.pos));
+          const hpRatio = target.maxHealth > 0 ? target.health / target.maxHealth : 1;
+          const playerBias = target.type === EntityType.PLAYER ? 0.34 : 0;
+          const supportBias = target.classType === TankClass.OVERLORD || target.classType === TankClass.MANAGER || target.classType === TankClass.DOCTOR ? 0.26 : 0;
+          const lowHpBias = (1 - hpRatio) * 0.75;
+          const score = (1300 / distance) + playerBias + supportBias + lowHpBias;
+          if (score > bestScore) {
+              bestScore = score;
+              best = target;
+          }
+      }
+      return best;
+  }
+
+  private getEliteBoundaryForce(entity: Entity, strength = 2.3): Vector2 {
+      const padding = 360;
+      const steer = { x: 0, y: 0 };
+      if (entity.pos.x < padding) steer.x += (padding - entity.pos.x) / padding;
+      else if (entity.pos.x > CANVAS_WIDTH - padding) steer.x -= (entity.pos.x - (CANVAS_WIDTH - padding)) / padding;
+      if (entity.pos.y < padding) steer.y += (padding - entity.pos.y) / padding;
+      else if (entity.pos.y > CANVAS_HEIGHT - padding) steer.y -= (entity.pos.y - (CANVAS_HEIGHT - padding)) / padding;
+      return Vector.mult(steer, strength);
+  }
+
+  private getEliteBulletAvoidance(elite: EliteTank): Vector2 {
       const steering = { x: 0, y: 0 };
-      if (nearest) {
-          const dirToNearest = Vector.sub(nearest.pos, elite.pos);
-          const distToNearest = Vector.mag(dirToNearest);
-          
-          // Use existing bullet avoidance logic
-          const incomingBullets = this.entities.filter(e => e.type === EntityType.BULLET && (e as Bullet).ownerId !== elite.id && Vector.dist(e.pos, elite.pos) < 500);
-          incomingBullets.forEach(b => {
-              const toBot = Vector.sub(elite.pos, b.pos);
-              const bulletVelNorm = Vector.normalize(b.vel);
-              const toBotNorm = Vector.normalize(toBot);
-              
-              if (Vector.dot(bulletVelNorm, toBotNorm) > 0.7) {
-                  const sideForce = { x: -b.vel.y, y: b.vel.x };
-                  const dotProduct = Vector.dot(sideForce, toBot);
-                  const avoidDir = Vector.mult(Vector.normalize(sideForce), dotProduct > 0 ? 6.0 : -6.0);
-                  steering.x += avoidDir.x; steering.y += avoidDir.y;
-              }
-          });
+      const incomingBullets = this.entities.filter(e => e.type === EntityType.BULLET && (e as Bullet).ownerId !== elite.id && Vector.dist(e.pos, elite.pos) < 520);
+      incomingBullets.forEach(b => {
+          const toBot = Vector.sub(elite.pos, b.pos);
+          const bulletVelNorm = Vector.normalize(b.vel);
+          const toBotNorm = Vector.normalize(toBot);
+          if (Vector.dot(bulletVelNorm, toBotNorm) > 0.68) {
+              const sideForce = { x: -b.vel.y, y: b.vel.x };
+              const dotProduct = Vector.dot(sideForce, toBot);
+              const avoidDir = Vector.mult(Vector.normalize(sideForce), dotProduct > 0 ? 4.8 : -4.8);
+              steering.x += avoidDir.x;
+              steering.y += avoidDir.y;
+          }
+      });
+      return steering;
+  }
 
-          // Tactical decision making: Predictive Aim
-          const bSpeed = (BASE_STATS.bulletSpeed + elite.stats[StatType.BULLET_SPEED] * 0.8) * 1.5;
-          const interceptPoint = this.getInterceptPoint(elite.pos, bSpeed, nearest.pos, nearest.vel);
+  private getEliteSeparation(elite: EliteTank): Vector2 {
+      const steering = { x: 0, y: 0 };
+      const neighbors = this.entities.filter((e) =>
+          !e.isDead &&
+          e.id !== elite.id &&
+          (e.type === EntityType.ELITE_TANK || e.type === EntityType.BOSS || e.type === EntityType.ENEMY || e.type === EntityType.PLAYER) &&
+          Vector.dist(e.pos, elite.pos) < 240
+      );
+      for (const neighbor of neighbors) {
+          const offset = Vector.sub(elite.pos, neighbor.pos);
+          const dist = Math.max(1, Vector.mag(offset));
+          const push = Vector.mult(Vector.normalize(offset), 190 / dist);
+          steering.x += push.x;
+          steering.y += push.y;
+      }
+      return steering;
+  }
+
+  private updateEliteAnchor(elite: EliteTank, target: Tank, distance: number, dirToTarget: Vector2): void {
+      elite.tacticalTimer -= 1 / 60;
+      if (elite.tacticalTimer > 0 && distance < elite.visionRange * 0.9) return;
+      elite.tacticalTimer = 1.4 + Math.random() * 1.3;
+      const side = Vector.normalize({ x: -dirToTarget.y, y: dirToTarget.x });
+      const style = this.getElitePreferredRange(elite);
+      const anchorDist = Math.max(style.min + 40, Math.min(style.max, distance));
+      const offset = Vector.add(
+          Vector.mult(Vector.normalize(dirToTarget), Math.max(60, anchorDist - 90)),
+          Vector.mult(side, elite.strafeSign * (120 + Math.random() * 140))
+      );
+      elite.combatAnchor = {
+          x: Math.max(180, Math.min(CANVAS_WIDTH - 180, target.pos.x - offset.x)),
+          y: Math.max(180, Math.min(CANVAS_HEIGHT - 180, target.pos.y - offset.y)),
+      };
+      elite.strafeSign *= Math.random() < 0.35 ? -1 : 1;
+  }
+
+  updateEliteAI(elite: EliteTank, dt: number) {
+      const targets = this.entities.filter(
+          (e) => !e.isDead && (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && Vector.dist(e.pos, elite.pos) < elite.visionRange
+      ) as Tank[];
+      const target = this.pickEliteTarget(elite, targets);
+      const steering = { x: 0, y: 0 };
+
+      const separation = this.getEliteSeparation(elite);
+      steering.x += separation.x;
+      steering.y += separation.y;
+
+      const boundary = this.getEliteBoundaryForce(elite, 2.8);
+      steering.x += boundary.x;
+      steering.y += boundary.y;
+
+      const bulletAvoidance = this.getEliteBulletAvoidance(elite);
+      steering.x += bulletAvoidance.x;
+      steering.y += bulletAvoidance.y;
+
+      if (target) {
+          elite.aiTargetId = target.id;
+          const dirToTarget = Vector.sub(target.pos, elite.pos);
+          const distToTarget = Math.max(1, Vector.mag(dirToTarget));
+          const style = this.getElitePreferredRange(elite);
+
+          this.updateEliteAnchor(elite, target, distToTarget, dirToTarget);
+
+          const bulletSpeed = (BASE_STATS.bulletSpeed + elite.stats[StatType.BULLET_SPEED] * 0.8) * 1.5;
+          const interceptPoint = this.getInterceptPoint(elite.pos, bulletSpeed, target.pos, target.vel);
           elite.rotation = Math.atan2(interceptPoint.y - elite.pos.y, interceptPoint.x - elite.pos.x);
 
-          // Advanced movement: Ideal Range + Pacing
-          let targetForce = 0;
-          if (distToNearest > 500) targetForce = 2.0;
-          else if (distToNearest < 350) targetForce = -1.5;
-          else targetForce = 0.5; // Slow crawl when in range
-          
-          const approach = Vector.mult(Vector.normalize(dirToNearest), targetForce);
-          steering.x += approach.x; steering.y += approach.y;
-          
-          // Strafing / Flanking
-          const strafeAngle = Date.now() / 1200; // Slower, more deliberate strafing
-          const strafeDir = Vector.normalize({ x: -dirToNearest.y, y: dirToNearest.x });
-          const strafe = Vector.mult(strafeDir, Math.sin(strafeAngle) * 3.0);
-          steering.x += strafe.x; steering.y += strafe.y;
+          const anchorDir = Vector.sub(elite.combatAnchor, elite.pos);
+          const anchorDist = Vector.mag(anchorDir);
+          if (anchorDist > 18) {
+              const pull = Vector.mult(Vector.normalize(anchorDir), Math.min(2.1, 0.65 + anchorDist / 180));
+              steering.x += pull.x;
+              steering.y += pull.y;
+          }
+
+          const targetNorm = Vector.normalize(dirToTarget);
+          if (distToTarget < style.min) {
+              const retreat = Vector.mult(targetNorm, -1.6 * elite.aggressionBias);
+              steering.x += retreat.x;
+              steering.y += retreat.y;
+          } else if (distToTarget > style.max) {
+              const advance = Vector.mult(targetNorm, 1.75 * elite.aggressionBias);
+              steering.x += advance.x;
+              steering.y += advance.y;
+          }
+
+          const orbitDir = Vector.normalize({ x: -targetNorm.y, y: targetNorm.x });
+          const orbitStrength = style.strafe * (0.7 + Math.sin(elite.orbitPhase + Date.now() / 550) * 0.3);
+          steering.x += orbitDir.x * orbitStrength * elite.strafeSign;
+          steering.y += orbitDir.y * orbitStrength * elite.strafeSign;
+
+          if (elite.eliteBrain === 'SIEGE' && distToTarget < 300) {
+              steering.x -= targetNorm.x * 1.4;
+              steering.y -= targetNorm.y * 1.4;
+          } else if (elite.eliteBrain === 'SKIRMISHER' && distToTarget < 240) {
+              steering.x += orbitDir.x * 1.25;
+              steering.y += orbitDir.y * 1.25;
+          } else if (elite.eliteBrain === 'BARRAGE' && distToTarget > 340) {
+              steering.x += targetNorm.x * 1.1;
+              steering.y += targetNorm.y * 1.1;
+          } else if (elite.eliteBrain === 'SUMMONER' && distToTarget < 360) {
+              steering.x -= targetNorm.x * 0.9;
+              steering.y -= targetNorm.y * 0.9;
+          }
 
           this.attemptShoot(elite);
       } else {
-          // Relaxed Patrol
-          const distToPatrol = Vector.dist(elite.pos, elite.patrolPos);
-          if (distToPatrol > 200) {
-              const patrol = Vector.mult(Vector.normalize(Vector.sub(elite.patrolPos, elite.pos)), 0.82);
-              steering.x += patrol.x; steering.y += patrol.y;
-          } else if (Math.random() < 0.01) {
-              elite.vel = Vector.add(elite.vel, Vector.mult(Vector.fromAngle(Math.random() * Math.PI * 2), 0.4));
+          elite.aiTargetId = null;
+          elite.repathTimer -= dt;
+          if (elite.repathTimer <= 0 || Vector.dist(elite.pos, elite.patrolPos) < 120) {
+              elite.repathTimer = 2.8 + Math.random() * 2.4;
+              elite.patrolPos = {
+                  x: Math.max(220, Math.min(CANVAS_WIDTH - 220, elite.combatAnchor.x + Math.cos(elite.orbitPhase + Date.now() / 900) * elite.patrolRadius)),
+                  y: Math.max(220, Math.min(CANVAS_HEIGHT - 220, elite.combatAnchor.y + Math.sin(elite.orbitPhase + Date.now() / 900) * elite.patrolRadius)),
+              };
           }
-          elite.rotation += dt * 0.3;
+          const patrolDir = Vector.sub(elite.patrolPos, elite.pos);
+          const patrolDist = Vector.mag(patrolDir);
+          if (patrolDist > 12) {
+              const patrolForce = Vector.mult(Vector.normalize(patrolDir), Math.min(1.55, 0.45 + patrolDist / 220));
+              steering.x += patrolForce.x;
+              steering.y += patrolForce.y;
+          }
+          elite.rotation += dt * 0.42;
       }
 
-      elite.acc = Vector.limit(steering, 2.7);
+      elite.orbitPhase += dt * 0.9;
+      elite.acc = Vector.limit(steering, 3.35);
   }
 
   getInterceptPoint(shooterPos: Vector2, bulletSpeed: number, targetPos: Vector2, targetVel: Vector2): Vector2 {
@@ -10050,10 +10257,10 @@ export class GameEngine {
         pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
         const roll = Math.random();
         if (roll < 0.014) type = ShapeType.OCTAGON; 
-        else if (roll < 0.055) type = ShapeType.HEXAGON; 
-        else if (roll < 0.18) type = ShapeType.PENTAGON; 
-        else if (roll < 0.48) type = ShapeType.TRIANGLE; 
-        else type = ShapeType.SQUARE; // Increased from 35% to 50%
+        else if (roll < 0.045) type = ShapeType.HEXAGON; 
+        else if (roll < 0.14) type = ShapeType.PENTAGON; 
+        else if (roll < 0.58) type = ShapeType.TRIANGLE; 
+        else type = ShapeType.SQUARE;
     } else if (this.gameMode !== GameMode.SANDBOX) {
         const zoneIndex = this.pickSpawnZoneIndex();
         pos = this.getSpawnPositionInZone(zoneIndex);
@@ -10065,18 +10272,18 @@ export class GameEngine {
         pos = { x: center.x + Math.cos(angle) * dist, y: center.y + Math.sin(angle) * dist };
         const roll = Math.random();
         if (roll < 0.018) type = ShapeType.OCTAGON; 
-        else if (roll < 0.07) type = ShapeType.HEXAGON; 
-        else if (roll < 0.28) type = ShapeType.PENTAGON; 
-        else if (roll < 0.68) type = ShapeType.TRIANGLE;
-        else type = ShapeType.SQUARE; // Introduced to Pentagon Nest with a 20% spawn rate
+        else if (roll < 0.06) type = ShapeType.HEXAGON; 
+        else if (roll < 0.22) type = ShapeType.PENTAGON; 
+        else if (roll < 0.74) type = ShapeType.TRIANGLE;
+        else type = ShapeType.SQUARE;
     } else {
         pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
         const roll = Math.random();
         if (roll < 0.002) type = ShapeType.OCTAGON; 
-        else if (roll < 0.012) type = ShapeType.HEXAGON; 
-        else if (roll < 0.045) type = ShapeType.PENTAGON; 
-        else if (roll < 0.30) type = ShapeType.TRIANGLE; 
-        else type = ShapeType.SQUARE; // Increased from 60% to 80%
+        else if (roll < 0.009) type = ShapeType.HEXAGON; 
+        else if (roll < 0.03) type = ShapeType.PENTAGON; 
+        else if (roll < 0.47) type = ShapeType.TRIANGLE; 
+        else type = ShapeType.SQUARE;
     }
 
     if (this.gameMode === GameMode.SANDBOX && this.sandboxConfig) {
@@ -10263,10 +10470,16 @@ export class GameEngine {
                     if (aIsProjectile || bIsProjectile) continue; // Pass right through teammate projectiles
                     
                     // Teammate tanks bump into each other but don't deal damage
+                     this.resolveCollision(a, b, false);
+                     continue;
+                 }
+
+                if (a.type === EntityType.SHAPE && b.type === EntityType.SHAPE) {
+                    // Shapes still push off each other so they do not stack, but they no longer damage one another by bumping.
                     this.resolveCollision(a, b, false);
                     continue;
                 }
-                
+                 
                 if (a.type === EntityType.BULLET && (a as Bullet).ownerId === b.id) continue;
                 if (b.type === EntityType.BULLET && (b as Bullet).ownerId === a.id) continue;
                 
@@ -11371,4 +11584,5 @@ export class GameEngine {
       });
   }
 }
+
 
