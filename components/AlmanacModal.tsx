@@ -202,25 +202,25 @@ const SHAPE_STRATEGIES: Partial<Record<ShapeType, string[]>> = {
 const CLASS_ROLES: Record<string, ClassRole> = {
     ASSAULT: {
         label: 'Frontline Combatants',
-        desc: 'Bullet-density classes built for lane pressure, suppression, and constant chip damage.',
+        desc: 'High bullet volume for direct pressure and steady frontline control.',
         classes: [TankClass.TWIN, TankClass.TRIPLE_SHOT, TankClass.PENTA_SHOT, TankClass.SPREAD_SHOT, TankClass.TRIPLE_TWIN],
         icon: Zap,
     },
     PRECISION: {
         label: 'Long-Range Interceptors',
-        desc: 'High-velocity classes that punish bad positioning and fragile targets from range.',
+        desc: 'Fast projectiles and clean sightlines for punishing bad positioning.',
         classes: [TankClass.SNIPER, TankClass.ASSASSIN, TankClass.RANGER, TankClass.STALKER, TankClass.HUNTER],
         icon: Target,
     },
     IMPACT: {
         label: 'Heavy Ordnance',
-        desc: 'Large projectile classes with burst damage, recoil movement, and serious area denial.',
+        desc: 'Burst-heavy frames that trade tempo for impact and recoil utility.',
         classes: [TankClass.MACHINE_GUN, TankClass.DESTROYER, TankClass.ANNIHILATOR, TankClass.HYBRID, TankClass.SPRAYER],
         icon: Activity,
     },
     TACTICAL: {
         label: 'Advanced Command',
-        desc: 'Drone, turret, and control classes that dominate space through positioning and unit management.',
+        desc: 'Control-oriented classes built around drones, turrets, and map ownership.',
         classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.AUTO_GUNNER],
         icon: Cpu,
     },
@@ -229,19 +229,19 @@ const CLASS_ROLES: Record<string, ClassRole> = {
 const BOSS_TANK_DATA: Record<string, ClassRole> = {
     COMMANDERS: {
         label: 'Rebirth Titans',
-        desc: 'Level-60 chassis that trade simple handling for durability, map control, and endgame pressure.',
+        desc: 'Endgame titan frames with heavy durability, setup value, and battlefield control.',
         classes: [TankClass.COLOSSAL, TankClass.LEVIATHAN, TankClass.WARLORD],
         icon: Crown,
     },
 };
 
 const TACTICAL_TRAITS: TraitCard[] = [
-    { name: 'Sacrificial Goat', key: 'RMB / Right-Click', desc: 'Overlord and Manager convert 50% current health into a risky combat state that boosts drone pressure.', icon: Activity },
-    { name: 'Goliath Recoil', key: 'Passive', desc: 'Destroyer and Annihilator use huge recoil as both a drawback and a movement tool.', icon: Zap },
-    { name: 'Void Sync', key: 'Dimensional', desc: 'Void rifts massively boost rarity rolls, but the farm zone becomes unstable and harder to control.', icon: Aperture },
-    { name: 'Siege Mode', key: 'Key [X]', desc: 'Warlord anchors into the grid, losing movement while gaining heavy defensive and offensive control.', icon: Shield },
-    { name: 'Shockwave', key: 'Titan Passive', desc: 'Leviathan periodically emits a pulse that denies close-range enemies and projectile pressure.', icon: Sparkles },
-    { name: 'Rebirth Protocol', key: 'Level 60', desc: 'Reset your level to unlock Titan-class chassis and late-game commander mechanics.', icon: Crown },
+    { name: 'Sacrificial Goat', key: 'RMB / Right-Click', desc: 'Spend current health to spike drone pressure for a risky power window.', icon: Activity },
+    { name: 'Goliath Recoil', key: 'Passive', desc: 'Heavy recoil can reposition you as much as it knocks you back.', icon: Zap },
+    { name: 'Void Sync', key: 'Dimensional', desc: 'Void routes boost rarity and yield, but the zone becomes much less stable.', icon: Aperture },
+    { name: 'Siege Mode', key: 'Key [X]', desc: 'Anchor in place to gain stronger defensive and offensive control.', icon: Shield },
+    { name: 'Shockwave', key: 'Titan Passive', desc: 'Periodic pulses keep close threats and projectile swarms off your hull.', icon: Sparkles },
+    { name: 'Rebirth Protocol', key: 'Level 60', desc: 'Reset progression to access titan-class chassis and late-game mechanics.', icon: Crown },
 ];
 
 const RARITY_STYLE: Partial<Record<ShapeRarity, { text: string; bg: string; border: string }>> = {
@@ -280,6 +280,91 @@ const getTankComplexity = (tankClass: TankClass) => {
 };
 
 const countClasses = (roles: Record<string, ClassRole>) => Object.values(roles).reduce((total, role) => total + role.classes.length, 0);
+
+const getClassBrief = (tankClass: TankClass) => {
+    switch (tankClass) {
+        case TankClass.TWIN:
+        case TankClass.TRIPLE_SHOT:
+        case TankClass.PENTA_SHOT:
+        case TankClass.SPREAD_SHOT:
+        case TankClass.TRIPLE_TWIN:
+            return 'Lane pressure';
+        case TankClass.SNIPER:
+        case TankClass.ASSASSIN:
+        case TankClass.RANGER:
+        case TankClass.STALKER:
+        case TankClass.HUNTER:
+            return 'Pick from range';
+        case TankClass.MACHINE_GUN:
+        case TankClass.DESTROYER:
+        case TankClass.ANNIHILATOR:
+        case TankClass.HYBRID:
+        case TankClass.SPRAYER:
+            return 'Burst and recoil';
+        case TankClass.OVERSEER:
+        case TankClass.OVERLORD:
+        case TankClass.MANAGER:
+        case TankClass.OCTO_TANK:
+        case TankClass.AUTO_GUNNER:
+            return 'Space control';
+        case TankClass.COLOSSAL:
+            return 'Siege wall';
+        case TankClass.LEVIATHAN:
+            return 'Pulse control';
+        case TankClass.WARLORD:
+            return 'Anchor defense';
+        default:
+            return 'Generalist frame';
+    }
+};
+
+const getBossIdentity = (tankClass: TankClass) => {
+    switch (tankClass) {
+        case TankClass.COLOSSAL:
+            return {
+                role: 'Fortress titan',
+                notes: ['Huge lane denial', 'Wins slow pushes', 'Punishes frontal dives'],
+            };
+        case TankClass.LEVIATHAN:
+            return {
+                role: 'Shockwave controller',
+                notes: ['Breaks clusters', 'Strong anti-swarm', 'Owns midrange space'],
+            };
+        case TankClass.WARLORD:
+            return {
+                role: 'Siege commander',
+                notes: ['Locks territory', 'Trades speed for control', 'Best with setup time'],
+            };
+        default:
+            return {
+                role: 'Titan chassis',
+                notes: ['High durability', 'Late-game threat', 'Needs focused response'],
+            };
+    }
+};
+
+const getThreatProfile = (boss: BossStatView) => {
+    const pressure = boss.damage && boss.damage >= 45 ? 'High burst' : boss.radius && boss.radius >= 45 ? 'Wide control' : 'Sustained threat';
+    const reward = boss.xp >= 10000 ? 'Huge payout' : boss.xp >= 3000 ? 'Strong payout' : 'Moderate payout';
+    const handling = boss.health >= 5000 ? 'Bring focus fire' : boss.health >= 1500 ? 'Chip safely' : 'Collapse quickly';
+    return [
+        { label: 'Pressure', value: pressure },
+        { label: 'Reward', value: reward },
+        { label: 'Response', value: handling },
+    ];
+};
+
+const getTraitFocus = (trait: TraitCard) => {
+    switch (trait.name) {
+        case 'Sacrificial Goat': return 'Health-for-pressure burst';
+        case 'Goliath Recoil': return 'Recoil doubles as movement';
+        case 'Void Sync': return 'Greed vs survival';
+        case 'Siege Mode': return 'Anchor for zone control';
+        case 'Shockwave': return 'Keep enemies off your hull';
+        case 'Rebirth Protocol': return 'Reset for titan access';
+        default: return 'Specialist combat rule';
+    }
+};
 
 const useDebouncedValue = <T,>(value: T, delay = 130) => {
     const [debounced, setDebounced] = useState(value);
@@ -429,6 +514,22 @@ const NoResults: React.FC<{
             </button>
         </div>
     </CardShell>
+);
+
+const QuickIntelList: React.FC<{
+    items: Array<{ label: string; value: string }>;
+    darkMode: boolean;
+    tone: ToneStyle;
+    columns?: string;
+}> = ({ items, darkMode, tone, columns = 'grid-cols-1 sm:grid-cols-3' }) => (
+    <div className={`grid gap-2 ${columns}`}>
+        {items.map((item) => (
+            <div key={`${item.label}-${item.value}`} className={`rounded-lg border px-3 py-3 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-slate-50'}`}>
+                <div className={`vx-mono text-[9px] font-bold uppercase tracking-[0.18em] ${tone.softText}`}>{item.label}</div>
+                <div className={`mt-1 text-sm font-semibold leading-5 ${darkMode ? 'text-white/72' : 'text-slate-700'}`}>{item.value}</div>
+            </div>
+        ))}
+    </div>
 );
 
 export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, playSound }) => {
@@ -708,12 +809,16 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                             <StatPanel label="Damage" value={String(base?.damage ?? 0)} darkMode={darkMode} tone={activeTone} />
                         </div>
 
-                        <div className="mt-4 space-y-2">
-                            {strategies.map(tip => (
-                                <div key={tip} className={`rounded-lg border px-3 py-2 text-xs font-semibold leading-5 ${darkMode ? 'border-white/8 bg-black/25 text-white/58' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
-                                    {tip}
-                                </div>
-                            ))}
+                        <div className="mt-4">
+                            <QuickIntelList
+                                darkMode={darkMode}
+                                tone={activeTone}
+                                columns="grid-cols-1 sm:grid-cols-3"
+                                items={strategies.map((tip, index) => ({
+                                    label: index === 0 ? 'Target' : index === 1 ? 'Approach' : 'Reward',
+                                    value: tip,
+                                }))}
+                            />
                         </div>
                     </CardShell>
 
@@ -762,17 +867,17 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                             </div>
                             <div className="vx-table-scroll vx-scrollbar">
                                 <div className="vx-table-grid">
-                                    <div className={`grid grid-cols-[1.1fr_.55fr_.65fr_1.6fr] gap-3 border-y px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/40' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
-                                        <span>Class</span><span>Barrels</span><span>Complexity</span><span>Role Note</span>
+                                    <div className={`grid grid-cols-[1.1fr_.55fr_.65fr_1fr] gap-3 border-y px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/40' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                                        <span>Class</span><span>Barrels</span><span>Complexity</span><span>Battle Use</span>
                                     </div>
                                     {data.classes.map(tankClass => {
                                         const barrels = TANK_CONFIGS[tankClass]?.length ?? 1;
                                         return (
-                                            <div key={tankClass} className={`grid grid-cols-[1.1fr_.55fr_.65fr_1.6fr] gap-3 border-b px-4 py-3 text-sm last:border-b-0 ${darkMode ? 'border-white/6 text-white/70' : 'border-slate-200 text-slate-700'}`}>
+                                            <div key={tankClass} className={`grid grid-cols-[1.1fr_.55fr_.65fr_1fr] gap-3 border-b px-4 py-3 text-sm last:border-b-0 ${darkMode ? 'border-white/6 text-white/70' : 'border-slate-200 text-slate-700'}`}>
                                                 <span className={`font-bold uppercase tracking-[0.12em] ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatTankName(tankClass)}</span>
                                                 <span className="vx-mono">{barrels}</span>
                                                 <span className="vx-mono">{getTankComplexity(tankClass)}/5</span>
-                                                <span className={darkMode ? 'text-white/50' : 'text-slate-500'}>{data.desc}</span>
+                                                <span className={darkMode ? 'text-white/56' : 'text-slate-500'}>{getClassBrief(tankClass)}</span>
                                             </div>
                                         );
                                     })}
@@ -796,7 +901,9 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                         <CardShell key={role} darkMode={darkMode} className="p-4 sm:p-5">
                             <SectionTitle icon={Icon} title={role} eyebrow={data.label} desc={data.desc} tone={activeTone} darkMode={darkMode} />
                             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-                                {data.classes.map(tankClass => (
+                                {data.classes.map(tankClass => {
+                                    const identity = getBossIdentity(tankClass);
+                                    return (
                                     <div key={tankClass} className={`vx-card-hover rounded-xl border p-4 ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-slate-50'}`}>
                                         <div className="flex items-center justify-between gap-3">
                                             <div className="min-w-0">
@@ -805,13 +912,18 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                             </div>
                                             <Crown className={`h-5 w-5 shrink-0 ${activeTone.text}`} />
                                         </div>
-                                        <p className={`mt-3 text-sm leading-6 ${darkMode ? 'text-white/50' : 'text-slate-500'}`}>
-                                            {tankClass === TankClass.COLOSSAL && 'Mobile fortress: huge cannon pressure, hull control, and brutal lane denial.'}
-                                            {tankClass === TankClass.LEVIATHAN && 'Area-control titan: shockwave disruption and anti-cluster pressure.'}
-                                            {tankClass === TankClass.WARLORD && 'Siege commander: trades mobility for lockdown pressure, sustain, and territory control.'}
-                                        </p>
+                                        <div className="mt-3">
+                                            <DataPill tone={activeTone}>{identity.role}</DataPill>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-1 gap-2">
+                                            {identity.notes.map((note) => (
+                                                <div key={note} className={`rounded-lg border px-3 py-2 text-sm font-semibold leading-5 ${darkMode ? 'border-white/8 bg-black/20 text-white/62' : 'border-slate-200 bg-white text-slate-600'}`}>
+                                                    {note}
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
-                                ))}
+                                )})}
                             </div>
                         </CardShell>
                     );
@@ -832,7 +944,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                     <div className="vx-table-scroll vx-scrollbar">
                         <div className="vx-table-grid">
                             <div className={`grid grid-cols-[1fr_.8fr_.7fr_1.8fr] gap-3 border-y px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] ${darkMode ? 'border-white/8 bg-white/[0.03] text-white/40' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
-                                <span>Threat</span><span>Integrity</span><span>XP</span><span>Notes</span>
+                                <span>Threat</span><span>Integrity</span><span>XP</span><span>Combat Read</span>
                             </div>
                             {filteredBosses.map(boss => (
                                 <div key={boss.id} className={`grid grid-cols-[1fr_.8fr_.7fr_1.8fr] gap-3 border-b px-4 py-3 text-sm last:border-b-0 ${darkMode ? 'border-white/6 text-white/70' : 'border-slate-200 text-slate-700'}`}>
@@ -842,7 +954,14 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                     </div>
                                     <span className="vx-mono">{boss.health.toLocaleString()} HP</span>
                                     <span className="vx-mono">{boss.xp.toLocaleString()}</span>
-                                    <span className={darkMode ? 'text-white/50' : 'text-slate-500'}>{boss.description}</span>
+                                    <div className="space-y-1">
+                                        {getThreatProfile(boss).map((item) => (
+                                            <div key={`${boss.id}-${item.label}`} className={`text-[12px] leading-5 ${darkMode ? 'text-white/58' : 'text-slate-500'}`}>
+                                                <span className={`mr-2 font-bold uppercase tracking-[0.12em] ${activeTone.text}`}>{item.label}</span>
+                                                <span>{item.value}</span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -886,17 +1005,16 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                             <StatPanel label="Stability" value="Volatile" darkMode={darkMode} tone={activeTone} icon={Activity} />
                             <StatPanel label="Cycle Rate" value="5:00m" darkMode={darkMode} tone={activeTone} icon={Database} />
                         </div>
-                        <div className="grid grid-cols-1 gap-2">
-                            {[
-                                'Void routes massively increase farming yield, but greed gets punished fast.',
-                                'Movement speed, disengage tools, and map awareness matter more than raw DPS.',
-                                'Rare drops are bait if enemy tanks can collapse on your route.',
-                            ].map(note => (
-                                <div key={note} className={`rounded-lg border px-3 py-2 text-sm font-medium leading-6 ${darkMode ? 'border-white/8 bg-black/25 text-white/55' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
-                                    {note}
-                                </div>
-                            ))}
-                        </div>
+                        <QuickIntelList
+                            darkMode={darkMode}
+                            tone={activeTone}
+                            columns="grid-cols-1 sm:grid-cols-3"
+                            items={[
+                                { label: 'Upside', value: 'Rift farming massively boosts yield and rarity quality.' },
+                                { label: 'Risk', value: 'Instability, collapses, and enemy rotates punish greed fast.' },
+                                { label: 'Priority', value: 'Take speed, escape tools, and route awareness over raw DPS.' },
+                            ]}
+                        />
                     </div>
                 </div>
             </CardShell>
@@ -924,7 +1042,10 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                         <p className={`font-bold uppercase tracking-[0.12em] ${darkMode ? 'text-white' : 'text-slate-950'}`}>{trait.name}</p>
                                         <p className={`vx-mono mt-1 text-[10px] font-bold uppercase tracking-[0.18em] ${activeTone.softText}`}>{trait.key}</p>
                                     </div>
-                                    <p className={`col-span-2 text-sm leading-6 lg:col-span-1 ${darkMode ? 'text-white/50' : 'text-slate-500'}`}>{trait.desc}</p>
+                                    <div className="col-span-2 lg:col-span-1 space-y-2">
+                                        <p className={`text-sm leading-6 ${darkMode ? 'text-white/54' : 'text-slate-500'}`}>{trait.desc}</p>
+                                        <DataPill tone={activeTone} className="w-fit max-w-full">{getTraitFocus(trait)}</DataPill>
+                                    </div>
                                 </div>
                             );
                         })}
@@ -932,12 +1053,17 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                 </CardShell>
 
                 <CardShell darkMode={darkMode} className="p-4 sm:p-5">
-                    <SectionTitle icon={Info} title="Pilot Synergy Protocols" eyebrow="Build discipline" desc="Strong builds are focused. Pick anchor stats instead of trying to max absolutely everything." tone={activeTone} darkMode={darkMode} />
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        {[StatType.RELOAD, StatType.BULLET_SPEED, StatType.MOVEMENT_SPEED].map(stat => (
-                            <StatPanel key={stat} label="Priority" value={formatLabel(String(stat))} darkMode={darkMode} tone={activeTone} />
-                        ))}
-                    </div>
+                    <SectionTitle icon={Info} title="Pilot Synergy Protocols" eyebrow="Build discipline" desc="Use a simple stat spine: one fire-rate pick, one projectile pick, one survival or movement pick." tone={activeTone} darkMode={darkMode} />
+                    <QuickIntelList
+                        darkMode={darkMode}
+                        tone={activeTone}
+                        columns="grid-cols-1 sm:grid-cols-3"
+                        items={[
+                            { label: 'Fire Rate', value: formatLabel(String(StatType.RELOAD)) },
+                            { label: 'Projectile', value: formatLabel(String(StatType.BULLET_SPEED)) },
+                            { label: 'Mobility', value: formatLabel(String(StatType.MOVEMENT_SPEED)) },
+                        ]}
+                    />
                 </CardShell>
             </div>
         );
@@ -1115,7 +1241,11 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                             className={`relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 lg:px-7 lg:py-7 ${darkMode ? 'vx-scrollbar' : 'vx-scrollbar-light'}`}
                         >
                             <div className={`mx-auto flex w-full max-w-[1320px] min-w-0 flex-col gap-4 ${compactMode ? 'text-[.94rem]' : ''}`}>
-                                <div className={`sticky top-0 z-20 rounded-xl border px-3 py-3 backdrop-blur-xl sm:px-4 ${darkMode ? 'border-white/8 bg-[#030508]/90' : 'border-slate-200/90 bg-[#f5f2ea]/94'}`}>
+                                <div
+                                    className={`sticky top-0 z-20 overflow-hidden transition-all duration-200 ${scrollProgress > 0.015 ? 'pointer-events-none max-h-0 -translate-y-3 opacity-0 mb-0' : 'max-h-40 translate-y-0 opacity-100 mb-1'}`}
+                                    aria-hidden={scrollProgress > 0.015}
+                                >
+                                <div className={`rounded-xl border px-3 py-3 backdrop-blur-xl sm:px-4 ${darkMode ? 'border-white/8 bg-[#030508]/90' : 'border-slate-200/90 bg-[#f5f2ea]/94'}`}>
                                     <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div className="flex min-w-0 flex-wrap items-center gap-2">
                                             <DataPill tone={activeTone}><Database className="h-3.5 w-3.5" /> {activeMeta.shortLabel}</DataPill>
@@ -1146,6 +1276,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                             </button>
                                         </div>
                                     </div>
+                                </div>
                                 </div>
 
                                 {renderOverview()}

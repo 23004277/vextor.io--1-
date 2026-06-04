@@ -92,6 +92,22 @@ function teamBaseHsl(team: Team): Hsl {
     return rgbToHsl(rgb.r, rgb.g, rgb.b);
 }
 
+function getTeamProjectileColor(team: Team): string {
+    if (team === Team.BLUE) return COLORS.player;
+    if (team === Team.RED) return COLORS.enemy;
+    return COLORS.barrel;
+}
+
+function resolveDamageOwnerId(engine: GameEngine | undefined, sourceId: number | null): number | null {
+    if (!engine || sourceId === null) return sourceId;
+    const source = engine.entities.find((entity: Entity) => entity.id === sourceId);
+    if (!source) return sourceId;
+    if (source.type === EntityType.BULLET) return (source as Bullet).ownerId;
+    if (source.type === EntityType.DRONE || source.type === EntityType.MINI_TANK) return (source as Drone | MiniTank).owner.id;
+    if (source.type === EntityType.PLAYER || source.type === EntityType.ENEMY || source.type === EntityType.ELITE_TANK) return source.id;
+    return sourceId;
+}
+
 function makeModifierFromHex(base: Hsl, targetHex: string): SkinModifier {
     const rgb = hexToRgb(targetHex);
     const target = rgbToHsl(rgb.r, rgb.g, rgb.b);
@@ -436,6 +452,33 @@ class Entity {
         const shieldPct = Math.max(0, this.shield / this.maxShield);
         ctx.fillStyle = '#33ccff';
         ctx.fillRect(this.pos.x - barWidth / 2, this.pos.y + yOffset - 3, barWidth * shieldPct, 2);
+    }
+
+    const maybeTank = this as unknown as Tank;
+    if (typeof maybeTank.classType === 'string' && maybeTank.isBossClass?.(maybeTank.classType)) {
+        const engine = (window as any).gameEngine as GameEngine | undefined;
+        const playerId = engine?.player?.id;
+        const contributionMap = maybeTank.damageDealtBy;
+        if (playerId != null && contributionMap instanceof Map && contributionMap.size > 0) {
+            let totalDamage = 0;
+            contributionMap.forEach((value) => { totalDamage += value; });
+            const playerDamage = contributionMap.get(playerId) || 0;
+            if (totalDamage > 0 && playerDamage > 0) {
+                const sharePct = Math.max(1, Math.round((playerDamage / totalDamage) * 100));
+                ctx.save();
+                ctx.font = 'bold 10px Ubuntu';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+                ctx.fillStyle = '#fbbf24';
+                const textY = this.pos.y + yOffset + barHeight + 4;
+                const shareText = `Share ${sharePct}%`;
+                ctx.strokeText(shareText, this.pos.x, textY);
+                ctx.fillText(shareText, this.pos.x, textY);
+                ctx.restore();
+            }
+        }
     }
   }
 
@@ -1454,6 +1497,7 @@ class Tank extends Entity {
   barrelSkin: string | null = null;
   trailEffect: string | null = null;
   deathEffect: string | null = null;
+  damageDealtBy: Map<number, number> = new Map();
 
   // BURST FIRE SYSTEM
   burstQueue: { barrelIndex: number, delayLeftMs: number }[] = [];
@@ -3710,6 +3754,11 @@ class Tank extends Entity {
         }
       }
     }
+    const engine = (window as any).gameEngine as GameEngine | undefined;
+    const ownerId = resolveDamageOwnerId(engine, sourceId);
+    if (ownerId !== null && adjusted > 0) {
+      this.damageDealtBy.set(ownerId, (this.damageDealtBy.get(ownerId) || 0) + adjusted);
+    }
     super.takeDamage(adjusted, sourceId, isBodyDamage);
   }
 
@@ -4467,6 +4516,12 @@ class Shape extends Entity {
   driftVec: Vector2;
   rarity: ShapeRarity;
   damageDealtBy: Map<number, number> = new Map();
+  playerDamageAccumulator: number = 0;
+  playerDamageSamples: number[] = Array(18).fill(0);
+  playerDamageSampleTimer: number = 0;
+  playerDamageRecentTotal: number = 0;
+  playerDps: number = 0;
+  lastPlayerDamageAt: number = 0;
   hueTimer: number = 0; 
   pulseTimer: number = 0;
   ambientTimer: number = 0;
@@ -4521,9 +4576,93 @@ class Shape extends Entity {
     this.spawnFlash = 1;
   }
 
+  private resolveOwnerId(sourceId: number | null): number | null {
+      if (sourceId === null) return null;
+      const engine = (window as any).gameEngine as GameEngine | undefined;
+      const source = engine?.entities.find((entity: Entity) => entity.id === sourceId);
+      if (!source) return sourceId;
+      if (source.type === EntityType.BULLET) return (source as Bullet).ownerId;
+      if (source.type === EntityType.DRONE || source.type === EntityType.MINI_TANK) return (source as Drone | MiniTank).owner.id;
+      if (source.type === EntityType.PLAYER || source.type === EntityType.ENEMY || source.type === EntityType.ELITE_TANK) return source.id;
+      return sourceId;
+  }
+
+  private shouldShowCombatReadout(): boolean {
+      if (this.isDying || this.shouldRemove) return false;
+      const engine = (window as any).gameEngine as GameEngine | undefined;
+      const player = engine?.player;
+      if (!player || player.isDead) return false;
+      if (Date.now() - this.lastPlayerDamageAt > 3200) return false;
+      return Vector.dist(player.pos, this.pos) < 1000;
+  }
+
+  private drawCombatReadout(ctx: CanvasRenderingContext2D) {
+      const now = Date.now();
+      const visibleForMs = now - this.lastPlayerDamageAt;
+      const fade = visibleForMs <= 2200 ? 1 : Math.max(0, 1 - ((visibleForMs - 2200) / 1000));
+      if (fade <= 0) return;
+
+      const panelWidth = Math.max(88, this.radius * 2.8);
+      const panelHeight = 36;
+      const panelX = this.pos.x - panelWidth / 2;
+      const panelY = this.pos.y + this.radius + 22;
+      const hpText = `${Math.max(0, Math.ceil(this.health))} HP`;
+      const dpsText = `${Math.max(0, Math.round(this.playerDps))} DPS`;
+      const graphX = panelX + 7;
+      const graphY = panelY + 22;
+      const graphWidth = panelWidth - 14;
+      const graphHeight = 8;
+      const maxSample = Math.max(1, ...this.playerDamageSamples);
+
+      ctx.save();
+      ctx.globalAlpha = fade;
+
+      ctx.fillStyle = 'rgba(2, 6, 12, 0.84)';
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.28)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(panelX, panelY, panelWidth, panelHeight, 9);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.font = 'bold 11px Ubuntu';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(hpText, panelX + 7, panelY + 10);
+
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#22d3ee';
+      ctx.fillText(dpsText, panelX + panelWidth - 7, panelY + 10);
+
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(graphX, graphY, graphWidth, graphHeight);
+
+      const barGap = 1;
+      const barWidth = Math.max(2, (graphWidth - (this.playerDamageSamples.length - 1) * barGap) / this.playerDamageSamples.length);
+      this.playerDamageSamples.forEach((sample, index) => {
+          const normalized = sample <= 0 ? 0 : sample / maxSample;
+          const barHeight = Math.max(1, normalized * graphHeight);
+          const x = graphX + index * (barWidth + barGap);
+          const y = graphY + (graphHeight - barHeight);
+          ctx.fillStyle = sample > 0 ? '#22d3ee' : 'rgba(255,255,255,0.06)';
+          ctx.fillRect(x, y, barWidth, barHeight);
+      });
+
+      ctx.restore();
+  }
+
   override takeDamage(amount: number, sourceId: number | null = null) {
       if (this.isDying) return; 
       if (sourceId !== null && amount > 0) this.damageDealtBy.set(sourceId, (this.damageDealtBy.get(sourceId) || 0) + amount);
+      if (amount > 0) {
+          const engine = (window as any).gameEngine as GameEngine | undefined;
+          const ownerId = this.resolveOwnerId(sourceId);
+          if (engine?.player && ownerId === engine.player.id) {
+              this.playerDamageAccumulator += amount;
+              this.lastPlayerDamageAt = Date.now();
+          }
+      }
       
       if (this.invulnerableTime > 0) return;
       this.lastDamageTime = Date.now();
@@ -4538,6 +4677,19 @@ class Shape extends Entity {
   }
 
   override update(dt: number) {
+    this.playerDamageSampleTimer += dt;
+    const sampleStep = 0.12;
+    while (this.playerDamageSampleTimer >= sampleStep) {
+        this.playerDamageSampleTimer -= sampleStep;
+        const expired = this.playerDamageSamples.shift() ?? 0;
+        this.playerDamageRecentTotal = Math.max(0, this.playerDamageRecentTotal - expired);
+        const sample = this.playerDamageAccumulator;
+        this.playerDamageAccumulator = 0;
+        this.playerDamageSamples.push(sample);
+        this.playerDamageRecentTotal += sample;
+    }
+    this.playerDps = Math.round(this.playerDamageRecentTotal / (this.playerDamageSamples.length * sampleStep));
+
     if (this.isDying) {
         this.deathTimer += dt;
         const deathProgress = Math.min(1, this.deathTimer / Shape.DEATH_DURATION);
@@ -4574,6 +4726,13 @@ class Shape extends Entity {
     else if (this.rarity === ShapeRarity.ETERNAL || this.rarity === ShapeRarity.MYTHICAL) this.rotation += 0.04;
     else if (this.rarity === ShapeRarity.EPIC) this.rotation += 0.01;
     super.update(dt);
+  }
+
+  override draw(ctx: CanvasRenderingContext2D) {
+    super.draw(ctx);
+    if (this.shouldShowCombatReadout()) {
+        this.drawCombatReadout(ctx);
+    }
   }
 
   override drawBody(ctx: CanvasRenderingContext2D) {
@@ -4948,7 +5107,7 @@ class Bullet extends Entity {
   
   constructor(id: number, x: number, y: number, velocity: Vector2, owner: Tank, extraDamageMult: number = 1.0, extraLifeMult: number = 1.0, extraSizeMult: number = 1.0, barrelIndex: number = 0) {
     const size = (6 + (owner.stats[StatType.BULLET_DAMAGE] * 0.3)) * extraSizeMult;
-    const color = (owner.team === Team.BLUE) ? COLORS.player : (owner.team === Team.RED) ? COLORS.enemy : COLORS.barrel;
+    const color = getTeamProjectileColor(owner.team);
     super(id, EntityType.BULLET, x, y, size, color);
     this.team = owner.team;
     this.friction = 1.0; 
@@ -4963,13 +5122,10 @@ class Bullet extends Entity {
     if ((this.ownerClass === TankClass.CELESTIAL || this.ownerClass === TankClass.OBLITERATOR) && owner.isTransformed) {
         this.bulletType = 'CALAMITY_ORB';
         this.isHighDensityOrb = true;
-        this.color = this.ownerClass === TankClass.OBLITERATOR ? '#b026ff' : '#c084fc';
     } else if (isPacifist(this.ownerClass)) {
         this.bulletType = 'HEAL';
-        this.color = '#4ade80';
     } else if (isDraining(this.ownerClass)) {
         this.bulletType = 'SIPHON';
-        this.color = '#ef4444';
     }
 
     // Barrel-locked projectile sizing:
@@ -6315,6 +6471,8 @@ export class GameEngine {
   transformationReadyClass: TankClass | null = null;
   transformationReadyClassClass: TankClass | null = null;
   transformationReadyTimer: number = 0;
+  rebirthEligible: boolean = false;
+  rebirthPromptSeen: boolean = false;
 
   primedSpawn: { 
       type: 'SHAPE' | 'BOSS' | 'ALPHA_PENTAGON' | 'VOID_PORTAL' | 'DUMMY' | 'BOT_TANK' | 'ELITE_TANK', 
@@ -6684,6 +6842,9 @@ export class GameEngine {
       this.player.isTransformed = false;
       this.player.transformationTimer = 0;
       this.player.hasRebirthed = false;
+      this.player.damageDealtBy.clear();
+      this.rebirthEligible = false;
+      this.rebirthPromptSeen = false;
       this.transformationReadyTimer = 0;
       this.transformationReadyClass = null;
       this.primedSpawn = null;
@@ -7115,6 +7276,10 @@ export class GameEngine {
     this.transformations = 0;
     this.player.isTransformed = false;
     this.player.transformationTimer = 0;
+    this.player.hasRebirthed = false;
+    this.player.damageDealtBy.clear();
+    this.rebirthEligible = false;
+    this.rebirthPromptSeen = false;
     this.player.radius = 20;
     this.player.activeBuffs = [];
     this.transformationReadyTimer = 0;
@@ -8338,6 +8503,7 @@ export class GameEngine {
         isTransformed: this.player.isTransformed,
         transformationTime: this.player.transformationTimer,
         transformationReady: this.transformationReadyTimer > 0,
+        rebirthEligible: this.rebirthEligible && !this.player.hasRebirthed && this.playerState === PlayerState.ACTIVE,
         activeBuffs: this.player.activeBuffs,
         sandboxConfig: this.sandboxConfig,
         primedSpawn: this.primedSpawn,
@@ -8929,7 +9095,11 @@ export class GameEngine {
               this.sound.playLevelUp();
 
               if (this.level >= REBIRTH_LEVEL && !this.player.hasRebirthed) {
-                  this.startRebirth();
+                  this.rebirthEligible = true;
+                  if (!this.rebirthPromptSeen) {
+                      this.rebirthPromptSeen = true;
+                      this.addNotification("REBIRTH AVAILABLE - PRESS [B] TO EVOLVE", "#ffbb00");
+                  }
               }
           }
       } else {
@@ -8985,6 +9155,7 @@ export class GameEngine {
 
   startRebirth() {
       if (this.playerState !== PlayerState.ACTIVE || this.player.hasRebirthed) return;
+      if (!this.rebirthEligible && this.level < REBIRTH_LEVEL) return;
       this.isRebirthing = false;
       this.rebirthSelectionPos = null;
       this.rebirthOptions = [];
@@ -8997,11 +9168,17 @@ export class GameEngine {
       this.sound.playLevelUp();
   }
 
+  triggerRebirthSelection() {
+      if (!this.rebirthEligible || this.player.hasRebirthed || this.playerState !== PlayerState.ACTIVE) return;
+      this.startRebirth();
+  }
+
   completeRebirth(bossClass: TankClass) {
       if (this.playerState !== PlayerState.BOSS_SELECTION) return;
       if (!this.bossChoices.includes(bossClass)) return;
       this.isRebirthing = false;
       this.player.hasRebirthed = true;
+      this.rebirthEligible = false;
       this.playerState = PlayerState.ACTIVE;
       this.evolutionTransitionTimer = 0;
       this.upgradeClassForTank(this.player, bossClass);
@@ -10399,8 +10576,8 @@ export class GameEngine {
                                 const inverseSquare = 1 / (normDist * normDist);
                                 const radialWeight = Math.max(0, 1 - (distToCenter / outerRadius));
                                 const inwardForce = Math.min(1.22, (0.03 + inverseSquare * 0.042) * (0.45 + radialWeight * 0.95));
-                                const outwardForce = Math.min(1.8, 0.26 + inverseSquare * 0.075);
-                                const force = blackHole ? inwardForce : -outwardForce;
+                                const whiteHolePull = Math.min(1.45, inwardForce * 1.18 + radialWeight * 0.12);
+                                const force = blackHole ? inwardForce : whiteHolePull;
                                 other.vel = Vector.add(other.vel, Vector.mult(dirToCenter, force));
                                 if (blackHole && Math.random() < (0.08 + radialWeight * 0.2)) {
                                     const ringJitter = (Math.random() - 0.5) * Math.PI * 0.35;
@@ -10417,13 +10594,13 @@ export class GameEngine {
                                 const occKey = `${portal.id}:${other.id}`;
                                 const occMs = (this.portalCoreOccupancyMs.get(occKey) || 0) + (this.fixedSimulationStep * 1000);
                                 this.portalCoreOccupancyMs.set(occKey, occMs);
-                                if (occMs >= 60000 && portal.phase === 'BLACK_HOLE') {
+                                if (occMs >= 1200 && portal.phase === 'BLACK_HOLE') {
                                     portal.phase = 'WHITE_HOLE';
                                     portal.phaseTimerSec = Math.max(portal.phaseTimerSec, 60);
                                     this.particles.push(new Particle(portal.pos.x, portal.pos.y, 'rgba(210,245,255,0.85)', portal.radius * 0.9, 28, 'RING'));
                                     this.addNotification("WORMHOLE INVERSION", "#d7f3ff");
                                 }
-                                if (portal.phase !== 'BLACK_HOLE' && occMs >= 90000) {
+                                if (portal.phase !== 'BLACK_HOLE' && occMs >= 450) {
                                     let set = this.portalTransitQueuedIds.get(portal.id);
                                     if (!set) {
                                         set = new Set<number>();

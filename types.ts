@@ -333,6 +333,7 @@ export interface GameState {
   isTransformed: boolean;
   transformationTime: number;
   transformationReady: boolean;
+  rebirthEligible?: boolean;
   activeBuffs: BuffEffect[];
   // Sandbox Control
   sandboxConfig?: SandboxConfig;

@@ -873,8 +873,115 @@ export const QUESTS: Quest[] = [
 ];
 
 export const UPDATE_LOG = [
-    { id: 'v1.6.0', title: "ACHIEVEMENT_PROTOCOL", date: "MAR 2026", content: "Deployed tactical achievement system. Earn exclusive chassis variants through combat milestones and elite eliminations." },
-    { id: 'v1.5.0', title: "TACTICAL_REMASTER", date: "MAR 2026", content: "Redesigned Vextor_OS Almanac. Implemented dynamic regeneration scaling. Added custom tactical cursor interface." },
-    { id: 'v1.4.8', title: "SOCIAL_LINK_SYNC", date: "FEB 2026", content: "Integrated tactical Discord hub. Added dedicated Support protocols for Pilot assistance." },
-    { id: 'v1.4.5', title: "UI_OVERHAUL", date: "JAN 2026", content: "Main menu remastered for tactical clarity. Optimized scroll navigation." },
+    {
+        id: 'v1.7.0',
+        title: "TACTICAL SYSTEMS REMASTER",
+        date: "JUN 2026",
+        content: "Major battlefield intelligence, interface, and presentation overhaul focused on smarter bots, cleaner archives, safer progression, and stronger social trust.",
+        theme: "Featured",
+        tags: ["AI", "UI", "Security", "Social"],
+        sections: [
+            {
+                label: "Combat Intelligence",
+                items: [
+                    "Remastered TDM and FFA bot logic so tanks make better shot decisions instead of spraying mindlessly.",
+                    "Added stronger pathfinding, pressure awareness, local danger spacing, and target scoring for AI squads.",
+                    "Elite boss variants now spawn properly in live matches and use their own movement brains, anchor logic, and combat styles.",
+                ],
+            },
+            {
+                label: "World and PvE",
+                items: [
+                    "Shapes now enter the arena with improved spawn animation timing and cleaner defeat effects.",
+                    "Common farm targets like yellow squares and red triangles appear more often for steadier progression.",
+                    "Shapes no longer destroy each other by bumping into one another, preserving map flow and XP consistency.",
+                ],
+            },
+            {
+                label: "Systems and Security",
+                items: [
+                    "Added a lightweight anti-abuse layer for purchases, equips, support actions, leaderboard updates, and callsign changes.",
+                    "Closed reward-skin loopholes so achievement cosmetics cannot be acquired for free through the market flow.",
+                    "Supporter skin resonance now hooks into live supporter totals and rank-aware account data.",
+                ],
+            },
+            {
+                label: "Interface and Sharing",
+                items: [
+                    "Rebuilt the almanac into a cleaner tactical database with less clutter and much lighter rendering cost.",
+                    "Refined the hangar and shop structure for better readability and smoother browsing.",
+                    "Added a dedicated social preview card image and tuned link metadata so shared Vextor links present more cleanly across platforms that support rich previews.",
+                ],
+            },
+        ],
+    },
+    {
+        id: 'v1.6.0',
+        title: "ACHIEVEMENT PROTOCOL",
+        date: "MAR 2026",
+        content: "Deployed tactical achievement tracking, elite unlock rewards, and long-run progression hooks for account-backed pilots.",
+        theme: "Progression",
+        tags: ["Progression", "Rewards"],
+        sections: [
+            {
+                label: "Pilot Records",
+                items: [
+                    "Launched the achievement system for combat milestones, survivability benchmarks, and elite takedowns.",
+                    "Introduced exclusive chassis rewards tied to gameplay progression instead of store access.",
+                ],
+            },
+        ],
+    },
+    {
+        id: 'v1.5.0',
+        title: "TACTICAL REMASTER",
+        date: "MAR 2026",
+        content: "Focused on readability upgrades, interface feedback, and battlefield browsing tools.",
+        theme: "Interface",
+        tags: ["Almanac", "HUD", "UX"],
+        sections: [
+            {
+                label: "Interface Layer",
+                items: [
+                    "Remastered the Vextor OS almanac presentation for stronger readability and navigation.",
+                    "Improved tactical cursor feedback and overall menu clarity.",
+                    "Tuned regeneration-facing combat presentation for more legible match flow.",
+                ],
+            },
+        ],
+    },
+    {
+        id: 'v1.4.8',
+        title: "SOCIAL LINK SYNC",
+        date: "FEB 2026",
+        content: "Opened the social support layer and external hub links for pilots following development.",
+        theme: "Community",
+        tags: ["Support", "Discord"],
+        sections: [
+            {
+                label: "Community Systems",
+                items: [
+                    "Integrated the tactical Discord hub into the live menu flow.",
+                    "Added command support pathways for players who want to back active development.",
+                ],
+            },
+        ],
+    },
+    {
+        id: 'v1.4.5',
+        title: "UI OVERHAUL",
+        date: "JAN 2026",
+        content: "Main menu remaster with stronger structure, cleaner navigation, and better terminal presentation.",
+        theme: "Foundation",
+        tags: ["Menu", "Layout"],
+        sections: [
+            {
+                label: "Main Menu",
+                items: [
+                    "Reframed the home screen around tactical clarity and cleaner navigation terminals.",
+                    "Improved layout organization and reduced visual clutter across menu surfaces.",
+                ],
+            },
+        ],
+    },
 ];

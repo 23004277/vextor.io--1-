@@ -17,6 +17,8 @@ import { TankPreview } from './components/TankPreview';
 import { TacticalTooltip } from './components/TacticalTooltip';
 import { MainMenu } from './components/MainMenu';
 
+type UpdateLogEntry = typeof UPDATE_LOG[number];
+
 const DEFAULT_SETTINGS: GameSettings = {
     volume: 0.15,
     musicVolume: 0.1,
@@ -89,6 +91,7 @@ const App: React.FC = () => {
   const [showShop, setShowShop] = useState(false);
   const [showAlmanac, setShowAlmanac] = useState(false);
   const [showUpdateHistory, setShowUpdateHistory] = useState(false);
+  const [selectedUpdateId, setSelectedUpdateId] = useState<string>(UPDATE_LOG[0]?.id ?? '');
   const [showSupport, setShowSupport] = useState(false);
   const [supportTxnBusy, setSupportTxnBusy] = useState(false);
   const [supportTxnMsg, setSupportTxnMsg] = useState<string>('');
@@ -126,6 +129,17 @@ const App: React.FC = () => {
       }
       return COLORS.player;
   }, [user]);
+
+  const selectedUpdate = useMemo<UpdateLogEntry>(() => {
+    return UPDATE_LOG.find((entry) => entry.id === selectedUpdateId) ?? UPDATE_LOG[0];
+  }, [selectedUpdateId]);
+
+  useEffect(() => {
+    if (!showUpdateHistory) return;
+    if (!selectedUpdate || !UPDATE_LOG.some((entry) => entry.id === selectedUpdate.id)) {
+      setSelectedUpdateId(UPDATE_LOG[0]?.id ?? '');
+    }
+  }, [showUpdateHistory, selectedUpdate]);
 
   const playHover = useCallback(() => {
     if (!engine) return;
@@ -261,6 +275,14 @@ const App: React.FC = () => {
         return;
       }
 
+      if (key === 'b') {
+        if (!isPlaying || !engine || isSpectating || !gameState?.rebirthEligible) return;
+        event.preventDefault();
+        engine.triggerRebirthSelection();
+        playSelect();
+        return;
+      }
+
       if (key === 'm') {
         event.preventDefault();
         setSettings((prev) => {
@@ -286,7 +308,7 @@ const App: React.FC = () => {
 
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
-  }, [engine, isPlaying, isSpectating, playSelect]);
+  }, [engine, gameState?.rebirthEligible, isPlaying, isSpectating, playSelect]);
 
   const showTT = (label: string, desc?: string) => {
     setTooltip({ label, desc, visible: true });
@@ -530,54 +552,164 @@ const App: React.FC = () => {
         {showAchievementPopup && <AchievementPopup achievements={newlyUnlocked} onClose={() => setShowAchievementPopup(false)} />}
         
         {showUpdateHistory && (
-            <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 backdrop-blur-[28px] animate-in fade-in duration-200 p-4 md:p-8" onClick={() => setShowUpdateHistory(false)}>
-                <div className="w-full max-w-5xl max-h-[84vh] flex flex-col rounded-[2rem] bg-[#040812] border border-cyan-400/20 shadow-[0_24px_100px_rgba(0,0,0,0.88)] relative overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+            <div
+              className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 backdrop-blur-[28px] animate-in fade-in duration-200 p-4 md:p-8"
+              onClick={() => setShowUpdateHistory(false)}
+            >
+                <div
+                  className="w-full max-w-6xl h-[min(88vh,960px)] flex flex-col rounded-[2rem] bg-[#040812] border border-cyan-400/20 shadow-[0_24px_100px_rgba(0,0,0,0.88)] relative overflow-hidden animate-in zoom-in-95 duration-200"
+                  onClick={e => e.stopPropagation()}
+                >
                     <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/60 to-transparent" />
-                    <div className="grid grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)] h-full">
-                        <aside className="border-b md:border-b-0 md:border-r border-white/10 bg-black/35 p-6 md:p-7 space-y-5">
-                            <div>
-                                <span className="text-[10px] font-black text-cyan-300/80 uppercase tracking-[0.3em]">Intelligence Archive</span>
-                                <h2 className="mt-2 text-2xl font-black text-white uppercase tracking-tight">Data Logs</h2>
-                                <p className="mt-2 text-[11px] text-white/45 uppercase tracking-wider leading-relaxed">Operational updates, balance passes, and system changes.</p>
+                    <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] h-full min-h-0">
+                        <aside className="border-b lg:border-b-0 lg:border-r border-white/10 bg-[linear-gradient(180deg,rgba(6,12,24,0.94),rgba(2,5,12,0.98))] p-5 md:p-6 flex flex-col min-h-0">
+                            <div className="shrink-0">
+                                <span className="text-[10px] font-black text-cyan-300/80 uppercase tracking-[0.34em]">Update Archive</span>
+                                <h2 className="mt-2 text-2xl font-black text-white uppercase tracking-tight">Patch Notes</h2>
+                                <p className="mt-2 text-[11px] text-white/45 uppercase tracking-wider leading-relaxed">
+                                  Structured release archive for systems, balance, interface, and live service changes.
+                                </p>
                             </div>
-                            <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1 custom-scrollbar">
-                                {UPDATE_LOG.map((item) => (
-                                    <div key={`nav-${item.id}`} className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5">
-                                        <div className="text-[9px] font-black text-cyan-300 uppercase tracking-[0.2em]">{item.id}</div>
-                                        <div className="text-[10px] font-bold text-white/75 uppercase tracking-wide mt-1 truncate">{item.title}</div>
-                                    </div>
-                                ))}
+
+                            <div className="mt-5 grid grid-cols-3 gap-2 shrink-0">
+                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                    <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Releases</div>
+                                    <div className="mt-1 text-lg font-black text-cyan-300">{UPDATE_LOG.length}</div>
+                                </div>
+                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                    <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Latest</div>
+                                    <div className="mt-1 text-sm font-black text-white">{UPDATE_LOG[0]?.id ?? '--'}</div>
+                                </div>
+                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                    <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Focus</div>
+                                    <div className="mt-1 text-sm font-black text-emerald-300">{selectedUpdate?.theme ?? 'Live'}</div>
+                                </div>
                             </div>
-                            <button onClick={() => setShowUpdateHistory(false)} className="w-full py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 text-[11px] font-black uppercase tracking-[0.2em] transition">
+
+                            <div className="mt-5 flex-1 min-h-0 overflow-y-auto pr-1 custom-scrollbar space-y-2">
+                                {UPDATE_LOG.map((item, idx) => {
+                                  const active = item.id === selectedUpdate?.id;
+                                  return (
+                                    <button
+                                      key={`nav-${item.id}`}
+                                      onClick={() => setSelectedUpdateId(item.id)}
+                                      className={`w-full text-left rounded-2xl border px-4 py-3 transition-all ${
+                                        active
+                                          ? 'border-cyan-400/45 bg-cyan-500/[0.08] shadow-[0_0_0_1px_rgba(34,211,238,0.12)]'
+                                          : 'border-white/8 bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-3">
+                                        <span className={`text-[10px] font-black uppercase tracking-[0.22em] ${active ? 'text-cyan-300' : 'text-white/40'}`}>{item.id}</span>
+                                        <span className={`text-[9px] font-bold uppercase tracking-[0.16em] ${active ? 'text-emerald-300/90' : 'text-white/25'}`}>{item.theme ?? 'Update'}</span>
+                                      </div>
+                                      <div className={`mt-2 text-[11px] font-black uppercase tracking-[0.08em] ${active ? 'text-white' : 'text-white/72'}`}>{item.title}</div>
+                                      <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.15em] text-white/32">{item.date}</div>
+                                      <div className="mt-3 flex flex-wrap gap-1.5">
+                                        {(item.tags ?? []).slice(0, 3).map((tag) => (
+                                          <span key={`${item.id}-${tag}`} className={`rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] ${active ? 'border-cyan-300/20 bg-cyan-400/10 text-cyan-200' : 'border-white/10 bg-white/[0.03] text-white/45'}`}>
+                                            {tag}
+                                          </span>
+                                        ))}
+                                      </div>
+                                      {idx === 0 && (
+                                        <div className="mt-3 text-[9px] font-black uppercase tracking-[0.18em] text-amber-300/85">Newest deployment</div>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                            </div>
+
+                            <button
+                              onClick={() => setShowUpdateHistory(false)}
+                              className="mt-5 shrink-0 w-full py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 text-[11px] font-black uppercase tracking-[0.2em] transition"
+                            >
                                 Close Terminal
                             </button>
                         </aside>
 
-                        <section className="flex flex-col min-h-0">
-                            <div className="px-6 md:px-8 py-5 border-b border-white/10 bg-cyan-500/[0.04] flex items-center justify-between gap-4 shrink-0">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-                                    <span className="text-[10px] font-black text-cyan-300 uppercase tracking-[0.3em]">Patch Stream</span>
+                        <section className="flex flex-col min-h-0 bg-[linear-gradient(180deg,rgba(4,10,18,0.88),rgba(2,4,10,0.98))]">
+                            <div className="px-5 md:px-8 py-5 border-b border-white/10 bg-cyan-500/[0.04] flex flex-col gap-4 shrink-0">
+                                <div className="flex items-center justify-between gap-4">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                                        <span className="text-[10px] font-black text-cyan-300 uppercase tracking-[0.3em]">Release Briefing</span>
+                                    </div>
+                                    <span className="text-[10px] text-white/35 font-bold uppercase tracking-[0.2em]">{UPDATE_LOG.length} entries indexed</span>
                                 </div>
-                                <span className="text-[10px] text-white/35 font-bold uppercase tracking-[0.2em]">{UPDATE_LOG.length} entries</span>
+
+                                {selectedUpdate && (
+                                  <div className="rounded-[1.6rem] border border-cyan-400/18 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.08),transparent_42%),rgba(255,255,255,0.02)] px-5 py-5 md:px-6 md:py-6">
+                                      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                          <div className="max-w-3xl">
+                                              <div className="flex flex-wrap items-center gap-2">
+                                                  <span className="rounded-full border border-cyan-400/25 bg-cyan-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300">{selectedUpdate.id}</span>
+                                                  <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">{selectedUpdate.theme ?? 'Update'}</span>
+                                                  <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">{selectedUpdate.date}</span>
+                                              </div>
+                                              <h3 className="mt-4 text-2xl md:text-3xl font-black text-white uppercase tracking-tight">{selectedUpdate.title}</h3>
+                                              <p className="mt-3 max-w-3xl text-sm md:text-[15px] leading-7 text-white/68">{selectedUpdate.content}</p>
+                                          </div>
+                                          <div className="grid grid-cols-2 gap-2 md:min-w-[220px]">
+                                              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3">
+                                                  <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Sections</div>
+                                                  <div className="mt-1 text-xl font-black text-white">{selectedUpdate.sections?.length ?? 0}</div>
+                                              </div>
+                                              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3">
+                                                  <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Highlights</div>
+                                                  <div className="mt-1 text-xl font-black text-cyan-300">
+                                                    {(selectedUpdate.sections ?? []).reduce((sum, section) => sum + section.items.length, 0)}
+                                                  </div>
+                                              </div>
+                                          </div>
+                                      </div>
+
+                                      <div className="mt-4 flex flex-wrap gap-2">
+                                          {(selectedUpdate.tags ?? []).map((tag) => (
+                                            <span key={`${selectedUpdate.id}-tag-${tag}`} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-white/72">
+                                              {tag}
+                                            </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                                )}
                             </div>
-                            <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-4 custom-scrollbar">
-                                {UPDATE_LOG.map((item, idx) => (
-                                    <article
-                                        key={item.id}
-                                        className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 md:p-6 hover:border-cyan-400/40 hover:bg-cyan-500/[0.04] transition-all"
-                                        style={{ animationDelay: `${idx * 30}ms` }}
-                                    >
-                                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
-                                            <div className="flex items-center gap-2.5">
-                                                <span className="px-2.5 py-1 rounded-md bg-cyan-400/10 border border-cyan-400/30 text-cyan-300 text-[10px] font-black uppercase tracking-[0.2em]">{item.id}</span>
-                                                <h3 className="text-base md:text-lg font-black text-white uppercase tracking-wide">{item.title}</h3>
+
+                            <div className="flex-1 overflow-y-auto p-5 md:p-8 custom-scrollbar">
+                                {selectedUpdate ? (
+                                  <div className="space-y-5">
+                                      {(selectedUpdate.sections ?? []).map((section, index) => (
+                                        <article
+                                          key={`${selectedUpdate.id}-${section.label}`}
+                                          className="rounded-[1.5rem] border border-white/10 bg-white/[0.025] overflow-hidden"
+                                        >
+                                            <div className="px-5 md:px-6 py-4 border-b border-white/8 bg-white/[0.02] flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="w-7 h-7 rounded-full border border-cyan-400/25 bg-cyan-400/10 flex items-center justify-center text-[10px] font-black text-cyan-300">
+                                                      {index + 1}
+                                                    </span>
+                                                    <h4 className="text-sm md:text-base font-black uppercase tracking-[0.08em] text-white">{section.label}</h4>
+                                                </div>
+                                                <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/32">{section.items.length} notes</span>
                                             </div>
-                                            <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">{item.date}</span>
-                                        </div>
-                                        <p className="text-sm text-white/65 leading-relaxed">{item.content}</p>
-                                    </article>
-                                ))}
+                                            <div className="px-5 md:px-6 py-5">
+                                                <ul className="space-y-3">
+                                                    {section.items.map((line) => (
+                                                      <li key={line} className="flex items-start gap-3 text-sm md:text-[15px] leading-6 text-white/70">
+                                                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300" />
+                                                          <span>{line}</span>
+                                                      </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        </article>
+                                      ))}
+                                  </div>
+                                ) : (
+                                  <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-8 text-center text-white/55">
+                                      No release notes available.
+                                  </div>
+                                )}
                             </div>
                         </section>
                     </div>

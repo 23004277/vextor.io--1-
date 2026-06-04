@@ -743,8 +743,9 @@ export class AISystem {
       const pressurePenalty = projectilePressure >= AI_TUNING.pressureCautionThreshold ? 0.78 : 1;
       const farmBias = 1 + memory.farmBias * 0.35;
 
-      const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, e, neighbors) ? 0.75 : 1;
-      const score = ((xp * 8500 * rarityBoost * bossBoost * crasherRisk * pressurePenalty * antiOverlap * farmBias) / distanceSq);
+      const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, e, neighbors) ? 0.42 : 1;
+      const bodyRiskPenalty = distanceSq < (bot.radius + ((typeof e.radius === 'number' ? e.radius : 20)) + 34) ** 2 ? 0.22 : 1;
+      const score = ((xp * 8500 * rarityBoost * bossBoost * crasherRisk * pressurePenalty * antiOverlap * farmBias * bodyRiskPenalty) / distanceSq);
 
       if (score > bestScore) {
         bestScore = score;
@@ -884,7 +885,7 @@ export class AISystem {
     const goal = this.computeGoalForce(bot, target, neighbors, state, mode, memory);
     const squad = this.computeSquadForce(bot, neighbors, mode, state, target);
     const avoid = this.computeAvoidanceForce(bot, mode, world);
-    const farmAvoid = this.computeFarmShapeAvoidanceForce(bot, neighbors, state);
+    const farmAvoid = this.computeFarmShapeAvoidanceForce(bot, neighbors, state, target);
     const dodge = this.computeDodgeForce(bot, frame);
     const hostileRepel = this.computeHostileRepelForce(bot, neighbors, mode, target);
     const blendedAvoid = this.movement.composeSteering([avoid, farmAvoid, dodge, hostileRepel], [1.0, 1.25, 1.2, 0.8], 2.8);
@@ -1236,23 +1237,30 @@ export class AISystem {
     return { x: -toTarget.y * wobble, y: toTarget.x * wobble };
   }
 
-  private computeFarmShapeAvoidanceForce(bot: TankLike, neighbors: any[], state: AIState): Vector2 {
-    if (state !== AIState.FARM && state !== AIState.HUNT) return ZERO;
+  private computeFarmShapeAvoidanceForce(bot: TankLike, neighbors: any[], state: AIState, committedTarget: any | null = null): Vector2 {
+    const committedFarmId = this.isFarmTarget(committedTarget) ? committedTarget?.id : null;
+    const avoidDuringCombat =
+      state === AIState.COMBAT ||
+      state === AIState.BODYGUARD ||
+      state === AIState.PROXIMAL_PORTAL_TRANSIT ||
+      state === AIState.FLEE;
+    if (state !== AIState.FARM && state !== AIState.HUNT && !avoidDuringCombat) return ZERO;
     let fx = 0;
     let fy = 0;
     let count = 0;
     for (let i = 0; i < neighbors.length; i++) {
       const e = neighbors[i];
       if (!this.isValidEntity(e) || !this.isFarmTarget(e)) continue;
+      if (committedFarmId != null && e.id === committedFarmId) continue;
       const er = typeof e.radius === 'number' ? e.radius : 14;
-      const avoidRadius = bot.radius + er + AI_TUNING.farmShapeAvoidRadiusPadding;
+      const avoidRadius = bot.radius + er + AI_TUNING.farmShapeAvoidRadiusPadding + (avoidDuringCombat ? 28 : 0);
       const dx = bot.pos.x - e.pos.x;
       const dy = bot.pos.y - e.pos.y;
       const distSq = dx * dx + dy * dy;
       if (distSq <= 0.0001 || distSq > avoidRadius * avoidRadius) continue;
       const dist = Math.sqrt(distSq);
       const closeness = 1 - Math.min(1, dist / avoidRadius);
-      const typeMult = e.type === EntityType.CRASHER ? 1.7 : 1.15;
+      const typeMult = e.type === EntityType.CRASHER ? 1.9 : avoidDuringCombat ? 1.45 : 1.15;
       const w = (closeness * typeMult) / Math.max(24, dist);
       fx += dx * w;
       fy += dy * w;

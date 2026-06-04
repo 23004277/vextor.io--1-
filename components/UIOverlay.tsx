@@ -131,7 +131,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     notifications, inVoid, voidTimeRemaining, isTransformed, transformationTime, 
     transformationReady, activeBuffs, minimapMarkers, sandboxConfig, primedSpawn, abilityHud,
     playerState, evolutionTransitionRemaining, bossChoices, enemyZoneWarningLevel, enemyZoneWarningText,
-    bloodDrainLive, bloodDrainStacks, bloodDrainSession
+    bloodDrainLive, bloodDrainStacks, bloodDrainSession, rebirthEligible
   } = gameState;
 
   const [sandboxOpen, setSandboxOpen] = useState(false);
@@ -351,6 +351,12 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             <div className="px-8 py-3 rounded-2xl bg-gradient-to-r from-red-600 to-orange-500 border-4 border-white text-white shadow-[0_0_30px_rgba(255,0,0,0.6)] animate-bounce flex flex-col items-center mb-4">
                 <span className="text-[10px] font-black tracking-widest uppercase">ELITE POWER UNLOCKED</span>
                 <span className="text-xl font-black italic">PRESS [T] TO TRANSFORM</span>
+            </div>
+          )}
+          {rebirthEligible && playerState === PlayerState.ACTIVE && (
+            <div className="px-7 py-3 rounded-2xl bg-gradient-to-r from-amber-500/90 to-orange-500/90 border border-amber-200/70 text-white shadow-[0_0_24px_rgba(251,191,36,0.35)] flex flex-col items-center mb-4">
+                <span className="text-[10px] font-black tracking-[0.28em] uppercase">Rebirth Optional</span>
+                <span className="text-lg font-black italic">PRESS [B] TO EVOLVE</span>
             </div>
           )}
           <AnimatePresence mode="popLayout">
