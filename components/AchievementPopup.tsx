@@ -11,7 +11,12 @@ interface AchievementPopupProps {
 export const AchievementPopup: React.FC<AchievementPopupProps> = ({ achievements, onClose }) => {
     const closeTimerRef = useRef<number | null>(null);
     const closeTokenRef = useRef(0);
+    const onCloseRef = useRef(onClose);
     const achievementKey = achievements.map((achievement) => achievement.id).join('|');
+
+    useEffect(() => {
+        onCloseRef.current = onClose;
+    }, [onClose]);
 
     useEffect(() => {
         closeTokenRef.current += 1;
@@ -23,7 +28,7 @@ export const AchievementPopup: React.FC<AchievementPopupProps> = ({ achievements
         closeTimerRef.current = window.setTimeout(() => {
             if (closeTokenRef.current !== token) return;
             closeTimerRef.current = null;
-            onClose();
+            onCloseRef.current();
         }, 1750);
 
         return () => {
@@ -32,7 +37,7 @@ export const AchievementPopup: React.FC<AchievementPopupProps> = ({ achievements
                 closeTimerRef.current = null;
             }
         };
-    }, [achievementKey, onClose]);
+    }, [achievementKey]);
 
     return (
         <div className="fixed top-8 right-8 z-[2000] flex flex-col gap-4 pointer-events-none">

@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence, Variants } from 'motion/react';
 import { GameMode, HighScoreEntry, TankClass, User, Team } from '../types';
+import { BackgroundMusicVisualizerFrame } from '../Background Music';
 import { TankPreview } from './TankPreview';
+import { MenuMusicVisualizer } from './MenuMusicVisualizer';
 import { COLORS } from '../constants';
 import { BackendService } from '../services/BackendService';
-import { BookOpen, ChevronRight, Pencil, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
+import { BookOpen, ChevronRight, Eye, Pencil, Radar, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
 
 interface MainMenuProps {
   isPlaying: boolean;
@@ -19,6 +21,8 @@ interface MainMenuProps {
   setSelectedTeam: (team: Team) => void;
   handleStartGame: (e: React.FormEvent) => void;
   handleSpectate: () => void;
+  spectateAvailable: boolean;
+  musicSnapshot: BackgroundMusicVisualizerFrame | null;
   showTT: (label: string, desc?: string) => void;
   hideTT: () => void;
   playHover: () => void;
@@ -145,6 +149,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   setGameMode,
   handleStartGame,
   handleSpectate,
+  spectateAvailable,
+  musicSnapshot,
   showTT,
   hideTT,
   playHover,
@@ -210,6 +216,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           style={{ background: 'linear-gradient(160deg, #020810 0%, #010508 50%, #020c14 100%)' }}
         >
           <Scanlines />
+          <MenuMusicVisualizer snapshot={musicSnapshot} />
 
           <div className="absolute inset-0 pointer-events-none z-0">
             <div className="absolute inset-0 opacity-[0.025]" style={{
@@ -645,17 +652,53 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     </span>
                   </button>
 
-                  <button
+                  <motion.button
                     type="button"
-                    onClick={() => { playClick(); handleSpectate(); }}
-                    className="flex items-center gap-2.5 transition-all group"
-                    style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.4em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.2)' }}
-                    onMouseEnter={e => { playHover(); e.currentTarget.style.color = 'rgba(255,255,255,0.6)'; }}
-                    onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.2)')}
+                    onClick={() => { if (!spectateAvailable) return; playClick(); handleSpectate(); }}
+                    disabled={!spectateAvailable}
+                    whileHover={spectateAvailable ? { scale: 1.015, y: -1 } : undefined}
+                    whileTap={spectateAvailable ? { scale: 0.985 } : undefined}
+                    className={`group relative w-full max-w-sm overflow-hidden rounded-2xl border px-4 py-3 text-left transition-all ${spectateAvailable ? 'cursor-none' : 'opacity-55'}`}
+                    style={{
+                      borderColor: spectateAvailable ? 'rgba(0,210,255,0.24)' : 'rgba(255,255,255,0.08)',
+                      background: spectateAvailable
+                        ? 'linear-gradient(135deg, rgba(2,18,28,0.96), rgba(6,30,44,0.92))'
+                        : 'linear-gradient(135deg, rgba(10,10,10,0.88), rgba(18,18,18,0.8))',
+                      boxShadow: spectateAvailable
+                        ? '0 0 34px rgba(0,210,255,0.08), 0 14px 42px rgba(0,0,0,0.34)'
+                        : '0 10px 26px rgba(0,0,0,0.2)',
+                    }}
+                    onMouseEnter={() => { if (spectateAvailable) playHover(); }}
                   >
-                    <div className="w-1.5 h-1.5 rotate-45 transition-all" style={{ background: 'rgba(255,255,255,0.15)' }} />
-                    Observe_Grid
-                  </button>
+                    <div className="absolute inset-0 bg-[linear-gradient(115deg,transparent_0%,rgba(255,255,255,0.08)_42%,transparent_84%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                    <div className="relative flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="flex h-11 w-11 items-center justify-center rounded-2xl border"
+                          style={{
+                            borderColor: spectateAvailable ? 'rgba(0,210,255,0.22)' : 'rgba(255,255,255,0.08)',
+                            background: spectateAvailable ? 'rgba(0,210,255,0.08)' : 'rgba(255,255,255,0.03)',
+                            boxShadow: spectateAvailable ? '0 0 18px rgba(0,210,255,0.15)' : 'none',
+                          }}
+                        >
+                          <Radar className={`h-5 w-5 ${spectateAvailable ? 'text-cyan-300' : 'text-white/25'}`} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-black uppercase tracking-[0.28em] ${spectateAvailable ? 'text-cyan-300/80' : 'text-white/28'}`}>Spectate</span>
+                            <Eye className={`h-3.5 w-3.5 ${spectateAvailable ? 'text-cyan-200/70' : 'text-white/20'}`} />
+                          </div>
+                          <div className={`mt-1 text-sm font-black uppercase tracking-[0.16em] ${spectateAvailable ? 'text-white' : 'text-white/35'}`}>
+                            Observe Bot Combat
+                          </div>
+                          <div className={`mt-1 text-[10px] font-bold uppercase tracking-[0.14em] ${spectateAvailable ? 'text-white/48' : 'text-white/22'}`}>
+                            {spectateAvailable ? 'Live tactical camera with cycle controls' : 'Awaiting bot targets'}
+                          </div>
+                        </div>
+                      </div>
+                      <ChevronRight className={`h-5 w-5 shrink-0 ${spectateAvailable ? 'text-cyan-200/80' : 'text-white/18'}`} />
+                    </div>
+                  </motion.button>
                 </div>
               </form>
 

@@ -6766,6 +6766,7 @@ export class GameEngine {
   killFeed: KillFeedEntry[] = [];
   attractMode: boolean = true;
   spectateTarget: Tank | null = null;
+  manualSpectateMode: boolean = false;
   cameraPos: Vector2 = { x: CANVAS_WIDTH/2, y: CANVAS_HEIGHT/2 };
   cameraZoom: number = 0.8;
   spatialGrid: SpatialGrid;
@@ -7628,10 +7629,56 @@ export class GameEngine {
       this.sound.setVolume(settings.volume);
   }
   setAttractMode(enabled: boolean) { 
-      this.attractMode = enabled; 
+      this.attractMode = enabled;
+      this.manualSpectateMode = false;
       if (enabled) {
           this.spectateTarget = null;
       }
+  }
+
+  getSpectateCandidates(): Tank[] {
+      return this.entities.filter((entity): entity is Tank => (
+          entity instanceof Tank &&
+          entity.isBot &&
+          !entity.isDead &&
+          Number.isFinite(entity.pos.x) &&
+          Number.isFinite(entity.pos.y)
+      ));
+  }
+
+  hasSpectateTargets(): boolean {
+      return this.getSpectateCandidates().length > 0;
+  }
+
+  enterSpectateMode(): boolean {
+      this.attractMode = true;
+      this.manualSpectateMode = true;
+      return !!this.ensureValidSpectateTarget(true);
+  }
+
+  exitSpectateMode() {
+      this.manualSpectateMode = false;
+      this.spectateTarget = null;
+      this.attractMode = true;
+      this.cameraPos = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+      this.cameraZoom = 0.8;
+  }
+
+  private ensureValidSpectateTarget(preferFirst: boolean = false): Tank | null {
+      const bots = this.getSpectateCandidates();
+      if (bots.length === 0) {
+          this.spectateTarget = null;
+          return null;
+      }
+
+      if (preferFirst || !this.spectateTarget) {
+          this.spectateTarget = bots[0];
+          return this.spectateTarget;
+      }
+
+      const liveTarget = bots.find((bot) => bot.id === this.spectateTarget?.id);
+      this.spectateTarget = liveTarget ?? bots[0];
+      return this.spectateTarget;
   }
 
   getTeamCounts() {
@@ -7656,13 +7703,13 @@ export class GameEngine {
   }
 
   cycleSpectateTarget(direction: number = 1) {
-      const bots = this.entities.filter(e => (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER) && !e.isDead) as Tank[];
+      const bots = this.getSpectateCandidates();
       if (bots.length === 0) {
           this.spectateTarget = null;
           return;
       }
       
-      if (!this.spectateTarget) {
+      if (direction === 0 || !this.spectateTarget) {
           this.spectateTarget = bots[0];
           return;
       }
@@ -8962,7 +9009,9 @@ export class GameEngine {
     }
 
     if (this.attractMode) {
-        if (!this.spectateTarget || this.spectateTarget.isDead || Math.random() < 0.005) {
+        if (this.manualSpectateMode) {
+            this.ensureValidSpectateTarget();
+        } else if (!this.spectateTarget || this.spectateTarget.isDead || Math.random() < 0.005) {
             const bots = aliveEnemies;
             this.spectateTarget = bots.length > 0 ? bots[Math.floor(Math.random() * bots.length)] : null;
         }
@@ -8970,7 +9019,7 @@ export class GameEngine {
         const attractFollow = 1 - Math.exp(-dt * 3.6);
         this.cameraPos.x += (targetPos.x - this.cameraPos.x) * attractFollow;
         this.cameraPos.y += (targetPos.y - this.cameraPos.y) * attractFollow;
-        this.cameraZoom = 0.6;
+        this.cameraZoom = this.manualSpectateMode ? 0.72 : 0.6;
         this.player.pos = { x: -1000, y: -1000 };
     } else {
         // Velocity-independent centered follow.

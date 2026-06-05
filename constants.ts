@@ -883,7 +883,7 @@ export const UPDATE_LOG = [
     {
         id: 'v1.8.0',
         title: "DOMINION AND VOID ASCENT",
-        date: "JUN 2026",
+        date: "05/06/26",
         content: "Large systems update focused on four-team objective warfare, staged wormhole transit, tougher backend hardening, and smarter bots that read pressure, objectives, and extraction flow more reliably.",
         theme: "Systems",
         tags: ["Dominion", "Void", "AI", "Security", "HUD"],
@@ -933,7 +933,7 @@ export const UPDATE_LOG = [
     {
         id: 'v1.7.0',
         title: "TACTICAL SYSTEMS REMASTER",
-        date: "JUN 2026",
+        date: "15/05/26",
         content: "Major battlefield intelligence, interface, and presentation overhaul focused on smarter bots, cleaner archives, safer progression, and stronger social trust.",
         theme: "Featured",
         tags: ["AI", "UI", "Security", "Social"],
@@ -975,7 +975,7 @@ export const UPDATE_LOG = [
     {
         id: 'v1.6.0',
         title: "ACHIEVEMENT PROTOCOL",
-        date: "MAR 2026",
+        date: "24/04/26",
         content: "Deployed tactical achievement tracking, elite unlock rewards, and long-run progression hooks for account-backed pilots.",
         theme: "Progression",
         tags: ["Progression", "Rewards"],
@@ -992,7 +992,7 @@ export const UPDATE_LOG = [
     {
         id: 'v1.5.0',
         title: "TACTICAL REMASTER",
-        date: "MAR 2026",
+        date: "03/04/26",
         content: "Focused on readability upgrades, interface feedback, and battlefield browsing tools.",
         theme: "Interface",
         tags: ["Almanac", "HUD", "UX"],
@@ -1010,7 +1010,7 @@ export const UPDATE_LOG = [
     {
         id: 'v1.4.8',
         title: "SOCIAL LINK SYNC",
-        date: "FEB 2026",
+        date: "13/03/26",
         content: "Opened the social support layer and external hub links for pilots following development.",
         theme: "Community",
         tags: ["Support", "Discord"],
@@ -1027,7 +1027,7 @@ export const UPDATE_LOG = [
     {
         id: 'v1.4.5',
         title: "UI OVERHAUL",
-        date: "JAN 2026",
+        date: "20/02/26",
         content: "Main menu remaster with stronger structure, cleaner navigation, and better terminal presentation.",
         theme: "Foundation",
         tags: ["Menu", "Layout"],

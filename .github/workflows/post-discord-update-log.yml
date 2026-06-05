@@ -1,0 +1,46 @@
+name: Post Discord Update Log
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - constants.ts
+  workflow_dispatch:
+    inputs:
+      update_id:
+        description: Optional update log id to post instead of the latest entry
+        required: false
+        type: string
+
+jobs:
+  post-update-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post latest update log to Discord relay
+        env:
+          UPDATE_LOG_POST_URL: ${{ secrets.UPDATE_LOG_POST_URL }}
+          UPDATE_LOG_BOT_TOKEN: ${{ secrets.UPDATE_LOG_BOT_TOKEN }}
+          UPDATE_ID: ${{ github.event.inputs.update_id }}
+        run: |
+          if [ -z "$UPDATE_LOG_POST_URL" ]; then
+            echo "Missing UPDATE_LOG_POST_URL GitHub secret."
+            exit 1
+          fi
+
+          if [ -z "$UPDATE_LOG_BOT_TOKEN" ]; then
+            echo "Missing UPDATE_LOG_BOT_TOKEN GitHub secret."
+            exit 1
+          fi
+
+          BODY='{}'
+          if [ -n "$UPDATE_ID" ]; then
+            BODY="{\"updateId\":\"$UPDATE_ID\"}"
+          fi
+
+          curl --fail-with-body \
+            --request POST \
+            --url "$UPDATE_LOG_POST_URL" \
+            --header "Authorization: Bearer $UPDATE_LOG_BOT_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$BODY"

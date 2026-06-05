@@ -17,9 +17,17 @@ import { COLORS, SHOP_ITEMS, ACHIEVEMENTS, UPDATE_LOG } from './constants';
 import { TankPreview } from './components/TankPreview';
 import { TacticalTooltip } from './components/TacticalTooltip';
 import { MainMenu } from './components/MainMenu';
-import { BackgroundMusic } from './Background Music';
+import { BackgroundMusic, BackgroundMusicVisualizerFrame } from './Background Music';
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
+
+const UPDATE_RELAY_URL_KEY = 'vextor_update_relay_url';
+const UPDATE_RELAY_TOKEN_KEY = 'vextor_update_relay_token';
+
+const getDefaultRelayUrl = () =>
+  typeof window !== 'undefined'
+    ? `${window.location.origin}/api/discord/update-log/latest`
+    : '/api/discord/update-log/latest';
 
 const SUPPORT_RANK_META: Record<User['supporterRank'], { label: string; accent: string; glow: string; tone: string }> = {
   standard: { label: 'Standard', accent: '#67e8f9', glow: 'rgba(103,232,249,0.16)', tone: 'Field access' },
@@ -103,6 +111,18 @@ const App: React.FC = () => {
   const [showAlmanac, setShowAlmanac] = useState(false);
   const [showUpdateHistory, setShowUpdateHistory] = useState(false);
   const [selectedUpdateId, setSelectedUpdateId] = useState<string>(UPDATE_LOG[0]?.id ?? '');
+  const [showRelayAdmin, setShowRelayAdmin] = useState(false);
+  const [relayUrl, setRelayUrl] = useState<string>(() => {
+    if (typeof window === 'undefined') return '/api/discord/update-log/latest';
+    return window.localStorage.getItem(UPDATE_RELAY_URL_KEY) || getDefaultRelayUrl();
+  });
+  const [relayToken, setRelayToken] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return window.sessionStorage.getItem(UPDATE_RELAY_TOKEN_KEY) || '';
+  });
+  const [relayBusy, setRelayBusy] = useState(false);
+  const [relayForcePost, setRelayForcePost] = useState(false);
+  const [relayStatus, setRelayStatus] = useState<string>('');
   const [showSupport, setShowSupport] = useState(false);
   const [supportTxnBusy, setSupportTxnBusy] = useState(false);
   const [supportTxnMsg, setSupportTxnMsg] = useState<string>('');
@@ -116,6 +136,7 @@ const App: React.FC = () => {
   const [gameMode, setGameMode] = useState<GameMode>(GameMode.FFA);
   const [selectedTeam, setSelectedTeam] = useState<Team>(Team.BLUE);
   const [isSpectating, setIsSpectating] = useState(false);
+  const [menuMusicSnapshot, setMenuMusicSnapshot] = useState<BackgroundMusicVisualizerFrame | null>(null);
   const [menuMousePos, setMenuMousePos] = useState({ x: 0, y: 0 });
   const lastUnmutedVolumesRef = useRef<{ volume: number; musicVolume: number }>({
     volume: DEFAULT_SETTINGS.volume,
@@ -162,6 +183,20 @@ const App: React.FC = () => {
   }, [supportRankMeta.label, supportTxnBusy, supportTxnMsg, user]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(UPDATE_RELAY_URL_KEY, relayUrl);
+  }, [relayUrl]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (relayToken.trim()) {
+      window.sessionStorage.setItem(UPDATE_RELAY_TOKEN_KEY, relayToken);
+    } else {
+      window.sessionStorage.removeItem(UPDATE_RELAY_TOKEN_KEY);
+    }
+  }, [relayToken]);
+
+  useEffect(() => {
     if (!showUpdateHistory) return;
     if (!selectedUpdate || !UPDATE_LOG.some((entry) => entry.id === selectedUpdate.id)) {
       setSelectedUpdateId(UPDATE_LOG[0]?.id ?? '');
@@ -205,11 +240,26 @@ const App: React.FC = () => {
     const music = new BackgroundMusic();
     music.setVolume(settings.musicVolume);
     menuMusicRef.current = music;
+    setMenuMusicSnapshot(music.getVisualizerFrame());
     return () => {
       music.stop();
       if (menuMusicRef.current === music) menuMusicRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || isPlaying) return;
+    let rafId = 0;
+    const tick = () => {
+      const music = menuMusicRef.current;
+      if (music) {
+        setMenuMusicSnapshot(music.getVisualizerFrame());
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isPlaying]);
 
   useEffect(() => {
     const music = menuMusicRef.current;
@@ -394,6 +444,32 @@ const App: React.FC = () => {
           return { ...prev, volume: 0, musicVolume: 0 };
         });
         playSelect();
+        return;
+      }
+
+      if (!isSpectating || !engine) return;
+
+      if (key === 'escape') {
+        event.preventDefault();
+        playSelect();
+        engine.exitSpectateMode();
+        setIsPlaying(false);
+        setIsSpectating(false);
+        hideTT();
+        return;
+      }
+
+      if (key === 'arrowright' || key === 'd') {
+        event.preventDefault();
+        playSelect();
+        engine.cycleSpectateTarget(1);
+        return;
+      }
+
+      if (key === 'arrowleft' || key === 'a') {
+        event.preventDefault();
+        playSelect();
+        engine.cycleSpectateTarget(-1);
       }
     };
 
@@ -510,18 +586,89 @@ const App: React.FC = () => {
     setSupportTxnBusy(false);
   }, [user, supportTxnBusy]);
 
+  const handleRelayPost = useCallback(async (mode: 'selected' | 'latest', dryRun = false) => {
+    const endpoint = relayUrl.trim() || getDefaultRelayUrl();
+    const token = relayToken.trim();
+
+    if (!endpoint) {
+      setRelayStatus('Relay endpoint is missing.');
+      return;
+    }
+
+    if (!token) {
+      setRelayStatus('Enter the relay admin token before posting to Discord.');
+      return;
+    }
+
+    setRelayBusy(true);
+    setRelayStatus(dryRun ? 'Generating Discord payload preview...' : 'Relaying update log to Discord...');
+
+    try {
+      const requestUrl = new URL(endpoint);
+      if (dryRun) requestUrl.searchParams.set('dryRun', '1');
+      if (relayForcePost) requestUrl.searchParams.set('force', '1');
+
+      const response = await fetch(requestUrl.toString(), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          updateId: mode === 'selected' ? selectedUpdate?.id : undefined,
+          dryRun,
+          force: relayForcePost,
+        }),
+      });
+
+      let payload: any = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (response.status === 409 && payload?.duplicate) {
+        setRelayStatus(`Skipped ${payload.skipped}: already posted. Enable force repost to relay it again.`);
+        return;
+      }
+
+      if (!response.ok) {
+        setRelayStatus(payload?.error || `Relay failed with status ${response.status}.`);
+        return;
+      }
+
+      if (dryRun) {
+        setRelayStatus(`Preview ready for ${payload?.updateId || selectedUpdate?.id || UPDATE_LOG[0]?.id}. Duplicate guard: ${payload?.duplicateWouldTrigger ? 'already posted' : 'clear'}.`);
+      } else {
+        setRelayStatus(`Discord relay sent for ${payload?.posted || selectedUpdate?.id || UPDATE_LOG[0]?.id}.`);
+      }
+    } catch (error) {
+      setRelayStatus(error instanceof Error ? error.message : 'Relay request failed.');
+    } finally {
+      setRelayBusy(false);
+    }
+  }, [relayForcePost, relayToken, relayUrl, selectedUpdate]);
+
   const handleSpectate = () => {
     if (engine) {
         engine.sound.enable();
         engine.sound.playUIClick();
         engine.setGameMode(gameMode);
-        engine.setAttractMode(true);
-        engine.cycleSpectateTarget(0); // Pick first available
+        engine.enterSpectateMode();
         setIsPlaying(true);
         setIsSpectating(true);
         hideTT();
     }
   };
+
+  const exitSpectate = useCallback(() => {
+    playClick();
+    engine?.exitSpectateMode();
+    setIsPlaying(false);
+    setIsSpectating(false);
+    hideTT();
+  }, [engine, playClick]);
 
   const handleMouseMoveApp = (e: React.MouseEvent) => { 
     if (!isPlaying) {
@@ -571,43 +718,62 @@ const App: React.FC = () => {
       )}
 
       {isPlaying && isSpectating && (
-        <div className="absolute inset-x-0 bottom-12 z-50 flex flex-col items-center gap-6 animate-in fade-in slide-in-from-bottom-8 duration-700 pointer-events-none">
-            <div className="flex items-center gap-8 p-6 rounded-[2.5rem] bg-black/80 border border-white/10 backdrop-blur-3xl shadow-[0_0_50px_rgba(0,0,0,0.8)] pointer-events-auto">
-                <button 
-                    onClick={() => { playClick(); engine?.cycleSpectateTarget(-1); }}
-                    className="p-4 rounded-2xl bg-white/5 hover:bg-white/10 text-white/40 hover:text-cyan-400 transition-all active:scale-90 group"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
-                </button>
-                
-                <div className="flex flex-col items-center min-w-[240px]">
-                    <span className="text-[10px] font-black text-cyan-500 uppercase tracking-[0.4em] mb-1 italic">Spectating_Unit</span>
-                    <h3 className="text-2xl font-black text-white italic tracking-tighter uppercase truncate max-w-[200px]">
-                        {engine?.spectateTarget?.name || 'SEARCHING_SIGNAL...'}
-                    </h3>
-                    <div className="flex items-center gap-3 mt-2">
-                        <div className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[9px] font-bold text-white/40 uppercase tracking-widest">
-                            LVL_{engine?.spectateTarget?.level || 1}
+        <div className="absolute inset-x-0 bottom-10 z-50 flex flex-col items-center gap-5 animate-in fade-in slide-in-from-bottom-8 duration-700 pointer-events-none">
+            <div className="min-w-[300px] max-w-[min(92vw,560px)] rounded-[2rem] border border-cyan-400/16 bg-[linear-gradient(180deg,rgba(4,10,18,0.92),rgba(2,6,12,0.96))] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.72)] backdrop-blur-2xl pointer-events-auto">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.32em] text-cyan-300/75">Spectate Mode</div>
+                        <div className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-white/36">
+                            {engine?.spectateTarget ? 'Locked to live bot feed' : 'No bots available to spectate'}
                         </div>
-                        <div className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[9px] font-bold text-white/40 uppercase tracking-widest">
-                            {engine?.spectateTarget?.classType || 'BASIC'}
-                        </div>
+                    </div>
+                    <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white/50">
+                        Arrows / A D
                     </div>
                 </div>
 
-                <button 
-                    onClick={() => { playClick(); engine?.cycleSpectateTarget(1); }}
-                    className="p-4 rounded-2xl bg-white/5 hover:bg-white/10 text-white/40 hover:text-cyan-400 transition-all active:scale-90 group"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-                </button>
+                <div className="flex items-center gap-4">
+                    <button 
+                        onClick={() => { playClick(); engine?.cycleSpectateTarget(-1); }}
+                        className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5 text-white/40 transition-all hover:bg-white/10 hover:text-cyan-400 active:scale-90"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                    
+                    <div className="min-w-0 flex-1">
+                        <span className="text-[10px] font-black text-cyan-500 uppercase tracking-[0.28em]">Observed Unit</span>
+                        <h3 className="mt-1 truncate text-2xl font-black uppercase tracking-tight text-white">
+                            {engine?.spectateTarget?.name || 'Scanning Grid'}
+                        </h3>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white/52">
+                                LVL {engine?.spectateTarget?.level || '--'}
+                            </div>
+                            <div className="rounded-full border border-cyan-400/18 bg-cyan-400/8 px-3 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-cyan-200/86">
+                                {engine?.spectateTarget?.classType || 'Awaiting Target'}
+                            </div>
+                            {engine?.spectateTarget?.team !== undefined && (
+                              <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white/45">
+                                Team {engine?.spectateTarget?.team}
+                              </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={() => { playClick(); engine?.cycleSpectateTarget(1); }}
+                        className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5 text-white/40 transition-all hover:bg-white/10 hover:text-cyan-400 active:scale-90"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                    </button>
+                </div>
             </div>
 
             <button 
-                onClick={() => { playClick(); setIsPlaying(false); setIsSpectating(false); engine?.setAttractMode(true); }}
-                className="px-10 py-4 rounded-2xl bg-white/5 border border-white/10 text-xs font-black text-white/40 hover:text-white hover:bg-white/10 transition-all uppercase tracking-[0.4em] italic pointer-events-auto"
+                onClick={exitSpectate}
+                className="rounded-2xl border border-white/10 bg-white/5 px-8 py-3 text-[11px] font-black uppercase tracking-[0.3em] text-white/55 transition-all hover:bg-white/10 hover:text-white pointer-events-auto"
             >
-                Return_To_Command
+                Return To Command
             </button>
         </div>
       )}
@@ -636,6 +802,8 @@ const App: React.FC = () => {
         setSelectedTeam={setSelectedTeam}
         handleStartGame={handleStartGame}
         handleSpectate={handleSpectate}
+        spectateAvailable={engine?.hasSpectateTargets() ?? false}
+        musicSnapshot={menuMusicSnapshot}
         showTT={showTT}
         hideTT={hideTT}
         playClick={playClick}
@@ -753,7 +921,19 @@ const App: React.FC = () => {
                                         <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
                                         <span className="text-[10px] font-black text-cyan-300 uppercase tracking-[0.3em]">Release Briefing</span>
                                     </div>
-                                    <span className="text-[10px] text-white/35 font-bold uppercase tracking-[0.2em]">{UPDATE_LOG.length} entries indexed</span>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => setShowRelayAdmin((prev) => !prev)}
+                                        className={`rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] transition ${
+                                          showRelayAdmin
+                                            ? 'border-amber-300/35 bg-amber-400/12 text-amber-200'
+                                            : 'border-white/10 bg-white/[0.03] text-white/55 hover:text-white/80 hover:bg-white/[0.06]'
+                                        }`}
+                                      >
+                                        {showRelayAdmin ? 'Hide Relay' : 'Discord Relay'}
+                                      </button>
+                                      <span className="text-[10px] text-white/35 font-bold uppercase tracking-[0.2em]">{UPDATE_LOG.length} entries indexed</span>
+                                    </div>
                                 </div>
 
                                 {selectedUpdate && (
@@ -789,6 +969,81 @@ const App: React.FC = () => {
                                             </span>
                                           ))}
                                       </div>
+
+                                      {showRelayAdmin && (
+                                        <div className="mt-5 rounded-[1.25rem] border border-amber-300/18 bg-[linear-gradient(135deg,rgba(38,26,8,0.55),rgba(15,11,5,0.72))] px-4 py-4 md:px-5">
+                                          <div className="flex flex-col gap-4">
+                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                              <div>
+                                                <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/80">Admin Relay</div>
+                                                <div className="mt-1 text-xs text-white/55">Owner-only Discord post controls for the selected update log entry.</div>
+                                              </div>
+                                              <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/70">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={relayForcePost}
+                                                  onChange={(event) => setRelayForcePost(event.target.checked)}
+                                                  className="h-3.5 w-3.5 accent-amber-300"
+                                                />
+                                                Force Repost
+                                              </label>
+                                            </div>
+
+                                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                                              <label className="flex flex-col gap-1">
+                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Relay Endpoint</span>
+                                                <input
+                                                  value={relayUrl}
+                                                  onChange={(event) => setRelayUrl(event.target.value)}
+                                                  placeholder={getDefaultRelayUrl()}
+                                                  className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-xs font-bold text-white outline-none transition focus:border-cyan-400/45"
+                                                />
+                                              </label>
+                                              <label className="flex flex-col gap-1">
+                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Admin Token</span>
+                                                <input
+                                                  type="password"
+                                                  value={relayToken}
+                                                  onChange={(event) => setRelayToken(event.target.value)}
+                                                  placeholder="Bearer token"
+                                                  className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-xs font-bold text-white outline-none transition focus:border-cyan-400/45"
+                                                />
+                                              </label>
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2">
+                                              <button
+                                                onClick={() => handleRelayPost('selected', true)}
+                                                disabled={relayBusy}
+                                                className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-white/80 transition hover:bg-white/[0.09] disabled:opacity-50"
+                                              >
+                                                Preview Selected
+                                              </button>
+                                              <button
+                                                onClick={() => handleRelayPost('selected', false)}
+                                                disabled={relayBusy}
+                                                className="rounded-xl border border-amber-300/28 bg-amber-400/14 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-400/20 disabled:opacity-50"
+                                              >
+                                                Post Selected
+                                              </button>
+                                              <button
+                                                onClick={() => handleRelayPost('latest', false)}
+                                                disabled={relayBusy}
+                                                className="rounded-xl border border-cyan-300/24 bg-cyan-400/12 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18 disabled:opacity-50"
+                                              >
+                                                Post Latest
+                                              </button>
+                                            </div>
+
+                                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Relay Status</div>
+                                              <div className="mt-1 text-xs leading-5 text-white/72">
+                                                {relayStatus || 'Idle. Enter your admin token for this browser session, then preview or post the release entry.'}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      )}
                                   </div>
                                 )}
                             </div>
