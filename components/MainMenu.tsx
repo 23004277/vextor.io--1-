@@ -55,6 +55,14 @@ const modeMeta: Record<GameMode, { title: string; code: string; desc: string; co
     border: 'rgba(80,140,255,0.35)',
     glow: 'rgba(60,120,255,0.25)',
   },
+  [GameMode.DOMINION]: {
+    title: 'Dominion',
+    code: 'DOM',
+    desc: 'Capture dominion tanks, hold the field, and score for your empire.',
+    color: 'rgba(250,204,21,0.92)',
+    border: 'rgba(250,204,21,0.38)',
+    glow: 'rgba(234,179,8,0.22)',
+  },
   [GameMode.SANDBOX]: {
     title: 'Sandbox',
     code: 'SBX',
@@ -63,6 +71,14 @@ const modeMeta: Record<GameMode, { title: string; code: string; desc: string; co
     border: 'rgba(180,80,255,0.35)',
     glow: 'rgba(160,60,255,0.25)',
   },
+};
+
+const TEAM_META: Record<Team, { label: string; color: string; bg: string; border: string }> = {
+  [Team.NONE]: { label: 'Neutral', color: '#ffffff', bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.12)' },
+  [Team.BLUE]: { label: 'Blue Squad', color: COLORS.player, bg: 'rgba(0,40,120,0.4)', border: 'rgba(80,140,255,0.4)' },
+  [Team.RED]: { label: 'Red Squad', color: COLORS.enemy, bg: 'rgba(120,0,40,0.4)', border: 'rgba(255,80,80,0.4)' },
+  [Team.GREEN]: { label: 'Green Wing', color: COLORS.allyGreen, bg: 'rgba(0,90,50,0.38)', border: 'rgba(52,211,153,0.42)' },
+  [Team.PURPLE]: { label: 'Purple Wing', color: COLORS.allyPurple, bg: 'rgba(65,25,120,0.4)', border: 'rgba(167,139,250,0.42)' },
 };
 
 const useCountUp = (target: number, duration = 1200) => {
@@ -148,10 +164,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTos, setShowTos] = useState(false);
   const stats = user?.stats ?? { maxLevel: 1, totalKills: 0, totalDeaths: 0, totalScore: 0 };
-  const tankColor = gameMode === GameMode.TEAMS
-    ? (selectedTeam === Team.BLUE ? COLORS.player : COLORS.enemy)
+  const tankColor = (gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION)
+    ? (TEAM_META[selectedTeam]?.color ?? COLORS.player)
     : activeColor;
-  const isTeamsMode = gameMode === GameMode.TEAMS;
+  const isTeamsMode = gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION;
   const kd = (stats.totalKills / (stats.totalDeaths || 1)).toFixed(2);
 
   const countKills = useCountUp(stats.totalKills, 1400);
@@ -159,7 +175,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
   const topScores = useMemo(() => [...highScores].sort((a, b) => b.score - a.score).slice(0, 5), [highScores]);
 
-  const modeChoices = [GameMode.FFA, GameMode.TEAMS, GameMode.SANDBOX] as const;
+  const modeChoices = [GameMode.FFA, GameMode.TEAMS, GameMode.DOMINION, GameMode.SANDBOX] as const;
+  const teamChoices = gameMode === GameMode.DOMINION
+    ? [Team.BLUE, Team.RED, Team.GREEN, Team.PURPLE]
+    : [Team.BLUE, Team.RED];
 
   const containerVar: Variants = {
     hidden: { opacity: 0 },
@@ -513,36 +532,69 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
                       exit={{ opacity: 0, height: 0 }}
-                      className="flex gap-3 w-full"
+                      className="grid w-full gap-3"
+                      style={{
+                        gridTemplateColumns: gameMode === GameMode.DOMINION ? 'repeat(2, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))',
+                      }}
                     >
-                      {[Team.BLUE, Team.RED].map(team => {
+                      {teamChoices.map(team => {
                         const active = selectedTeam === team;
                         const canJoin = canJoinTeam(team);
-                        const isBlue = team === Team.BLUE;
+                        const meta = TEAM_META[team];
                         return (
                           <button
                             key={team}
                             type="button"
                             disabled={!canJoin}
                             onClick={() => { playSelect(); setSelectedTeam(team); }}
-                            className="flex-1 relative rounded-xl py-3 px-4 transition-all flex items-center gap-3 overflow-hidden"
+                            className="relative rounded-xl py-3 px-4 transition-all flex items-center gap-3 overflow-hidden min-w-0 text-left"
                             style={{
-                              background: active ? (isBlue ? 'rgba(0,40,120,0.4)' : 'rgba(120,0,40,0.4)') : 'rgba(0,8,18,0.6)',
-                              border: `1px solid ${active ? (isBlue ? 'rgba(80,140,255,0.4)' : 'rgba(255,80,80,0.4)') : 'rgba(255,255,255,0.05)'}`,
-                              boxShadow: active ? `0 0 20px ${isBlue ? 'rgba(60,120,255,0.2)' : 'rgba(255,60,60,0.2)'}` : 'none',
+                              background: active ? meta.bg : 'rgba(0,8,18,0.6)',
+                              border: `1px solid ${active ? meta.border : 'rgba(255,255,255,0.05)'}`,
+                              boxShadow: active ? `0 0 20px ${meta.border}` : 'none',
                               opacity: !canJoin ? 0.35 : 1,
                               cursor: !canJoin ? 'not-allowed' : 'pointer',
                             }}
                           >
                             <div className="w-2.5 h-2.5 rotate-45 shrink-0" style={{
-                              background: active ? (isBlue ? '#4080ff' : '#ff4040') : 'rgba(255,255,255,0.1)',
-                              boxShadow: active ? `0 0 10px ${isBlue ? '#4080ff' : '#ff4040'}` : 'none',
+                              background: active ? meta.color : 'rgba(255,255,255,0.1)',
+                              boxShadow: active ? `0 0 10px ${meta.color}` : 'none',
                             }} />
-                            <span style={{ fontFamily: '"Courier New", monospace', fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase', fontWeight: 900, color: active ? '#fff' : 'rgba(255,255,255,0.3)' }}>
-                              {isBlue ? 'Blue_Squad' : 'Red_Squad'}
-                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div
+                                style={{
+                                  fontFamily: '"Courier New", monospace',
+                                  fontSize: 8,
+                                  letterSpacing: '0.18em',
+                                  textTransform: 'uppercase',
+                                  fontWeight: 700,
+                                  color: active ? meta.color : 'rgba(255,255,255,0.24)',
+                                  marginBottom: 2,
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                Team Select
+                              </div>
+                              <div
+                                style={{
+                                  fontFamily: '"Arial Black", sans-serif',
+                                  fontSize: 11,
+                                  letterSpacing: '0.03em',
+                                  textTransform: 'uppercase',
+                                  fontWeight: 900,
+                                  color: active ? '#fff' : 'rgba(255,255,255,0.72)',
+                                  lineHeight: 1.15,
+                                  whiteSpace: 'normal',
+                                  overflowWrap: 'anywhere',
+                                }}
+                              >
+                                {meta.label}
+                              </div>
+                            </div>
                             {!canJoin && (
-                              <span className="ml-auto" style={{ fontFamily: '"Courier New", monospace', fontSize: 7, letterSpacing: '0.2em', color: 'rgba(255,80,80,0.7)', textTransform: 'uppercase' }}>
+                              <span className="ml-auto shrink-0" style={{ fontFamily: '"Courier New", monospace', fontSize: 7, letterSpacing: '0.16em', color: 'rgba(255,80,80,0.7)', textTransform: 'uppercase' }}>
                                 FULL
                               </span>
                             )}

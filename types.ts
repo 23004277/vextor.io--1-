@@ -2,6 +2,7 @@
 export enum EntityType {
   PLAYER = 'PLAYER',
   ENEMY = 'ENEMY',
+  DOMINION_TANK = 'DOMINION_TANK',
   SHAPE = 'SHAPE',
   BULLET = 'BULLET',
   GUARDIAN = 'GUARDIAN',
@@ -17,8 +18,10 @@ export enum EntityType {
 
 export enum ShapeType {
   SQUARE = 'SQUARE',
+  DIAMOND = 'DIAMOND',
   TRIANGLE = 'TRIANGLE',
   PENTAGON = 'PENTAGON',
+  HEPTAGON = 'HEPTAGON',
   HEXAGON = 'HEXAGON',
   OCTAGON = 'OCTAGON',
 }
@@ -40,11 +43,14 @@ export enum Team {
   NONE = 'NONE',
   BLUE = 'BLUE',
   RED = 'RED',
+  GREEN = 'GREEN',
+  PURPLE = 'PURPLE',
 }
 
 export enum GameMode {
   FFA = 'FFA',
   TEAMS = 'TEAMS',
+  DOMINION = 'DOMINION',
   SANDBOX = 'SANDBOX',
 }
 
@@ -210,6 +216,16 @@ export interface MinimapMarker {
   team: Team;
   rotation?: number;
   isPlayer?: boolean;
+  zoneRadius?: number;
+  markerRole?: 'ENTITY' | 'DOMINION_ZONE';
+}
+
+export interface DominionZoneState {
+  id: number;
+  pos: Vector2;
+  radius: number;
+  owner: Team;
+  contested: boolean;
 }
 
 export interface KillFeedEntry {
@@ -329,6 +345,8 @@ export interface GameState {
   // Void Data
   inVoid: boolean;
   voidTimeRemaining: number;
+  voidTransitStage?: string | null;
+  voidTransitProgress?: number;
   // Elite Boss Data
   isTransformed: boolean;
   transformationTime: number;
@@ -354,6 +372,10 @@ export interface GameState {
   bloodDrainLive?: number;
   bloodDrainStacks?: number;
   bloodDrainSession?: number;
+  dominionScores?: Partial<Record<Team, number>>;
+  dominionOwnedCount?: Partial<Record<Team, number>>;
+  dominionTimeRemaining?: number;
+  dominionZones?: DominionZoneState[];
 }
 
 // --- Shop Types ---

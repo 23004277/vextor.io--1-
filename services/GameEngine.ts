@@ -1,4 +1,4 @@
-import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState } from '../types';
+import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState } from '../types';
 import { BASE_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG, SHOP_ITEMS } from '../constants';
 import * as Vector from './MathUtils';
 import { SoundEngine } from './SoundEngine';
@@ -11,6 +11,13 @@ import { TDMAISystem, type Player as TDMPlayer } from '../systems/TDM-ai';
 type FloatingTextType = 'DAMAGE' | 'SCORE';
 type SpawnZone = { x: number; y: number; w: number; h: number; cx: number; cy: number };
 type VoidPortalPhase = 'BLACK_HOLE' | 'WHITE_HOLE' | 'EXPANDING';
+type VoidTransitStage = 'LOCK' | 'INVERT' | 'BREACH' | 'SHIFT' | 'EXTRACT';
+type PendingDimensionTransition = {
+    toVoid: boolean;
+    transitEntityIds: number[];
+    phase: 'FADE_OUT' | 'FADE_IN';
+    timer: number;
+};
 type DonorRank = 'standard' | 'rank1' | 'rank2' | 'rank3';
 type Hsl = { h: number; s: number; l: number };
 type SkinModifier = { hueShift: number; saturationMult: number; lightnessOffset: number };
@@ -22,6 +29,16 @@ type SkinExtras = {
     deathEffect?: string | null;
 };
 type SkinDefinition = { id: string; modifier: SkinModifier; extras?: SkinExtras };
+type DominionZoneDef = {
+    id: number;
+    pos: Vector2;
+    radius: number;
+    tankId: number | null;
+    owner: Team;
+    contested: boolean;
+};
+
+type DominionWeaponProfile = 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE';
 
 const SKIN_APPLICATION = {
     clamp: {
@@ -35,6 +52,28 @@ const SKIN_APPLICATION = {
         rank3: 0.72,
     } as Record<DonorRank, number>,
 } as const;
+
+const PLAYABLE_TEAMS: Team[] = [Team.BLUE, Team.RED, Team.GREEN, Team.PURPLE];
+
+function isPlayableTeam(team: Team): boolean {
+    return team === Team.BLUE || team === Team.RED || team === Team.GREEN || team === Team.PURPLE;
+}
+
+function getTeamColor(team: Team): string {
+    if (team === Team.BLUE) return COLORS.player;
+    if (team === Team.RED) return COLORS.enemy;
+    if (team === Team.GREEN) return COLORS.allyGreen;
+    if (team === Team.PURPLE) return COLORS.allyPurple;
+    return COLORS.dominionNeutral;
+}
+
+function getTeamRgb(team: Team): string {
+    if (team === Team.BLUE) return '56, 189, 248';
+    if (team === Team.RED) return '248, 113, 113';
+    if (team === Team.GREEN) return '52, 211, 153';
+    if (team === Team.PURPLE) return '167, 139, 250';
+    return '250, 204, 21';
+}
 
 function clampNum(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
@@ -87,19 +126,17 @@ function shortestHueDelta(from: number, to: number): number {
 }
 
 function teamBaseHsl(team: Team): Hsl {
-    const baseHex = team === Team.BLUE ? COLORS.player : team === Team.RED ? COLORS.enemy : COLORS.player;
+    const baseHex = getTeamColor(team === Team.NONE ? Team.BLUE : team);
     const rgb = hexToRgb(baseHex);
     return rgbToHsl(rgb.r, rgb.g, rgb.b);
 }
 
 function getTeamProjectileColor(team: Team): string {
-    if (team === Team.BLUE) return COLORS.player;
-    if (team === Team.RED) return COLORS.enemy;
-    return COLORS.barrel;
+    return team === Team.NONE ? COLORS.barrel : getTeamColor(team);
 }
 
 function stripInjectedTeamPrefix(name: string): string {
-    return name.replace(/^(?:[\*\u25c6\u25cf]\s*)?(?:BLU|BLUE|RED)\s+/i, '').trim();
+    return name.replace(/^(?:[\*\u25c6\u25cf]\s*)?(?:BLU|BLUE|RED|GREEN|PURPLE)\s+/i, '').trim();
 }
 
 function formatDisplayCallsign(name: string, fallback = 'Unknown Unit'): string {
@@ -156,6 +193,15 @@ function getWormholeWhitenProgress(phase: VoidPortalPhase, phaseTimerSec: number
     if (phase === 'BLACK_HOLE') return Math.min(0.7, Math.max(0, phaseTimerSec / 60) * 0.7);
     if (phase === 'WHITE_HOLE') return 0.72 + Math.min(0.2, Math.max(0, (phaseTimerSec - 60) / 30) * 0.2);
     return Math.min(1, 0.92 + expansionCharge * 0.08);
+}
+
+function getVoidTransitStageLabel(stage: VoidTransitStage | null): string | null {
+    if (stage === 'LOCK') return 'Wormhole Lock';
+    if (stage === 'INVERT') return 'Core Inversion';
+    if (stage === 'BREACH') return 'Breach Window';
+    if (stage === 'SHIFT') return 'Dimensional Shift';
+    if (stage === 'EXTRACT') return 'Extraction Vector';
+    return null;
 }
 
 function getRarityRank(rarity: ShapeRarity): number {
@@ -444,16 +490,12 @@ class Entity {
     const barWidth = this.radius * 2;
     const barHeight = 4;
     const yOffset = this.radius + 12;
-    const teamTrack = this.team === Team.BLUE
-      ? 'rgba(8, 47, 73, 0.72)'
-      : this.team === Team.RED
-        ? 'rgba(69, 10, 10, 0.72)'
-        : '#333';
-    const teamBorder = this.team === Team.BLUE
-      ? 'rgba(56, 189, 248, 0.45)'
-      : this.team === Team.RED
-        ? 'rgba(248, 113, 113, 0.45)'
-        : 'rgba(255,255,255,0.18)';
+    const teamTrack = this.team === Team.NONE
+      ? '#333'
+      : `rgba(${getTeamRgb(this.team)},0.18)`;
+    const teamBorder = this.team === Team.NONE
+      ? 'rgba(255,255,255,0.18)'
+      : `rgba(${getTeamRgb(this.team)},0.45)`;
     ctx.fillStyle = teamTrack;
     ctx.fillRect(this.pos.x - barWidth / 2, this.pos.y + yOffset, barWidth, barHeight);
     ctx.strokeStyle = teamBorder;
@@ -498,7 +540,7 @@ class Entity {
 
   drawName(ctx: CanvasRenderingContext2D) {
     ctx.save();
-    const teamColor = this.team === Team.BLUE ? '#38bdf8' : this.team === Team.RED ? '#f87171' : '#ffffff';
+    const teamColor = this.team === Team.NONE ? '#ffffff' : getTeamColor(this.team);
     const engine = (window as any).gameEngine as GameEngine | undefined;
     const perspectiveTeam = engine?.player?.team ?? Team.NONE;
     const perspectiveId = engine?.player?.id ?? -1;
@@ -1519,10 +1561,8 @@ class Tank extends Entity {
   colossalDroneLaunchCooldownMs: number = 0;
 
   constructor(id: number, x: number, y: number, isPlayer: boolean, team: Team) {
-    let color = COLORS.enemy;
-    if (isPlayer) color = COLORS.player;
-    else if (team === Team.BLUE) color = COLORS.player;
-    else if (team === Team.RED) color = COLORS.enemy;
+    let color = getTeamColor(team === Team.NONE ? Team.RED : team);
+    if (isPlayer) color = getTeamColor(team === Team.NONE ? Team.BLUE : team);
     super(id, isPlayer ? EntityType.PLAYER : EntityType.ENEMY, x, y, 20, color);
     this.team = team;
     this.isBot = !isPlayer;
@@ -1851,7 +1891,7 @@ class Tank extends Entity {
       if (this.team === Team.NONE) return;
       const pulse = 0.6 + Math.sin(Date.now() * 0.006 + this.id) * 0.25;
       const ringRadius = this.radius * 1.35;
-      const baseRgb = this.team === Team.BLUE ? '56, 189, 248' : '248, 113, 113';
+      const baseRgb = getTeamRgb(this.team);
       ctx.save();
       ctx.globalAlpha = 0.55;
       ctx.shadowBlur = 10 + pulse * 6;
@@ -3431,7 +3471,7 @@ class Tank extends Entity {
             this.autoTurrets.forEach((turret, idx) => {
                 if (turret.cooldown > 0) turret.cooldown -= simStepSec * 1000;
 
-                const range = 620;
+                const range = turret.targetId !== null ? 1040 : 920;
                 const targets = neighbors.filter((e: Entity) => {
                     if (!e || e.id === this.id || e.isDead) return false;
                     if (Vector.dist(this.pos, e.pos) > range) return false;
@@ -3453,11 +3493,24 @@ class Tank extends Entity {
                             const hp = e.maxHealth > 0 ? e.health / e.maxHealth : 1;
                             return hp < 0.42 ? 0 : 1;
                         }
-                        if (e.type === EntityType.BOSS) return 2;
+                        if (e.type === EntityType.BOSS) return 1.35;
+                        if (e.type === EntityType.CRASHER) return 2.2;
                         if (e.type === EntityType.SHAPE) {
                             const shape = e as Shape;
                             const isAlphaPentagon = shape.shapeType === ShapeType.PENTAGON && shape.rarity === ShapeRarity.LEGENDARY;
-                            return isAlphaPentagon ? 1.6 : shape.shapeType === ShapeType.PENTAGON ? 1.8 : 3;
+                            return isAlphaPentagon
+                              ? 1.6
+                              : shape.shapeType === ShapeType.OCTAGON
+                                ? 1.45
+                                : shape.shapeType === ShapeType.HEXAGON
+                                  ? 1.6
+                                  : shape.shapeType === ShapeType.HEPTAGON
+                                    ? 1.7
+                                    : shape.shapeType === ShapeType.PENTAGON
+                                      ? 1.8
+                                      : shape.shapeType === ShapeType.DIAMOND
+                                        ? 2.55
+                                        : 3;
                         }
                         return 3;
                     };
@@ -4179,22 +4232,30 @@ class Tank extends Entity {
 
             if (!this.autoFire) { // Manual control toggle via E (handled in handleInput)
                 const neighbors = engine.spatialGrid.getNeighbors(this);
-                const closeDefenseRange = 560;
+                const closeDefenseRange = turret.targetId !== null ? 980 : 880;
                 const targets = neighbors.filter((e: any) =>
                     e.team !== this.team &&
-                    (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER || e.type === EntityType.SHAPE || e.type === EntityType.BOSS) &&
+                    (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER || e.type === EntityType.ELITE_TANK || e.type === EntityType.GUARDIAN || e.type === EntityType.SHAPE || e.type === EntityType.BOSS || e.type === EntityType.CRASHER) &&
                     Vector.dist(this.pos, e.pos) <= closeDefenseRange
                 );
                 const target = targets.sort((a: Entity, b: Entity) => {
                     const score = (entity: Entity): number => {
-                        if (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY) return 0;
+                        if (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY || entity.type === EntityType.ELITE_TANK || entity.type === EntityType.GUARDIAN) {
+                            const hpRatio = entity.maxHealth > 0 ? entity.health / entity.maxHealth : 1;
+                            return hpRatio < 0.4 ? -0.25 : 0;
+                        }
                         if (entity.type === EntityType.SHAPE) {
                             const shape = entity as Shape;
                             if (shape.shapeType === ShapeType.PENTAGON && shape.rarity === ShapeRarity.LEGENDARY) return 1;
+                            if (shape.shapeType === ShapeType.OCTAGON) return 1.4;
+                            if (shape.shapeType === ShapeType.HEXAGON) return 1.7;
+                            if (shape.shapeType === ShapeType.HEPTAGON) return 1.9;
                             if (shape.shapeType === ShapeType.PENTAGON) return 2;
+                            if (shape.shapeType === ShapeType.DIAMOND) return 3;
                             return 4;
                         }
-                        if (entity.type === EntityType.BOSS) return 3;
+                        if (entity.type === EntityType.BOSS) return 1.3;
+                        if (entity.type === EntityType.CRASHER) return 2.35;
                         return 5;
                     };
                     const diff = score(a) - score(b);
@@ -4339,10 +4400,156 @@ class EliteTank extends Tank {
     }
 }
 
+class DominionTank extends Tank {
+    zoneId: number;
+    homePos: Vector2;
+    ownerTeam: Team = Team.NONE;
+    captureStage: 'NEUTRAL' | 'OWNED' = 'NEUTRAL';
+    attackRadius: number;
+    zoneRadius: number;
+    contestedPulse: number = 0;
+    weaponProfile: DominionWeaponProfile;
+
+    constructor(id: number, x: number, y: number, zoneId: number, zoneRadius: number, weaponProfile: DominionWeaponProfile) {
+        super(id, x, y, false, Team.NONE);
+        this.type = EntityType.DOMINION_TANK;
+        this.zoneId = zoneId;
+        this.homePos = { x, y };
+        this.zoneRadius = zoneRadius;
+        this.attackRadius = zoneRadius + 180;
+        this.weaponProfile = weaponProfile;
+        this.classType = TankClass.QUAD_TANK;
+        this.name = 'Dominion Tank';
+        this.level = 55;
+        this.radius = 60;
+        this.mass = 999999;
+        this.friction = 1;
+        this.invulnerableTime = 0;
+        this.color = COLORS.dominionNeutral;
+        this.maxHealth = 11800;
+        this.health = this.maxHealth;
+        this.displayHealth = this.maxHealth;
+        this.damage = 96;
+        this.visionRange = this.attackRadius;
+        this.spread = 0.035;
+        this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 4, [StatType.BULLET_DAMAGE]: 4, [StatType.BULLET_PENETRATION]: 4, [StatType.RELOAD]: 4 };
+        this.applyWeaponProfile();
+        this.team = Team.NONE;
+    }
+
+    private applyWeaponProfile() {
+        switch (this.weaponProfile) {
+            case 'DESTROYER':
+                this.classType = TankClass.DESTROYER;
+                this.radius = 60;
+                this.maxHealth = 11000;
+                this.damage = 92;
+                this.spread = 0.018;
+                this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 3, [StatType.BULLET_DAMAGE]: 4, [StatType.BULLET_PENETRATION]: 4, [StatType.RELOAD]: 3 };
+                break;
+            case 'GUNNER':
+                this.classType = TankClass.GUNNER;
+                this.radius = 61;
+                this.maxHealth = 11600;
+                this.damage = 86;
+                this.spread = 0.045;
+                this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 4, [StatType.BULLET_DAMAGE]: 3, [StatType.BULLET_PENETRATION]: 3, [StatType.RELOAD]: 4 };
+                break;
+            case 'TRAPPER':
+                this.classType = TankClass.OCTO_TANK;
+                this.radius = 64;
+                this.maxHealth = 12000;
+                this.damage = 72;
+                this.spread = 0.008;
+                this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 2, [StatType.BULLET_DAMAGE]: 2, [StatType.BULLET_PENETRATION]: 5, [StatType.RELOAD]: 3 };
+                break;
+            case 'TRIPLE':
+            default:
+                this.classType = TankClass.TRIPLE_TANK;
+                this.radius = 62;
+                this.maxHealth = 11400;
+                this.damage = 88;
+                this.spread = 0.028;
+                this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 4, [StatType.BULLET_DAMAGE]: 3, [StatType.BULLET_PENETRATION]: 3, [StatType.RELOAD]: 4 };
+                break;
+        }
+        this.barrels = TANK_CONFIGS[this.classType];
+        this.barrelCooldowns = new Array(this.barrels.length).fill(0);
+        this.barrelMaxCooldowns = new Array(this.barrels.length).fill(140);
+        this.barrelHeat = new Array(this.barrels.length).fill(0);
+        this.barrelRecoilOffsets = new Array(this.barrels.length).fill(0);
+        this.health = this.maxHealth;
+        this.displayHealth = this.maxHealth;
+    }
+
+    setOwnerTeam(team: Team) {
+        this.ownerTeam = team;
+        this.team = team;
+        this.color = team === Team.NONE ? COLORS.dominionNeutral : getTeamColor(team);
+        this.name = team === Team.NONE ? 'Neutral Dominion' : `${team} Dominion`;
+    }
+
+    resetForStage(team: Team, owned: boolean) {
+        this.captureStage = owned ? 'OWNED' : 'NEUTRAL';
+        this.setOwnerTeam(team);
+        this.health = this.maxHealth;
+        this.displayHealth = this.maxHealth;
+        this.isDead = false;
+        this.shouldRemove = false;
+        this.lastDamageSourceId = null;
+        this.damageDealtBy.clear();
+        this.pos = { ...this.homePos };
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
+    }
+
+    override update(dt: number) {
+        const lockedPos = { ...this.homePos };
+        this.pos = lockedPos;
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
+        super.update(dt);
+        this.pos = lockedPos;
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
+        this.contestedPulse = Math.max(0, this.contestedPulse - dt);
+    }
+
+    override drawBody(ctx: CanvasRenderingContext2D) {
+        const outerGlow = this.team === Team.NONE ? 'rgba(250,204,21,0.35)' : `rgba(${getTeamRgb(this.team)},0.28)`;
+        ctx.save();
+        ctx.shadowBlur = 26;
+        ctx.shadowColor = outerGlow;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius * 1.12, 0, Math.PI * 2);
+        ctx.fillStyle = outerGlow;
+        ctx.fill();
+        ctx.restore();
+
+        if (this.contestedPulse > 0) {
+            ctx.save();
+            ctx.strokeStyle = this.team === Team.NONE ? 'rgba(255,255,255,0.9)' : `rgba(${getTeamRgb(this.team)},0.9)`;
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius * (1.36 + Math.sin(Date.now() * 0.01) * 0.06), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        super.drawBody(ctx);
+    }
+
+    override drawChassis(ctx: CanvasRenderingContext2D) {
+        this.drawBody(ctx);
+    }
+}
+
 class Crasher extends Entity {
     target: Entity | null = null;
     spawnTime: number = Date.now();
     isAlphaCrasher: boolean = false;
+    xpValue: number = 0;
+    damageDealtBy: Map<number, number> = new Map();
 
     constructor(id: number, x: number, y: number, isAlpha: boolean = false) {
         super(id, EntityType.CRASHER, x, y, isAlpha ? 18 : 10, isAlpha ? '#4050ff' : COLORS.crasher);
@@ -4354,11 +4561,17 @@ class Crasher extends Entity {
         this.damage = isAlpha ? 45 : 15;
         this.mass = isAlpha ? 25 : 8;
         this.friction = 0.95;
+        this.xpValue = isAlpha ? 900 : 140;
     }
 
     override update(dt: number) {
         this.rotation += this.isAlphaCrasher ? 0.15 : 0.1;
         super.update(dt);
+    }
+
+    override takeDamage(amount: number, sourceId: number | null = null, isBodyDamage: boolean = false) {
+        if (sourceId !== null && amount > 0) this.damageDealtBy.set(sourceId, (this.damageDealtBy.get(sourceId) || 0) + amount);
+        super.takeDamage(amount, sourceId, isBodyDamage);
     }
 
     override drawBody(ctx: CanvasRenderingContext2D) {
@@ -4725,7 +4938,7 @@ class Shape extends Entity {
         this.spawnScale = Math.min(1, this.spawnScale + dt / Shape.SPAWN_DURATION);
     }
 
-    this.rotation += (this.shapeType === ShapeType.OCTAGON ? 0.008 : 0.015);
+    this.rotation += this.shapeType === ShapeType.OCTAGON ? 0.008 : this.shapeType === ShapeType.HEPTAGON ? 0.011 : 0.015;
     this.acc.x += this.driftVec.x;
     this.acc.y += this.driftVec.y;
     this.pulseTimer += dt * 3; 
@@ -4781,6 +4994,16 @@ class Shape extends Entity {
         ctx.restore();
         return;
     }
+    if (this.shapeType === ShapeType.DIAMOND) {
+        this.drawAdvancedDiamond(ctx, fillColor, strokeColor, glowBlur, glowColor);
+        ctx.restore();
+        return;
+    }
+    if (this.shapeType === ShapeType.HEPTAGON) {
+        this.drawAdvancedHeptagon(ctx, fillColor, strokeColor, glowBlur, glowColor);
+        ctx.restore();
+        return;
+    }
 
     if (this.rarity === ShapeRarity.UNCOMMON) this.drawUncommonVisuals(ctx);
     if (this.rarity === ShapeRarity.RARE) this.drawRareVisuals(ctx);
@@ -4818,7 +5041,7 @@ class Shape extends Entity {
         ctx.stroke();
         ctx.restore();
     }
-    this.traceShape(ctx, sides, this.radius);
+    this.traceShape(ctx, sides, this.radius, this.getShapeTraceRotationOffset());
     
     const glintPos = (Math.sin(Date.now() / 2000) + 1) / 2; 
     const grad = ctx.createLinearGradient(-this.radius * 2, -this.radius * 2, this.radius * 2, this.radius * 2);
@@ -4971,7 +5194,99 @@ if (this.rarity !== ShapeRarity.COMMON && this.rarity !== ShapeRarity.UNCOMMON) 
     ctx.restore();
   }
 
-  traceShape(ctx: CanvasRenderingContext2D, sides: number, radius: number) { ctx.beginPath(); for (let i = 0; i < sides; i++) { const angle = (i * 2 * Math.PI) / sides; const x = Math.cos(angle) * radius; const y = Math.sin(angle) * radius; if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.closePath(); }
+  private drawAdvancedDiamond(ctx: CanvasRenderingContext2D, fillColor: string, strokeColor: string, glowBlur: number, glowColor: string) {
+    const r = this.radius;
+    const t = Date.now() / 1000;
+    if (glowBlur > 0) {
+        ctx.shadowBlur = glowBlur;
+        ctx.shadowColor = glowColor;
+    }
+    ctx.rotate(Math.PI * 0.25);
+    this.traceShape(ctx, 4, r);
+    const shell = ctx.createLinearGradient(-r, -r, r, r);
+    shell.addColorStop(0, 'rgba(255,255,255,0.22)');
+    shell.addColorStop(0.45, fillColor);
+    shell.addColorStop(1, '#103d37');
+    ctx.fillStyle = shell;
+    ctx.fill();
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = strokeColor;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.rotate(-this.rotation * 0.55);
+    ctx.strokeStyle = 'rgba(255,255,255,0.38)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -r * 0.82);
+    ctx.lineTo(0, r * 0.82);
+    ctx.moveTo(-r * 0.82, 0);
+    ctx.lineTo(r * 0.82, 0);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = glowColor !== 'transparent' ? glowColor : strokeColor;
+    ctx.lineWidth = 2;
+    ctx.rotate(t * 0.35);
+    this.traceShape(ctx, 4, r * 1.28);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawAdvancedHeptagon(ctx: CanvasRenderingContext2D, fillColor: string, strokeColor: string, glowBlur: number, glowColor: string) {
+    const r = this.radius;
+    const t = Date.now() / 1000;
+    if (glowBlur > 0) {
+        ctx.shadowBlur = glowBlur;
+        ctx.shadowColor = glowColor;
+    }
+    this.traceShape(ctx, 7, r, -Math.PI / 2);
+    const shell = ctx.createRadialGradient(0, -r * 0.18, r * 0.1, 0, 0, r);
+    shell.addColorStop(0, 'rgba(255,255,255,0.26)');
+    shell.addColorStop(0.42, fillColor);
+    shell.addColorStop(1, '#1f1638');
+    ctx.fillStyle = shell;
+    ctx.fill();
+    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = strokeColor;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 7; i++) {
+        const angle = -Math.PI / 2 + (i * Math.PI * 2) / 7;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(angle) * r * 0.82, Math.sin(angle) * r * 0.82);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = 0.26;
+    ctx.rotate(-t * 0.28);
+    ctx.strokeStyle = glowColor !== 'transparent' ? glowColor : strokeColor;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 10]);
+    this.traceShape(ctx, 7, r * 1.22, -Math.PI / 2);
+    ctx.stroke();
+    ctx.restore();
+    ctx.setLineDash([]);
+  }
+
+  private getShapeTraceRotationOffset(): number {
+    if (this.shapeType === ShapeType.DIAMOND) return Math.PI * 0.25;
+    if (this.shapeType === ShapeType.TRIANGLE || this.shapeType === ShapeType.HEPTAGON) return -Math.PI / 2;
+    return 0;
+  }
+
+  traceShape(ctx: CanvasRenderingContext2D, sides: number, radius: number, angleOffset: number = 0) { ctx.beginPath(); for (let i = 0; i < sides; i++) { const angle = angleOffset + (i * 2 * Math.PI) / sides; const x = Math.cos(angle) * radius; const y = Math.sin(angle) * radius; if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.closePath(); }
   
   drawUncommonVisuals(ctx: CanvasRenderingContext2D) {
     const t = Date.now() / 1000;
@@ -6473,8 +6788,10 @@ export class GameEngine {
       shapeMaxCount: 300,
       enabledShapes: {
           [ShapeType.SQUARE]: true,
+          [ShapeType.DIAMOND]: true,
           [ShapeType.TRIANGLE]: true,
           [ShapeType.PENTAGON]: true,
+          [ShapeType.HEPTAGON]: true,
           [ShapeType.HEXAGON]: true,
           [ShapeType.OCTAGON]: true,
       },
@@ -6501,6 +6818,9 @@ export class GameEngine {
   portalSpawnTimer: number = 0;
   transitionAlpha: number = 0;
   isTransitioning: boolean = false;
+  private pendingDimensionTransition: PendingDimensionTransition | null = null;
+  private playerVoidTransitStage: VoidTransitStage | null = null;
+  private playerVoidTransitProgress: number = 0;
   shakeAmount: number = 0;
   lightingCanvas: HTMLCanvasElement;
   lightingCtx: CanvasRenderingContext2D;
@@ -6552,13 +6872,36 @@ export class GameEngine {
   private zonePlayerPressure: number[] = [];
   private zoneTeamPressureBlue: number[] = [];
   private zoneTeamPressureRed: number[] = [];
+  private zoneTeamPressureGreen: number[] = [];
+  private zoneTeamPressurePurple: number[] = [];
   private spawnHeatmapTimer: number = 0;
   private recentSpawnZoneHistory: number[] = [];
   private baseDefenseAnchors: Record<Team, Vector2[]> = {
       [Team.BLUE]: [],
       [Team.RED]: [],
+      [Team.GREEN]: [],
+      [Team.PURPLE]: [],
       [Team.NONE]: []
   };
+  private dominionZones: DominionZoneDef[] = [];
+  private dominionScores: Record<Team, number> = {
+      [Team.NONE]: 0,
+      [Team.BLUE]: 0,
+      [Team.RED]: 0,
+      [Team.GREEN]: 0,
+      [Team.PURPLE]: 0
+  };
+  private dominionOwnedCount: Record<Team, number> = {
+      [Team.NONE]: 0,
+      [Team.BLUE]: 0,
+      [Team.RED]: 0,
+      [Team.GREEN]: 0,
+      [Team.PURPLE]: 0
+  };
+  private dominionScoreTickTimer: number = 5;
+  private dominionMatchTimer: number = 600;
+  private dominionRoundResetTimer: number = 0;
+  private dominionPendingWinner: Team = Team.NONE;
   private safeZoneScanTimerMs: number = 0;
   private enemyZoneWarningLevel: 0 | 1 | 2 = 0;
   private enemyZoneWarningText: string = '';
@@ -6567,6 +6910,7 @@ export class GameEngine {
   private readonly visibleEntitiesBuffer: Entity[] = [];
   private readonly portalCoreOccupancyMs: Map<string, number> = new Map();
   private readonly portalTransitQueuedIds: Map<number, Set<number>> = new Map();
+  private readonly portalStageNotified: Map<string, Set<VoidTransitStage>> = new Map();
   private statePublishAccumulator: number = 0;
   private readonly statePublishIntervalSec: number = 1 / 8;
   private readonly renderOrder: Partial<Record<EntityType, number>> = {
@@ -6577,6 +6921,7 @@ export class GameEngine {
       [EntityType.DRONE]: 3,
       [EntityType.MINI_TANK]: 3,
       [EntityType.BASE_DEFENSE_DRONE]: 4,
+      [EntityType.DOMINION_TANK]: 4,
       [EntityType.ENEMY]: 4,
       [EntityType.DUMMY]: 5,
       [EntityType.PLAYER]: 6,
@@ -6618,6 +6963,9 @@ export class GameEngine {
     this.initSpawnZones();
 
     for (let i = 0; i < 150; i++) this.spawnShape();
+    if (this.gameMode === GameMode.DOMINION) {
+      this.spawnDominionObjectives();
+    }
   }
 
   addParticle(p: Particle) {
@@ -6698,7 +7046,328 @@ export class GameEngine {
     this.zonePlayerPressure = new Array(this.spawnZones.length).fill(0);
     this.zoneTeamPressureBlue = new Array(this.spawnZones.length).fill(0);
     this.zoneTeamPressureRed = new Array(this.spawnZones.length).fill(0);
+    this.zoneTeamPressureGreen = new Array(this.spawnZones.length).fill(0);
+    this.zoneTeamPressurePurple = new Array(this.spawnZones.length).fill(0);
     this.recentSpawnZoneHistory = [];
+  }
+
+  private getSafeZoneRect(team: Team): { x: number; y: number; w: number; h: number } | null {
+    if (this.gameMode === GameMode.TEAMS) {
+      if (team === Team.BLUE) return { x: 0, y: 0, w: BASE_ZONE_WIDTH, h: CANVAS_HEIGHT };
+      if (team === Team.RED) return { x: CANVAS_WIDTH - BASE_ZONE_WIDTH, y: 0, w: BASE_ZONE_WIDTH, h: CANVAS_HEIGHT };
+      return null;
+    }
+    if (this.gameMode === GameMode.DOMINION) {
+      if (team === Team.BLUE) return { x: 0, y: 0, w: BASE_ZONE_WIDTH, h: BASE_ZONE_WIDTH };
+      if (team === Team.RED) return { x: CANVAS_WIDTH - BASE_ZONE_WIDTH, y: 0, w: BASE_ZONE_WIDTH, h: BASE_ZONE_WIDTH };
+      if (team === Team.GREEN) return { x: 0, y: CANVAS_HEIGHT - BASE_ZONE_WIDTH, w: BASE_ZONE_WIDTH, h: BASE_ZONE_WIDTH };
+      if (team === Team.PURPLE) return { x: CANVAS_WIDTH - BASE_ZONE_WIDTH, y: CANVAS_HEIGHT - BASE_ZONE_WIDTH, w: BASE_ZONE_WIDTH, h: BASE_ZONE_WIDTH };
+    }
+    return null;
+  }
+
+  private getTeamSpawnCenter(team: Team): Vector2 {
+    const rect = this.getSafeZoneRect(team);
+    if (!rect) return { x: CANVAS_WIDTH * 0.5, y: CANVAS_HEIGHT * 0.5 };
+    return { x: rect.x + rect.w * 0.5, y: rect.y + rect.h * 0.5 };
+  }
+
+  private getDominionZoneBlueprints(): Array<{ pos: Vector2; radius: number }> {
+    return [
+      { pos: { x: CANVAS_WIDTH * 0.32, y: CANVAS_HEIGHT * 0.32 }, radius: 680 },
+      { pos: { x: CANVAS_WIDTH * 0.68, y: CANVAS_HEIGHT * 0.32 }, radius: 680 },
+      { pos: { x: CANVAS_WIDTH * 0.32, y: CANVAS_HEIGHT * 0.68 }, radius: 680 },
+      { pos: { x: CANVAS_WIDTH * 0.68, y: CANVAS_HEIGHT * 0.68 }, radius: 680 },
+    ];
+  }
+
+  private getDominionWeaponProfile(index: number): DominionWeaponProfile {
+    const profiles: DominionWeaponProfile[] = ['DESTROYER', 'GUNNER', 'TRAPPER', 'TRIPLE'];
+    return profiles[index % profiles.length];
+  }
+
+  private resetDominionState() {
+    this.entities = this.entities.filter((e) => e.type !== EntityType.DOMINION_TANK);
+    this.dominionZones = [];
+    this.dominionScoreTickTimer = 5;
+    this.dominionMatchTimer = 600;
+    this.dominionRoundResetTimer = 0;
+    this.dominionPendingWinner = Team.NONE;
+    this.dominionScores = {
+      [Team.NONE]: 0,
+      [Team.BLUE]: 0,
+      [Team.RED]: 0,
+      [Team.GREEN]: 0,
+      [Team.PURPLE]: 0
+    };
+    this.dominionOwnedCount = {
+      [Team.NONE]: 0,
+      [Team.BLUE]: 0,
+      [Team.RED]: 0,
+      [Team.GREEN]: 0,
+      [Team.PURPLE]: 0
+    };
+  }
+
+  private spawnDominionObjectives() {
+    this.resetDominionState();
+    if (this.gameMode !== GameMode.DOMINION) return;
+    const blueprints = this.getDominionZoneBlueprints();
+    blueprints.forEach((blueprint, index) => {
+      const tank = new DominionTank(this.nextId(), blueprint.pos.x, blueprint.pos.y, index, blueprint.radius, this.getDominionWeaponProfile(index));
+      this.entities.push(tank);
+      this.dominionZones.push({
+        id: index,
+        pos: blueprint.pos,
+        radius: blueprint.radius,
+        tankId: tank.id,
+        owner: Team.NONE,
+        contested: false,
+      });
+    });
+    this.syncDominionOwnedCounts();
+  }
+
+  private rebuildDominionObjectivesFromCurrentState() {
+    this.entities = this.entities.filter((e) => e.type !== EntityType.DOMINION_TANK);
+    if (this.gameMode !== GameMode.DOMINION) return;
+    if (this.dominionZones.length === 0) {
+      this.spawnDominionObjectives();
+      return;
+    }
+
+    for (let index = 0; index < this.dominionZones.length; index++) {
+      const zone = this.dominionZones[index];
+      const tank = new DominionTank(this.nextId(), zone.pos.x, zone.pos.y, zone.id, zone.radius, this.getDominionWeaponProfile(index));
+      tank.resetForStage(zone.owner, zone.owner !== Team.NONE);
+      zone.tankId = tank.id;
+      zone.contested = false;
+      this.entities.push(tank);
+    }
+    this.syncDominionOwnedCounts();
+  }
+
+  private syncDominionOwnedCounts() {
+    this.dominionOwnedCount[Team.BLUE] = 0;
+    this.dominionOwnedCount[Team.RED] = 0;
+    this.dominionOwnedCount[Team.GREEN] = 0;
+    this.dominionOwnedCount[Team.PURPLE] = 0;
+    this.dominionOwnedCount[Team.NONE] = 0;
+    for (const zone of this.dominionZones) {
+      this.dominionOwnedCount[zone.owner] = (this.dominionOwnedCount[zone.owner] || 0) + 1;
+    }
+  }
+
+  private getDominionZoneStates(): DominionZoneState[] {
+    return this.dominionZones.map((zone) => ({
+      id: zone.id,
+      pos: { ...zone.pos },
+      radius: zone.radius,
+      owner: zone.owner,
+      contested: zone.contested,
+    }));
+  }
+
+  private resolveOwningTeamFromSource(sourceId: number | null): Team {
+    if (sourceId === null) return Team.NONE;
+    const source = this.entities.find((entity) => entity.id === sourceId);
+    if (!source) return Team.NONE;
+    if (source.type === EntityType.BULLET) {
+      const owner = this.entities.find((entity) => entity.id === (source as Bullet).ownerId);
+      return owner?.team ?? Team.NONE;
+    }
+    if (source.type === EntityType.DRONE || source.type === EntityType.MINI_TANK) {
+      return (source as Drone | MiniTank).owner.team;
+    }
+    return source.team;
+  }
+
+  private handleDominionTankDefeat(tank: DominionTank) {
+    const zone = this.dominionZones.find((entry) => entry.tankId === tank.id);
+    if (!zone) return;
+    const capturingTeam = this.resolveOwningTeamFromSource(tank.lastDamageSourceId);
+    const validCapturingTeam = isPlayableTeam(capturingTeam) ? capturingTeam : Team.NONE;
+    const wasNeutral = zone.owner === Team.NONE;
+    const nextOwner = wasNeutral ? validCapturingTeam : Team.NONE;
+    tank.resetForStage(nextOwner, nextOwner !== Team.NONE);
+    tank.contestedPulse = 1.8;
+    zone.owner = nextOwner;
+    zone.contested = false;
+    this.syncDominionOwnedCounts();
+
+    if (nextOwner === Team.NONE) {
+      this.addNotification('DOMINION TANK NEUTRALISED', COLORS.dominionNeutral);
+    } else if (nextOwner === this.player.team) {
+      this.addNotification('YOUR TEAM CAPTURED A DOMINION TANK!', getTeamColor(nextOwner));
+    } else {
+      this.addNotification(`${nextOwner} CAPTURED A DOMINION TANK!`, getTeamColor(nextOwner));
+    }
+  }
+
+  private getDominionWinningTeam(): Team {
+    let bestTeam = Team.NONE;
+    let bestScore = -Infinity;
+    for (const team of PLAYABLE_TEAMS) {
+      const score = this.dominionScores[team] || 0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestTeam = team;
+      }
+    }
+    return bestTeam;
+  }
+
+  private triggerDominionRoundReset(winner: Team, reason: 'score_limit' | 'timer'): void {
+    if (this.dominionRoundResetTimer > 0) return;
+    this.dominionPendingWinner = winner;
+    this.dominionRoundResetTimer = 4;
+    const color = winner === Team.NONE ? COLORS.dominionNeutral : getTeamColor(winner);
+    const winnerLabel = winner === Team.NONE ? 'NO TEAM' : `${winner}`;
+    const reasonLabel = reason === 'score_limit' ? 'SCORE LIMIT' : 'TIMER END';
+    this.addNotification(`DOMINION ${reasonLabel} // ${winnerLabel} LEADS`, color);
+  }
+
+  private resetDominionRound(): void {
+    const roundWinner = this.dominionPendingWinner;
+    const preservedShapes = this.entities.filter((entity) => entity.type === EntityType.SHAPE);
+    const combatants = this.entities.filter((entity) =>
+      entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY || entity.type === EntityType.ELITE_TANK
+    ) as Tank[];
+    this.entities = [...preservedShapes];
+    this.killFeed = [];
+    this.floatingTexts = [];
+    this.particles = [];
+    this.resetDominionState();
+    this.spawnDominionObjectives();
+
+    for (let i = 0; i < combatants.length; i++) {
+      const tank = combatants[i];
+      tank.pos = this.getSpawnPos(tank.team);
+      tank.vel = { x: 0, y: 0 };
+      tank.acc = { x: 0, y: 0 };
+      tank.aiTargetId = null;
+      tank.aiHuntingSpecialId = null;
+      tank.aiShooting = false;
+      tank.aiState = AIState.IDLE;
+      tank.health = tank.maxHealth;
+      tank.displayHealth = tank.maxHealth;
+      tank.shield = tank.maxShield;
+      tank.invulnerableTime = Math.max(tank.invulnerableTime || 0, 2000);
+      tank.lastDamageSourceId = null;
+      if (!this.entities.includes(tank)) this.entities.push(tank);
+    }
+
+    if (this.player && !this.entities.includes(this.player)) {
+      this.entities.push(this.player);
+    }
+
+    if (roundWinner !== Team.NONE) {
+      this.addNotification(`${roundWinner} OPENS THE NEXT ROUND`, getTeamColor(roundWinner));
+    } else {
+      this.addNotification('DOMINION ROUND RESET', COLORS.dominionNeutral);
+    }
+  }
+
+  private updateDominionSystem(dt: number) {
+    if (this.gameMode !== GameMode.DOMINION || this.inVoid) return;
+
+    if (this.dominionRoundResetTimer > 0) {
+      this.dominionRoundResetTimer = Math.max(0, this.dominionRoundResetTimer - dt);
+      if (this.dominionRoundResetTimer <= 0) {
+        this.resetDominionRound();
+      }
+      return;
+    }
+
+    const dominionTanks = this.entities.filter((entity): entity is DominionTank => entity instanceof DominionTank && !entity.isDead);
+    for (const zone of this.dominionZones) {
+      const tank = dominionTanks.find((entity) => entity.id === zone.tankId);
+      if (!tank) continue;
+
+      const nearbyTanks = this.entities.filter((entity) =>
+        !entity.isDead &&
+        (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY || entity.type === EntityType.ELITE_TANK) &&
+        Vector.dist(entity.pos, zone.pos) <= zone.radius + 180
+      ) as Tank[];
+      const validTargets = nearbyTanks.filter((entity) => {
+        if (entity.team === Team.NONE || entity.team === zone.owner) return false;
+        const ownSafeZone = this.getSafeZoneRect(entity.team);
+        return !ownSafeZone || !this.isInsideRect(entity.pos, ownSafeZone);
+      });
+      zone.contested = validTargets.length > 0;
+      if (zone.contested) tank.contestedPulse = 1.8;
+
+      if (validTargets.length > 0) {
+        const prioritized = [...validTargets].sort((a, b) => {
+          const aThreat = (a.lastDamageSourceId === tank.id ? -220 : 0) + Vector.dist(a.pos, tank.pos);
+          const bThreat = (b.lastDamageSourceId === tank.id ? -220 : 0) + Vector.dist(b.pos, tank.pos);
+          return aThreat - bThreat;
+        })[0];
+        const bulletSpeed = (BASE_STATS.bulletSpeed + tank.stats[StatType.BULLET_SPEED] * 0.8) * 1.22;
+        const intercept = this.getInterceptPoint(tank.pos, bulletSpeed, prioritized.pos, prioritized.vel);
+        tank.aiTargetRot = Math.atan2(intercept.y - tank.pos.y, intercept.x - tank.pos.x);
+        tank.rotation = tank.lerpAngle(tank.rotation, tank.aiTargetRot, Math.min(1, dt * 5.5));
+        tank.aiShooting = true;
+        this.attemptShoot(tank);
+      } else {
+        tank.aiShooting = false;
+        tank.rotation += dt * 0.3;
+      }
+    }
+
+    this.dominionScoreTickTimer -= dt;
+    this.dominionMatchTimer = Math.max(0, this.dominionMatchTimer - dt);
+    if (this.dominionScoreTickTimer <= 0) {
+      this.dominionScoreTickTimer = 5;
+      for (const zone of this.dominionZones) {
+        if (isPlayableTeam(zone.owner)) this.dominionScores[zone.owner] += 1;
+      }
+    }
+
+    const leadingTeam = this.getDominionWinningTeam();
+    if (leadingTeam !== Team.NONE && (this.dominionScores[leadingTeam] || 0) >= 500) {
+      this.triggerDominionRoundReset(leadingTeam, 'score_limit');
+      return;
+    }
+
+    if (this.dominionMatchTimer <= 0) {
+      this.triggerDominionRoundReset(leadingTeam, 'timer');
+    }
+  }
+
+  private isInsideRect(pos: Vector2, rect: { x: number; y: number; w: number; h: number }): boolean {
+    return pos.x >= rect.x && pos.x <= rect.x + rect.w && pos.y >= rect.y && pos.y <= rect.y + rect.h;
+  }
+
+  private applySafeZoneProtection(dt: number) {
+    if (this.inVoid) return;
+    if (this.gameMode !== GameMode.TEAMS && this.gameMode !== GameMode.DOMINION) return;
+
+    const activeTeams = this.gameMode === GameMode.DOMINION ? PLAYABLE_TEAMS : [Team.BLUE, Team.RED];
+    this.entities.forEach((entity) => {
+      if (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY || entity.type === EntityType.ELITE_TANK) {
+        for (const team of activeTeams) {
+          const rect = this.getSafeZoneRect(team);
+          if (!rect) continue;
+          if (entity.team === team) continue;
+          if (!this.isInsideRect(entity.pos, rect)) continue;
+          const center = { x: rect.x + rect.w * 0.5, y: rect.y + rect.h * 0.5 };
+          const away = Vector.normalize(Vector.sub(entity.pos, center));
+          entity.vel = Vector.add(entity.vel, Vector.mult(away, 1500 * dt));
+        }
+      }
+      if (entity.type === EntityType.BULLET || entity.type === EntityType.DRONE || entity.type === EntityType.MINI_TANK) {
+        for (const team of activeTeams) {
+          const rect = this.getSafeZoneRect(team);
+          if (!rect) continue;
+          if (entity.team === team) continue;
+          if (!this.isInsideRect(entity.pos, rect)) continue;
+          entity.isDead = true;
+          this.particles.push(new Particle(entity.pos.x, entity.pos.y, `${getTeamColor(team)}88`, 9, 12, 'RING'));
+          this.particles.push(new Particle(entity.pos.x, entity.pos.y, `${getTeamColor(team)}aa`, 4, 10, 'FLASH'));
+        }
+      }
+    });
   }
 
   private getZoneIndexForPos(pos: Vector2): number {
@@ -6721,6 +7390,8 @@ export class GameEngine {
     this.zonePlayerPressure.fill(0);
     this.zoneTeamPressureBlue.fill(0);
     this.zoneTeamPressureRed.fill(0);
+    this.zoneTeamPressureGreen.fill(0);
+    this.zoneTeamPressurePurple.fill(0);
 
     for (const e of this.entities) {
       if (e.isDead) continue;
@@ -6732,6 +7403,8 @@ export class GameEngine {
         this.zonePlayerPressure[zoneIndex] += 1;
         if (tank.team === Team.BLUE) this.zoneTeamPressureBlue[zoneIndex] += 1;
         if (tank.team === Team.RED) this.zoneTeamPressureRed[zoneIndex] += 1;
+        if (tank.team === Team.GREEN) this.zoneTeamPressureGreen[zoneIndex] += 1;
+        if (tank.team === Team.PURPLE) this.zoneTeamPressurePurple[zoneIndex] += 1;
       }
     }
   }
@@ -6757,7 +7430,7 @@ export class GameEngine {
       score += Math.max(0, 3 - pressure) * 1.4;
       if (recentlyUsed) score -= 2.0;
 
-      if (this.gameMode === GameMode.TEAMS) {
+      if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
         const teamDiff = Math.abs(bluePressure - redPressure);
         score += midBias * 2.2;
         score += Math.max(0, 2 - teamDiff) * 1.0;
@@ -6796,27 +7469,35 @@ export class GameEngine {
     const commonBias = quietness * 0.6 + lowDensity * 0.4;
     const roll = Math.random();
 
-    if (this.gameMode === GameMode.TEAMS) {
+    if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
       const midBias = 1 - distNorm;
-      const octThresh = Math.max(0.0004, 0.0012 + midBias * 0.008 - commonBias * 0.001);
-      const hexThresh = octThresh + Math.max(0.003, 0.007 + midBias * 0.018 - commonBias * 0.006);
-      const pentThresh = hexThresh + Math.max(0.018, 0.036 + midBias * 0.05 - commonBias * 0.018);
-      const triThresh = Math.min(0.92, pentThresh + 0.61 + commonBias * 0.085);
+      const octThresh = Math.max(0.0004, 0.0011 + midBias * 0.0075 - commonBias * 0.001);
+      const hexThresh = octThresh + Math.max(0.0026, 0.0064 + midBias * 0.016 - commonBias * 0.0055);
+      const heptThresh = hexThresh + Math.max(0.006, 0.011 + midBias * 0.022 - commonBias * 0.007);
+      const pentThresh = heptThresh + Math.max(0.015, 0.029 + midBias * 0.04 - commonBias * 0.015);
+      const triThresh = Math.min(0.9, pentThresh + 0.47 + commonBias * 0.07);
+      const diaThresh = Math.min(0.975, triThresh + 0.17 + commonBias * 0.055);
       if (roll < octThresh) return ShapeType.OCTAGON;
       if (roll < hexThresh) return ShapeType.HEXAGON;
+      if (roll < heptThresh) return ShapeType.HEPTAGON;
       if (roll < pentThresh) return ShapeType.PENTAGON;
       if (roll < triThresh) return ShapeType.TRIANGLE;
+      if (roll < diaThresh) return ShapeType.DIAMOND;
       return ShapeType.SQUARE;
     }
 
-    const octThresh = Math.max(0.0007, 0.0018 - commonBias * 0.0006);
-    const hexThresh = octThresh + Math.max(0.0035, 0.0067 - commonBias * 0.0022);
-    const pentThresh = hexThresh + Math.max(0.012, 0.0195 - commonBias * 0.006);
-    const triThresh = Math.min(0.9, pentThresh + 0.542 + commonBias * 0.09);
+    const octThresh = Math.max(0.0007, 0.0017 - commonBias * 0.0006);
+    const hexThresh = octThresh + Math.max(0.0034, 0.0062 - commonBias * 0.0022);
+    const heptThresh = hexThresh + Math.max(0.0058, 0.0098 - commonBias * 0.003);
+    const pentThresh = heptThresh + Math.max(0.01, 0.0162 - commonBias * 0.005);
+    const triThresh = Math.min(0.86, pentThresh + 0.42 + commonBias * 0.07);
+    const diaThresh = Math.min(0.965, triThresh + 0.19 + commonBias * 0.06);
     if (roll < octThresh) return ShapeType.OCTAGON;
     if (roll < hexThresh) return ShapeType.HEXAGON;
+    if (roll < heptThresh) return ShapeType.HEPTAGON;
     if (roll < pentThresh) return ShapeType.PENTAGON;
     if (roll < triThresh) return ShapeType.TRIANGLE;
+    if (roll < diaThresh) return ShapeType.DIAMOND;
     return ShapeType.SQUARE;
   }
 
@@ -6842,12 +7523,19 @@ export class GameEngine {
       const fromMode = this.gameMode;
       this.previousGameMode = fromMode;
       this.gameMode = mode; 
+      if (mode !== GameMode.DOMINION) {
+          this.resetDominionState();
+      }
       if (fromMode === GameMode.SANDBOX && mode !== GameMode.SANDBOX) {
           this.hardResetSandboxLeakedProgress(mode);
       }
       if (mode === GameMode.TEAMS) {
           this.spawnGuardians();
           this.spawnBaseDefenseDrones();
+      } else if (mode === GameMode.DOMINION) {
+          this.entities = this.entities.filter(e => e.type !== EntityType.GUARDIAN && e.type !== EntityType.BASE_DEFENSE_DRONE);
+          this.clearBaseDefenseDrones();
+          this.spawnDominionObjectives();
       } else if (mode === GameMode.SANDBOX) {
           this.clearBaseDefenseDrones();
           this.cleanupForSandbox();
@@ -6921,8 +7609,10 @@ export class GameEngine {
           shapeMaxCount: 300,
           enabledShapes: {
               [ShapeType.SQUARE]: true,
+              [ShapeType.DIAMOND]: true,
               [ShapeType.TRIANGLE]: true,
               [ShapeType.PENTAGON]: true,
+              [ShapeType.HEPTAGON]: true,
               [ShapeType.HEXAGON]: true,
               [ShapeType.OCTAGON]: true,
           },
@@ -6945,7 +7635,7 @@ export class GameEngine {
   }
 
   getTeamCounts() {
-      const counts = { [Team.BLUE]: 0, [Team.RED]: 0, [Team.NONE]: 0 };
+      const counts = { [Team.BLUE]: 0, [Team.RED]: 0, [Team.GREEN]: 0, [Team.PURPLE]: 0, [Team.NONE]: 0 };
       this.entities.forEach(e => {
           if (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) {
               const tank = e as Tank;
@@ -6958,15 +7648,11 @@ export class GameEngine {
   }
 
   canJoinTeam(team: Team): boolean {
-      if (this.gameMode !== GameMode.TEAMS) return true;
+      if (this.gameMode !== GameMode.TEAMS && this.gameMode !== GameMode.DOMINION) return true;
       const counts = this.getTeamCounts();
-      const otherTeam = team === Team.BLUE ? Team.RED : Team.BLUE;
-      
-      // Much more lenient team balancing: 
-      // Allow joining any team if it has fewer than 15 players, 
-      // or if joining wouldn't make the team more than 4 players larger than the other.
-      if (counts[team] < 15) return true; 
-      return counts[team] <= counts[otherTeam] + 4;
+      const activeTeams = this.gameMode === GameMode.DOMINION ? PLAYABLE_TEAMS : [Team.BLUE, Team.RED];
+      const maxCount = activeTeams.reduce((best, activeTeam) => Math.max(best, counts[activeTeam] ?? 0), 0);
+      return (counts[team] ?? 0) <= maxCount + 1;
   }
 
   cycleSpectateTarget(direction: number = 1) {
@@ -7220,6 +7906,8 @@ export class GameEngine {
       const intrudersByTeam: Record<Team, Entity[]> = {
           [Team.BLUE]: [],
           [Team.RED]: [],
+          [Team.GREEN]: [],
+          [Team.PURPLE]: [],
           [Team.NONE]: []
       };
       const isTankLike = (e: Entity) => e.type === EntityType.PLAYER || e.type === EntityType.ENEMY || e.type === EntityType.ELITE_TANK;
@@ -7332,12 +8020,11 @@ export class GameEngine {
     this.player.autoSpin = false; 
     this.uiNotifications = [];
 
-    if (this.gameMode === GameMode.TEAMS) { 
+    if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) { 
         this.player.team = this.preferredTeam; 
-        this.player.color = (this.player.team === Team.BLUE) ? COLORS.player : COLORS.enemy;
+        this.player.color = getTeamColor(this.player.team);
         this.player.setSkin(this.preferredSkinId, this.preferredDonorRank);
-        if (this.player.team === Team.BLUE) this.player.pos = { x: Vector.randomRange(100, BASE_ZONE_WIDTH - 100), y: Vector.randomRange(100, CANVAS_HEIGHT - 100) }; 
-        else this.player.pos = { x: Vector.randomRange(CANVAS_WIDTH - BASE_ZONE_WIDTH + 100, CANVAS_WIDTH - 100), y: Vector.randomRange(100, CANVAS_HEIGHT - 100) }; 
+        this.player.pos = this.getSpawnPos(this.player.team);
     }
     else { 
         this.player.team = Team.BLUE; 
@@ -7370,7 +8057,7 @@ export class GameEngine {
     if (!preserveWorld) { 
         this.entities = this.entities.filter(e => e.type === EntityType.SHAPE || e === this.player); 
         this.currentShapeCount = this.entities.filter(e => e.type === EntityType.SHAPE).length;
-        this.killFeed = []; this.floatingTexts = []; this.particles = []; this.bossSpawnTimer = 0; this.eliteSpawnTimer = 0; if (this.gameMode === GameMode.TEAMS) { this.spawnGuardians(); this.spawnBaseDefenseDrones(); }
+        this.killFeed = []; this.floatingTexts = []; this.particles = []; this.bossSpawnTimer = 0; this.eliteSpawnTimer = 0; if (this.gameMode === GameMode.TEAMS) { this.spawnGuardians(); this.spawnBaseDefenseDrones(); } else if (this.gameMode === GameMode.DOMINION) { this.spawnDominionObjectives(); }
     }
     if (this.gameMode !== GameMode.TEAMS) {
       this.entities = this.entities.filter(e => e.type !== EntityType.GUARDIAN);
@@ -7634,38 +8321,135 @@ export class GameEngine {
   }
 
   private transitionToDimension(toVoid: boolean, transitEntityIds: number[] = []) {
-      if (this.isTransitioning) return;
+      if (this.pendingDimensionTransition) return;
+      this.pendingDimensionTransition = {
+          toVoid,
+          transitEntityIds: Array.from(new Set(transitEntityIds)),
+          phase: 'FADE_OUT',
+          timer: 0,
+      };
       this.isTransitioning = true;
+      this.playerVoidTransitStage = toVoid ? 'SHIFT' : 'EXTRACT';
+      this.playerVoidTransitProgress = 1;
       this.addNotification(toVoid ? "ENTERING WORMHOLE" : "EXITING WORMHOLE", COLORS.voidPortal);
+      this.portalCoreOccupancyMs.clear();
+      this.portalTransitQueuedIds.clear();
+      this.portalStageNotified.clear();
+  }
+
+  private executeDimensionSwap(toVoid: boolean, transitEntityIds: number[] = []) {
       const transitSet = new Set<number>(transitEntityIds);
-      setTimeout(() => {
-          this.inVoid = toVoid;
-          this.voidTimer = toVoid ? 300 : 0;
-          this.entities = this.entities.filter(e => e.type === EntityType.PLAYER || e.type === EntityType.ENEMY || e.type === EntityType.BULLET);
-          if (transitSet.size > 0) {
-              const gatePos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
-              for (const e of this.entities) {
-                  if (!transitSet.has(e.id)) continue;
-                  const spread = e.type === EntityType.PLAYER || e.type === EntityType.ENEMY ? 220 : 300;
-                  e.pos.x = Vector.clamp(gatePos.x + Vector.randomRange(-spread, spread), e.radius, CANVAS_WIDTH - e.radius);
-                  e.pos.y = Vector.clamp(gatePos.y + Vector.randomRange(-spread, spread), e.radius, CANVAS_HEIGHT - e.radius);
-                  e.vel.x *= 0.25;
-                  e.vel.y *= 0.25;
-                  e.invulnerableTime = 0;
+      const resolvedTransitSet = this.buildDimensionTransitSet(transitSet);
+      this.inVoid = toVoid;
+      this.voidTimer = toVoid ? 300 : 0;
+      this.portalSpawnTimer = 0;
+      this.entities = this.entities.filter(e => resolvedTransitSet.has(e.id));
+      if (resolvedTransitSet.size > 0) {
+          const gatePos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
+          for (const e of this.entities) {
+              if (!resolvedTransitSet.has(e.id)) continue;
+              const spread = e.type === EntityType.PLAYER || e.type === EntityType.ENEMY ? 220 : 300;
+              e.pos.x = Vector.clamp(gatePos.x + Vector.randomRange(-spread, spread), e.radius, CANVAS_WIDTH - e.radius);
+              e.pos.y = Vector.clamp(gatePos.y + Vector.randomRange(-spread, spread), e.radius, CANVAS_HEIGHT - e.radius);
+              e.vel.x *= 0.25;
+              e.vel.y *= 0.25;
+              e.invulnerableTime = 0;
+          }
+      }
+      this.currentShapeCount = 0;
+      if (toVoid) {
+          const exitPos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
+          this.entities.push(new VoidPortal(this.nextId(), exitPos.x, exitPos.y, true));
+      } else {
+          if (this.gameMode === GameMode.TEAMS) {
+              this.spawnGuardians();
+              this.spawnBaseDefenseDrones();
+          } else if (this.gameMode === GameMode.DOMINION) {
+              this.rebuildDominionObjectivesFromCurrentState();
+          }
+      }
+      for (let i = 0; i < 150; i++) this.spawnShape();
+  }
+
+  private updateDimensionTransition(dt: number) {
+      const active = this.pendingDimensionTransition;
+      if (!active) {
+          this.transitionAlpha = Math.max(0, this.transitionAlpha - dt * 5.2);
+          return;
+      }
+
+      active.timer += dt;
+      if (active.phase === 'FADE_OUT') {
+          this.transitionAlpha = Math.min(1, this.transitionAlpha + dt * 7.4);
+          if (active.timer >= 0.22) {
+              this.executeDimensionSwap(active.toVoid, active.transitEntityIds);
+              active.phase = 'FADE_IN';
+              active.timer = 0;
+          }
+          return;
+      }
+
+      this.transitionAlpha = Math.max(0, this.transitionAlpha - dt * 6.1);
+      if (active.timer >= 0.18 && this.transitionAlpha <= 0.02) {
+          this.pendingDimensionTransition = null;
+          this.isTransitioning = false;
+          this.playerVoidTransitStage = null;
+          this.playerVoidTransitProgress = 0;
+      }
+  }
+
+  private buildDimensionTransitSet(seedIds: Set<number>): Set<number> {
+      const transit = new Set<number>(seedIds);
+      if (transit.size === 0) {
+          for (const entity of this.entities) {
+              if (entity.isDead) continue;
+              if (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY) {
+                  transit.add(entity.id);
               }
           }
-          this.currentShapeCount = 0;
-          if (toVoid) {
-              const exitPos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
-              this.entities.push(new VoidPortal(this.nextId(), exitPos.x, exitPos.y, true));
-          } else {
-              if (this.gameMode === GameMode.TEAMS) this.spawnGuardians();
+      }
+
+      let mutated = true;
+      while (mutated) {
+          mutated = false;
+          for (const entity of this.entities) {
+              if (entity.isDead || transit.has(entity.id)) continue;
+              if (entity.type === EntityType.BULLET) {
+                  const ownerId = (entity as Bullet).ownerId;
+                  if (transit.has(ownerId)) {
+                      transit.add(entity.id);
+                      mutated = true;
+                  }
+              } else if (entity.type === EntityType.DRONE || entity.type === EntityType.MINI_TANK) {
+                  const owner = (entity as Drone | MiniTank).owner;
+                  if (owner && transit.has(owner.id)) {
+                      transit.add(entity.id);
+                      mutated = true;
+                  }
+              }
           }
-          for (let i = 0; i < 150; i++) this.spawnShape();
-          this.portalCoreOccupancyMs.clear();
-          this.portalTransitQueuedIds.clear();
-          this.isTransitioning = false;
-      }, 1000);
+      }
+
+      return transit;
+  }
+
+  private notifyPortalStage(portal: VoidPortal, stage: VoidTransitStage): void {
+      let seen = this.portalStageNotified.get(`${portal.id}`);
+      if (!seen) {
+          seen = new Set<VoidTransitStage>();
+          this.portalStageNotified.set(`${portal.id}`, seen);
+      }
+      if (seen.has(stage)) return;
+      seen.add(stage);
+      const label = getVoidTransitStageLabel(stage);
+      if (!label) return;
+      const color = stage === 'LOCK' ? '#b794f4' : stage === 'INVERT' ? '#d7f3ff' : stage === 'BREACH' ? '#ffffff' : COLORS.voidPortal;
+      this.addNotification(label.toUpperCase(), color);
+  }
+
+  private setPlayerPortalStage(stage: VoidTransitStage | null, progress: number): void {
+      this.playerVoidTransitStage = stage;
+      this.playerVoidTransitProgress = clampNum(progress, 0, 1);
   }
 
   private updateAutoTurrets(dt: number) {
@@ -7808,6 +8592,7 @@ export class GameEngine {
   isValidCombatTarget(entity: Entity | null | undefined): boolean {
     if (!entity || entity.isDead) return false;
     return entity.type === EntityType.SHAPE ||
+      entity.type === EntityType.DOMINION_TANK ||
       entity.type === EntityType.BOSS ||
       entity.type === EntityType.PLAYER ||
       entity.type === EntityType.ENEMY ||
@@ -7939,7 +8724,7 @@ export class GameEngine {
           if (this.isPacifist(t.classType)) alivePacifists.push(t);
           if (this.isDraining(t.classType) || (t.isTransformed && t.classType === TankClass.COLOSSAL)) aliveDrainers.push(t);
         }
-      } else if (!e.isDead && (e.type === EntityType.SHAPE || e.type === EntityType.BOSS || e.type === EntityType.CRASHER || e.type === EntityType.GUARDIAN)) {
+      } else if (!e.isDead && (e.type === EntityType.SHAPE || e.type === EntityType.DOMINION_TANK || e.type === EntityType.BOSS || e.type === EntityType.CRASHER || e.type === EntityType.GUARDIAN)) {
         drainTargets.push(e);
       }
     }
@@ -8097,11 +8882,10 @@ export class GameEngine {
         this.player.vel = { x: 0, y: 0 };
     }
 
-    if (this.isTransitioning) {
-        this.transitionAlpha = Math.min(1, this.transitionAlpha + dt * 2);
-    } else {
-        this.transitionAlpha = Math.max(0, this.transitionAlpha - dt * 2);
+    if (!this.pendingDimensionTransition) {
+        this.setPlayerPortalStage(null, 0);
     }
+    this.updateDimensionTransition(dt);
 
     if (this.gameMode === GameMode.SANDBOX && this.sandboxConfig.noAbilityCooldown) {
         this.player.sacrificeCooldownTimer = 0;
@@ -8125,7 +8909,10 @@ export class GameEngine {
     } else {
         this.voidTimer -= dt;
         if (this.voidTimer <= 0) {
-            this.transitionToDimension(false);
+            const evacIds = this.entities
+              .filter(e => !e.isDead && (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY))
+              .map(e => e.id);
+            this.transitionToDimension(false, evacIds);
         }
     }
 
@@ -8210,13 +8997,13 @@ export class GameEngine {
     this.refreshSpawnHeatmap(dt);
       this.shapeSpawnTimer += dt;
       const activePlayers = this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && !e.isDead).length;
-      const modeBaseInterval = this.gameMode === GameMode.TEAMS ? 0.082 : 0.105;
+      const modeBaseInterval = (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) ? 0.082 : 0.105;
       const populationScale = Math.max(0.75, Math.min(1.45, 1.2 - activePlayers * 0.01));
       const spawnInterval = modeBaseInterval * populationScale;
     if (this.currentShapeCount < (this.sandboxConfig?.shapeMaxCount || 400) && this.shapeSpawnTimer >= spawnInterval) {
         if (this.gameMode !== GameMode.SANDBOX || (this.sandboxConfig?.spawningEnabled)) {
             const fillPercent = this.currentShapeCount / (this.sandboxConfig?.shapeMaxCount || 400);
-            const modeBaseProb = this.gameMode === GameMode.TEAMS ? 0.72 : 0.6;
+            const modeBaseProb = (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) ? 0.72 : 0.6;
             const spawnProb = Math.max(0.05, modeBaseProb * (1 - fillPercent));
             if (Math.random() < spawnProb) {
                 this.spawnShape();
@@ -8225,28 +9012,39 @@ export class GameEngine {
         }
     }
     
-    let enemyLimit = this.gameMode === GameMode.TEAMS ? 60 : 18;
+    let enemyLimit = this.gameMode === GameMode.TEAMS ? 60 : this.gameMode === GameMode.DOMINION ? 72 : 18;
     if (this.attractMode) enemyLimit += 10;
     if (this.gameMode === GameMode.SANDBOX) enemyLimit = 0; 
 
     if (this.gameMode !== GameMode.SANDBOX && aliveEnemies.length < enemyLimit) { 
-        const spawnProb = this.gameMode === GameMode.TEAMS ? 0.08 : 0.025; 
+        const spawnProb = this.gameMode === GameMode.TEAMS ? 0.08 : this.gameMode === GameMode.DOMINION ? 0.09 : 0.025; 
         if(Math.random() < spawnProb) this.spawnEnemy(); 
     }
 
     if (!this.attractMode && !this.player.isDead && this.playerState === PlayerState.ACTIVE) this.updatePlayerControl(dt);
 
-    if (this.gameMode === GameMode.TEAMS && !this.sandboxConfig.freezeAll) {
+    if ((this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) && !this.sandboxConfig.freezeAll) {
+        const safeZones = this.gameMode === GameMode.DOMINION
+            ? [
+                { team: Team.BLUE, center: { x: BASE_ZONE_WIDTH * 0.5, y: BASE_ZONE_WIDTH * 0.5 }, radius: BASE_ZONE_WIDTH * 0.88 },
+                { team: Team.RED, center: { x: this.width - BASE_ZONE_WIDTH * 0.5, y: BASE_ZONE_WIDTH * 0.5 }, radius: BASE_ZONE_WIDTH * 0.88 },
+                { team: Team.GREEN, center: { x: BASE_ZONE_WIDTH * 0.5, y: this.height - BASE_ZONE_WIDTH * 0.5 }, radius: BASE_ZONE_WIDTH * 0.88 },
+                { team: Team.PURPLE, center: { x: this.width - BASE_ZONE_WIDTH * 0.5, y: this.height - BASE_ZONE_WIDTH * 0.5 }, radius: BASE_ZONE_WIDTH * 0.88 },
+            ]
+            : [
+                { team: Team.BLUE, center: { x: BASE_ZONE_WIDTH * 0.55, y: this.height * 0.5 }, radius: BASE_ZONE_WIDTH * 1.35 },
+                { team: Team.RED, center: { x: this.width - BASE_ZONE_WIDTH * 0.55, y: this.height * 0.5 }, radius: BASE_ZONE_WIDTH * 1.35 },
+            ];
         const { bots, players } = this.buildTdmAiPerception();
         this.tdmAiSystem.configure({
             worldWidth: this.width,
             worldHeight: this.height,
             mapCenter: { x: this.width * 0.5, y: this.height * 0.5 },
             chokePoint: { x: this.width * 0.5, y: this.height * 0.5 },
-            safeZones: [
-                { team: Team.BLUE, center: { x: BASE_ZONE_WIDTH * 0.55, y: this.height * 0.5 }, radius: BASE_ZONE_WIDTH * 1.35 },
-                { team: Team.RED, center: { x: this.width - BASE_ZONE_WIDTH * 0.55, y: this.height * 0.5 }, radius: BASE_ZONE_WIDTH * 1.35 },
-            ],
+            inVoid: this.inVoid,
+            voidTimeRemaining: this.voidTimer,
+            safeZones,
+            dominionZones: this.gameMode === GameMode.DOMINION ? this.getDominionZoneStates() : [],
         });
         this.tdmAiSystem.update(bots as any, players, this.simulationTick);
     }
@@ -8292,28 +9090,10 @@ export class GameEngine {
         
         this.updateAutoTurrets(dt);
         this.updateBaseDefenseSystem(dt);
+        this.updateDominionSystem(dt);
     }
 
-    if (this.gameMode === GameMode.TEAMS && !this.inVoid) {
-        this.entities.forEach(e => {
-            if (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) {
-                if (e.team === Team.RED && e.pos.x < BASE_ZONE_WIDTH) e.vel.x += 1500 * dt;
-                if (e.team === Team.BLUE && e.pos.x > CANVAS_WIDTH - BASE_ZONE_WIDTH) e.vel.x -= 1500 * dt;
-            }
-            if (e.type === EntityType.BULLET || e.type === EntityType.DRONE || e.type === EntityType.MINI_TANK) {
-                if (e.team === Team.RED && e.pos.x < BASE_ZONE_WIDTH) {
-                    e.isDead = true;
-                    this.particles.push(new Particle(e.pos.x, e.pos.y, 'rgba(66,200,255,0.42)', 9, 12, 'RING'));
-                    this.particles.push(new Particle(e.pos.x, e.pos.y, 'rgba(160,230,255,0.45)', 4, 10, 'FLASH'));
-                }
-                if (e.team === Team.BLUE && e.pos.x > CANVAS_WIDTH - BASE_ZONE_WIDTH) {
-                    e.isDead = true;
-                    this.particles.push(new Particle(e.pos.x, e.pos.y, 'rgba(255,95,126,0.42)', 9, 12, 'RING'));
-                    this.particles.push(new Particle(e.pos.x, e.pos.y, 'rgba(255,170,188,0.45)', 4, 10, 'FLASH'));
-                }
-            }
-        });
-    }
+    this.applySafeZoneProtection(dt);
 
     this.entities.forEach(e => {
         if (this.sandboxConfig.freezeAll && e.type !== EntityType.PLAYER) return;
@@ -8398,6 +9178,9 @@ export class GameEngine {
         }
         if (ids.size === 0) this.portalTransitQueuedIds.delete(portalId);
     }
+    for (const [portalId] of this.portalStageNotified) {
+        if (!aliveIds.has(Number(portalId))) this.portalStageNotified.delete(portalId);
+    }
     this.currentShapeCount -= removedShapes;
     if ((this.simulationTick % 120) === 0) {
       this.aiSystem.cleanupCaches(this.entities as any);
@@ -8419,7 +9202,7 @@ export class GameEngine {
     
     const minimapMarkers: MinimapMarker[] = [];
     this.entities.forEach(e => {
-        const isPriority = e.type === EntityType.BOSS || e.type === EntityType.ELITE_TANK || e.type === EntityType.VOID_PORTAL || e.type === EntityType.DUMMY || (e.type === EntityType.SHAPE && getRarityRank((e as Shape).rarity) >= getRarityRank(ShapeRarity.LEGENDARY));
+        const isPriority = e.type === EntityType.BOSS || e.type === EntityType.ELITE_TANK || e.type === EntityType.VOID_PORTAL || e.type === EntityType.DUMMY || e.type === EntityType.DOMINION_TANK || (e.type === EntityType.SHAPE && getRarityRank((e as Shape).rarity) >= getRarityRank(ShapeRarity.LEGENDARY));
         const isAlly = (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && (this.gameMode === GameMode.FFA ? e.id === this.player.id : e.team === this.player.team);
         
         if (isPriority || isAlly) {
@@ -8432,6 +9215,17 @@ export class GameEngine {
             });
         }
     });
+    if (this.gameMode === GameMode.DOMINION) {
+        this.dominionZones.forEach((zone) => {
+            minimapMarkers.push({
+                type: EntityType.DOMINION_TANK,
+                pos: { ...zone.pos },
+                team: zone.owner === Team.NONE ? Team.NONE : zone.owner,
+                zoneRadius: zone.radius,
+                markerRole: 'DOMINION_ZONE'
+            });
+        });
+    }
 
     this.updateEnemyZoneWarningState(dt);
 
@@ -8523,6 +9317,8 @@ export class GameEngine {
         minimapMarkers,
         inVoid: this.inVoid, 
         voidTimeRemaining: this.voidTimer,
+        voidTransitStage: getVoidTransitStageLabel(this.playerVoidTransitStage),
+        voidTransitProgress: this.playerVoidTransitProgress,
         isTransformed: this.player.isTransformed,
         transformationTime: this.player.transformationTimer,
         transformationReady: this.transformationReadyTimer > 0,
@@ -8538,7 +9334,11 @@ export class GameEngine {
         enemyZoneWarningText: this.enemyZoneWarningText,
         bloodDrainLive,
         bloodDrainStacks,
-        bloodDrainSession: this.player.totalDrainedThisSession
+        bloodDrainSession: this.player.totalDrainedThisSession,
+        dominionScores: this.gameMode === GameMode.DOMINION ? { ...this.dominionScores } : undefined,
+        dominionOwnedCount: this.gameMode === GameMode.DOMINION ? { ...this.dominionOwnedCount } : undefined,
+        dominionTimeRemaining: this.gameMode === GameMode.DOMINION ? this.dominionMatchTimer : undefined,
+        dominionZones: this.gameMode === GameMode.DOMINION ? this.getDominionZoneStates() : undefined
       });
     }
 
@@ -8690,20 +9490,28 @@ export class GameEngine {
       const toTarget = Vector.sub(target.pos, boss.pos);
       const distance = Math.max(1, Vector.mag(toTarget));
       const dir = Vector.normalize(toTarget);
-      const desiredRange = boss.archetype === 'SIEGEBREAKER' ? 360 : boss.archetype === 'SWARMLORD' ? 520 : 440;
-      const moveForce = distance > desiredRange ? 0.85 : -0.35;
-      boss.acc = Vector.limit(Vector.add(boss.acc, Vector.mult(dir, moveForce)), 1.15);
+      const isSingularity = boss.archetype === 'SINGULARITY';
+      const desiredRange = boss.archetype === 'SIEGEBREAKER' ? 360 : boss.archetype === 'SWARMLORD' ? 520 : 600;
+      const moveForce = isSingularity
+        ? distance > desiredRange + 110 ? 0.34 : distance < 440 ? -0.24 : 0.05
+        : distance > desiredRange ? 0.85 : -0.35;
+      const orbitDir = Vector.normalize({ x: -dir.y, y: dir.x });
+      const orbitBias = isSingularity ? (0.42 + Math.sin(boss.phaseTimer * 0.9) * 0.18) : 0;
+      const moveVector = Vector.add(Vector.mult(dir, moveForce), Vector.mult(orbitDir, orbitBias));
+      boss.acc = Vector.limit(Vector.add(boss.acc, moveVector), isSingularity ? 0.58 : 1.15);
 
       // Soft singularity pull so bosses feel "present" and threatening.
-      const pullRadius = boss.archetype === 'SINGULARITY' ? 880 : 760;
+      const pullRadius = boss.archetype === 'SINGULARITY' ? 640 : 760;
       if (distance < pullRadius) {
-          const pull = 0.018 + (1 - distance / pullRadius) * 0.06;
+          const pull = boss.archetype === 'SINGULARITY'
+            ? 0.008 + (1 - distance / pullRadius) * 0.022
+            : 0.018 + (1 - distance / pullRadius) * 0.06;
           target.vel = Vector.add(target.vel, Vector.mult(dir, pull * 60 * dt));
       }
 
       if (boss.pulseCooldown <= 0 && distance < 760) {
-          const pulseRadius = boss.archetype === 'SIEGEBREAKER' ? 520 : boss.archetype === 'SWARMLORD' ? 420 : 480;
-          const pulseDamage = boss.archetype === 'SIEGEBREAKER' ? 220 : boss.archetype === 'SWARMLORD' ? 150 : 185;
+          const pulseRadius = boss.archetype === 'SIEGEBREAKER' ? 520 : boss.archetype === 'SWARMLORD' ? 420 : 410;
+          const pulseDamage = boss.archetype === 'SIEGEBREAKER' ? 220 : boss.archetype === 'SWARMLORD' ? 150 : 128;
           for (let i = 0; i < this.entities.length; i++) {
               const e = this.entities[i];
               if (e.isDead || (e.type !== EntityType.PLAYER && e.type !== EntityType.ENEMY && e.type !== EntityType.ELITE_TANK)) continue;
@@ -8714,21 +9522,21 @@ export class GameEngine {
           }
           this.particles.push(new Particle(boss.pos.x, boss.pos.y, boss.color, boss.radius * 0.55, 12, 'RING'));
           this.sound.playExplosion(true, this.getAudioSpatialOptions(boss.pos, true));
-          boss.pulseCooldown = boss.archetype === 'SIEGEBREAKER' ? 4.2 : boss.archetype === 'SWARMLORD' ? 5.0 : 4.6;
+          boss.pulseCooldown = boss.archetype === 'SIEGEBREAKER' ? 4.2 : boss.archetype === 'SWARMLORD' ? 5.0 : 6.2;
       }
 
       if (boss.summonCooldown <= 0) {
-          const spawnCount = boss.archetype === 'SWARMLORD' ? 4 : 2;
+          const spawnCount = boss.archetype === 'SWARMLORD' ? 4 : boss.archetype === 'SINGULARITY' ? 1 : 2;
           for (let i = 0; i < spawnCount; i++) {
               const a = (Math.PI * 2 * i) / spawnCount + Math.random() * 0.4;
               const r = boss.radius + 80 + Math.random() * 45;
               this.entities.push(new Crasher(this.nextId(), boss.pos.x + Math.cos(a) * r, boss.pos.y + Math.sin(a) * r, Math.random() < 0.22));
           }
-          boss.summonCooldown = boss.archetype === 'SWARMLORD' ? 6.8 : 9.5;
+          boss.summonCooldown = boss.archetype === 'SWARMLORD' ? 6.8 : boss.archetype === 'SINGULARITY' ? 10.8 : 9.5;
       }
 
       if (boss.volleyCooldown <= 0 && distance < 1200) {
-          const volleyCount = boss.archetype === 'SIEGEBREAKER' ? 6 : 4;
+          const volleyCount = boss.archetype === 'SIEGEBREAKER' ? 6 : boss.archetype === 'SINGULARITY' ? 3 : 4;
           for (let i = 0; i < volleyCount; i++) {
               const angle = Math.atan2(dir.y, dir.x) + (i - (volleyCount - 1) / 2) * (boss.archetype === 'SIEGEBREAKER' ? 0.14 : 0.22);
               const spawnPos = {
@@ -8742,8 +9550,8 @@ export class GameEngine {
               this.particles.push(new Particle(impactPos.x, impactPos.y, boss.color, 8, 16, 'FLASH'));
               this.particles.push(new Particle(impactPos.x, impactPos.y, boss.color, 12, 14, 'RING'));
 
-              const splash = boss.archetype === 'SIEGEBREAKER' ? 120 : 92;
-              const splashRadius = boss.archetype === 'SIEGEBREAKER' ? 120 : 95;
+              const splash = boss.archetype === 'SIEGEBREAKER' ? 120 : boss.archetype === 'SINGULARITY' ? 72 : 92;
+              const splashRadius = boss.archetype === 'SIEGEBREAKER' ? 120 : boss.archetype === 'SINGULARITY' ? 82 : 95;
               for (let j = 0; j < this.entities.length; j++) {
                   const maybe = this.entities[j];
                   if (maybe.isDead || (maybe.type !== EntityType.PLAYER && maybe.type !== EntityType.ENEMY && maybe.type !== EntityType.ELITE_TANK)) continue;
@@ -8752,7 +9560,7 @@ export class GameEngine {
               }
           }
           this.sound.playShoot(TankClass.DESTROYER, this.getAudioSpatialOptions(boss.pos, true));
-          boss.volleyCooldown = boss.archetype === 'SIEGEBREAKER' ? 3.1 : 3.9;
+          boss.volleyCooldown = boss.archetype === 'SIEGEBREAKER' ? 3.1 : boss.archetype === 'SINGULARITY' ? 5.1 : 3.9;
       }
   }
 
@@ -8963,7 +9771,7 @@ export class GameEngine {
       }
 
       elite.orbitPhase += dt * 0.9;
-      elite.acc = Vector.limit(steering, 3.35);
+      elite.acc = Vector.limit(steering, 2.35);
   }
 
   getInterceptPoint(shooterPos: Vector2, bulletSpeed: number, targetPos: Vector2, targetVel: Vector2): Vector2 {
@@ -9035,6 +9843,22 @@ export class GameEngine {
                   rarity: typeof s.rarity === 'string' ? s.rarity : undefined,
                   type: e.type === EntityType.BOSS ? 'BOSS' : e.type === EntityType.CRASHER ? 'CRASHER' : 'SHAPE',
               });
+              continue;
+          }
+
+          if (e.type === EntityType.VOID_PORTAL) {
+              const portal = e as VoidPortal;
+              players.push({
+                  id: portal.id,
+                  pos: portal.pos,
+                  vel: portal.vel || { x: 0, y: 0 },
+                  team: Team.NONE,
+                  isDead: portal.isDead,
+                  radius: portal.radius,
+                  isExit: portal.isExit,
+                  phase: portal.phase,
+                  type: 'VOID_PORTAL',
+              });
           }
       }
 
@@ -9042,7 +9866,7 @@ export class GameEngine {
   }
 
   updateBotAI(bot: Tank, dt: number) {
-      if (this.gameMode === GameMode.TEAMS) {
+      if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
           // In TDM, TDMAISystem is the single source of truth for bot intent.
           this.applyTankMovement(bot, bot.lastSteering || { x: 0, y: 0 });
 
@@ -9170,6 +9994,23 @@ export class GameEngine {
              entity.type === EntityType.MINI_TANK;
   }
 
+  private getTankKillXpReward(victim: Tank, killerTank: Tank | null): number {
+      const victimLevel = Math.max(1, Math.floor(victim.level || 1));
+      const killerLevel = Math.max(1, Math.floor(killerTank?.level || victimLevel));
+      const victimScore = Math.max(0, victim.score || 0);
+      const levelDelta = victimLevel - killerLevel;
+      const challengeMult = levelDelta >= 0
+        ? 1 + Math.min(0.55, levelDelta * 0.028)
+        : Math.max(0.8, 1 + levelDelta * 0.018);
+      const scoreComponent = Math.min(1200, Math.sqrt(victimScore) * 6.5);
+
+      let reward = (140 + victimLevel * 24 + scoreComponent) * challengeMult;
+      const isRebirthVictim = this.isBossClass(victim.classType) || (victim.isTransformed && this.isRebirthClass(victim.classType));
+      if (isRebirthVictim) reward *= 2.85;
+
+      return Math.max(isRebirthVictim ? 2400 : 320, Math.floor(reward));
+  }
+
   private awardDamageXpForVictim(attacker: Tank, victim: Entity, rawDamage: number, coefficient: number) {
       if (rawDamage <= 0) return;
       if (!this.isXpEligibleVictim(victim)) return;
@@ -9247,6 +10088,68 @@ export class GameEngine {
     if (classType === TankClass.TRIPLE_TWIN) return 26;
     if (classType === TankClass.SPREAD_SHOT) return 28;
     return 40;
+  }
+
+  private getDominionProjectileTuning(tank: DominionTank): { speed: number; damage: number; life: number; size: number; cooldown: number } {
+    switch (tank.weaponProfile) {
+      case 'DESTROYER':
+        return { speed: 0.74, damage: 0.7, life: 0.86, size: 0.92, cooldown: 1.42 };
+      case 'GUNNER':
+        return { speed: 0.88, damage: 0.76, life: 0.92, size: 0.88, cooldown: 1.08 };
+      case 'TRAPPER':
+        return { speed: 0.28, damage: 0.52, life: 3.8, size: 1.38, cooldown: 2.45 };
+      case 'TRIPLE':
+      default:
+        return { speed: 0.86, damage: 0.82, life: 0.95, size: 0.92, cooldown: 1.15 };
+    }
+  }
+
+  private fireDominionTrapShot(tank: DominionTank, idx: number, barrel: number[], baseReloadTimeMs: number): boolean {
+    if (tank.barrelCooldowns[idx] > 0 && !this.sandboxConfig.infiniteAmmo) return false;
+    const [length, width = 0.8, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
+    const tuning = this.getDominionProjectileTuning(tank);
+    const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread, tank.spread);
+    const forward = Vector.fromAngle(angle);
+    const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
+    const startPos = Vector.add(tank.pos, {
+      x: Math.cos(lateralAngle) * (yOff * tank.radius) + Math.cos(tank.rotation + angleOff) * (xOff * tank.radius),
+      y: Math.sin(lateralAngle) * (yOff * tank.radius) + Math.sin(tank.rotation + angleOff) * (xOff * tank.radius)
+    });
+    const tip = Vector.add(startPos, Vector.mult(forward, tank.radius * length));
+    const trap = new Bullet(
+      this.nextId(),
+      tip.x,
+      tip.y,
+      Vector.mult(forward, (BASE_STATS.bulletSpeed + tank.stats[StatType.BULLET_SPEED] * 0.8) * tuning.speed),
+      tank,
+      tuning.damage,
+      tuning.life,
+      Math.max(1.0, tuning.size * (width / 0.8)),
+      idx
+    );
+    trap.maxLifeTime = 8200;
+    trap.maxHealth *= 5.4;
+    trap.health = trap.maxHealth;
+    trap.displayHealth = trap.maxHealth;
+    trap.mass *= 3.8;
+    trap.friction = 0.994;
+    trap.damage *= 0.72;
+    this.entities.push(trap);
+
+    if (!this.sandboxConfig.infiniteAmmo) {
+      const cooldownVal = Math.max(210, baseReloadTimeMs * delayMultiplier * tuning.cooldown);
+      tank.barrelCooldowns[idx] = cooldownVal;
+      tank.barrelMaxCooldowns[idx] = cooldownVal;
+    }
+    tank.barrelHeat[idx] = 1.0;
+    tank.barrelRecoilOffsets[idx] = Math.max(tank.barrelRecoilOffsets[idx] || 0, 0.38);
+    tank.nextBarrelIndex++;
+
+    if (tank === this.player || this.isOnScreen(tank.pos)) {
+      this.particles.push(new Particle(tip.x, tip.y, 'rgba(250, 204, 21, 0.4)', tank.radius * 0.46, 10, 'FLASH'));
+      this.particles.push(new Particle(tip.x, tip.y, 'rgba(245, 158, 11, 0.24)', tank.radius * 0.88, 22, 'RING'));
+    }
+    return true;
   }
 
   attemptShoot(tank: Tank) {
@@ -9361,7 +10264,9 @@ export class GameEngine {
         }
     };
 
-    if (isHybrid) {
+    if (tank instanceof DominionTank && tank.weaponProfile === 'TRAPPER') {
+        shotFired = this.fireDominionTrapShot(tank, idx, barrel, baseReloadTimeMs);
+    } else if (isHybrid) {
         const mainBarrelIndex = 0;
         const droneBarrelIndex = 1;
         const mainReady = tank.barrelCooldowns[mainBarrelIndex] <= 0 || this.sandboxConfig.infiniteAmmo;
@@ -10000,6 +10905,14 @@ export class GameEngine {
         }
         else if (tank.classType === TankClass.STREAMLINER) { bulletDamageMult = 0.58; bulletSizeMult = 0.62; bulletSpeedMult = 1.95; bulletLifeMult = 1.08; }
 
+        if (tank instanceof DominionTank) {
+            const tuning = this.getDominionProjectileTuning(tank);
+            bulletSpeedMult *= tuning.speed;
+            bulletDamageMult *= tuning.damage;
+            bulletLifeMult *= tuning.life;
+            bulletSizeMult *= tuning.size;
+        }
+
         // EXCLUSION LOGIC: Only apply width scale to bullet properties if not a Destroyer, Annihilator, or Hybrid main gun.
         if (!isSpecialLarge) {
             bulletSizeMult *= widthScale;
@@ -10178,6 +11091,9 @@ export class GameEngine {
             baseReloadTimeMs * delayMultiplier * annihilatorReloadNerf
         );
         cooldownVal *= this.getSequentialCadenceMultiplier(tank.classType);
+        if (tank instanceof DominionTank) {
+            cooldownVal = Math.max(cooldownVal, baseReloadTimeMs * delayMultiplier * this.getDominionProjectileTuning(tank).cooldown);
+        }
         if (isMachineGun) {
             const spin = Math.min(1, tank.machineSpin);
             const heat = Math.min(1, tank.machineHeat);
@@ -10330,6 +11246,10 @@ export class GameEngine {
         effectiveSpeed *= tank.classType === TankClass.WARLORD && (tank as Tank).isSiegeMode ? 0.82 : 1;
       }
 
+      if (tank.type === EntityType.ELITE_TANK) {
+        effectiveSpeed = Math.min(effectiveSpeed, 1.95);
+      }
+
       if (isRamClass) {
         // Keep high-speed identity but cap extreme stack cases.
         effectiveSpeed = Math.min(effectiveSpeed, 8.6);
@@ -10402,12 +11322,12 @@ export class GameEngine {
   }
 
   private getSpawnPos(team: Team): Vector2 {
-    if (this.gameMode === GameMode.TEAMS) {
-        if (team === Team.BLUE) {
-            return { x: Vector.randomRange(100, BASE_ZONE_WIDTH - 100), y: Vector.randomRange(100, CANVAS_HEIGHT - 100) };
-        } else {
-            return { x: Vector.randomRange(CANVAS_WIDTH - BASE_ZONE_WIDTH + 100, CANVAS_WIDTH - 100), y: Vector.randomRange(100, CANVAS_HEIGHT - 100) };
-        }
+    const rect = this.getSafeZoneRect(team);
+    if (rect) {
+        return {
+            x: Vector.randomRange(rect.x + 100, rect.x + rect.w - 100),
+            y: Vector.randomRange(rect.y + 100, rect.y + rect.h - 100)
+        };
     }
     return Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
   }
@@ -10441,19 +11361,18 @@ export class GameEngine {
 
   spawnEnemy() {
       let pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT), team = Team.RED;
-      if (this.gameMode === GameMode.TEAMS) {
-          const blueTanks = this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && e.team === Team.BLUE).length;
-          const redTanks = this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && e.team === Team.RED).length;
-          
-          if (blueTanks < 40 && redTanks < 40) team = blueTanks <= redTanks ? Team.BLUE : Team.RED;
-          else if (blueTanks < 40) team = Team.BLUE; 
-          else if (redTanks < 40) team = Team.RED; 
-          else return;
-          
+      if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
+          const teams = this.gameMode === GameMode.DOMINION ? PLAYABLE_TEAMS : [Team.BLUE, Team.RED];
+          const counts = teams.map((activeTeam) => ({
+              team: activeTeam,
+              count: this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && e.team === activeTeam).length
+          })).sort((a, b) => a.count - b.count);
+          const chosen = counts[0];
+          if (!chosen || chosen.count >= 40) return;
+          team = chosen.team;
           pos = this.getSpawnPos(team);
-          // Add some scatter to spawn pos
           pos.x += Vector.randomRange(-150, 150);
-          pos.y += Vector.randomRange(-300, 300);
+          pos.y += Vector.randomRange(-150, 150);
       }
       
       const bot = new Tank(this.nextId(), pos.x, pos.y, false, team);
@@ -10480,9 +11399,11 @@ export class GameEngine {
         pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
         const roll = Math.random();
         if (roll < 0.014) type = ShapeType.OCTAGON; 
-        else if (roll < 0.045) type = ShapeType.HEXAGON; 
-        else if (roll < 0.14) type = ShapeType.PENTAGON; 
-        else if (roll < 0.58) type = ShapeType.TRIANGLE; 
+        else if (roll < 0.043) type = ShapeType.HEXAGON; 
+        else if (roll < 0.082) type = ShapeType.HEPTAGON;
+        else if (roll < 0.15) type = ShapeType.PENTAGON; 
+        else if (roll < 0.54) type = ShapeType.TRIANGLE; 
+        else if (roll < 0.76) type = ShapeType.DIAMOND;
         else type = ShapeType.SQUARE;
     } else if (this.gameMode !== GameMode.SANDBOX) {
         const zoneIndex = this.pickSpawnZoneIndex();
@@ -10495,17 +11416,21 @@ export class GameEngine {
         pos = { x: center.x + Math.cos(angle) * dist, y: center.y + Math.sin(angle) * dist };
         const roll = Math.random();
         if (roll < 0.018) type = ShapeType.OCTAGON; 
-        else if (roll < 0.06) type = ShapeType.HEXAGON; 
-        else if (roll < 0.22) type = ShapeType.PENTAGON; 
-        else if (roll < 0.74) type = ShapeType.TRIANGLE;
+        else if (roll < 0.058) type = ShapeType.HEXAGON; 
+        else if (roll < 0.11) type = ShapeType.HEPTAGON;
+        else if (roll < 0.23) type = ShapeType.PENTAGON; 
+        else if (roll < 0.67) type = ShapeType.TRIANGLE;
+        else if (roll < 0.84) type = ShapeType.DIAMOND;
         else type = ShapeType.SQUARE;
     } else {
         pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
         const roll = Math.random();
         if (roll < 0.002) type = ShapeType.OCTAGON; 
-        else if (roll < 0.009) type = ShapeType.HEXAGON; 
-        else if (roll < 0.03) type = ShapeType.PENTAGON; 
-        else if (roll < 0.47) type = ShapeType.TRIANGLE; 
+        else if (roll < 0.0085) type = ShapeType.HEXAGON; 
+        else if (roll < 0.016) type = ShapeType.HEPTAGON;
+        else if (roll < 0.031) type = ShapeType.PENTAGON; 
+        else if (roll < 0.43) type = ShapeType.TRIANGLE; 
+        else if (roll < 0.64) type = ShapeType.DIAMOND;
         else type = ShapeType.SQUARE;
     }
 
@@ -10607,14 +11532,43 @@ export class GameEngine {
                         const toPortal = Vector.sub(portal.pos, other.pos);
                         const distToCenter = Math.max(0.0001, Vector.mag(toPortal));
                         const dirToCenter = Vector.normalize(toPortal);
+                        const playerInside = other.id === this.player.id;
                         if (portal.isExit) {
                             other.vel = Vector.add(other.vel, Vector.mult(dirToCenter, 2.2));
-                            if (distToCenter < portal.radius * 0.5 && this.inVoid) this.transitionToDimension(false);
+                            if (distToCenter < portal.radius * 0.58 && this.inVoid) {
+                                const occKey = `${portal.id}:${other.id}`;
+                                const occMs = (this.portalCoreOccupancyMs.get(occKey) || 0) + (this.fixedSimulationStep * 1000);
+                                this.portalCoreOccupancyMs.set(occKey, occMs);
+                                if (playerInside && !this.pendingDimensionTransition) {
+                                    const stage = occMs < 170 ? 'LOCK' : 'EXTRACT';
+                                    this.setPlayerPortalStage(stage, occMs / 360);
+                                }
+                                if (occMs >= 170) {
+                                    this.notifyPortalStage(portal, 'EXTRACT');
+                                }
+                                if (occMs >= 360) {
+                                    const evacIds = this.entities
+                                      .filter(e =>
+                                        !e.isDead &&
+                                        (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) &&
+                                        Vector.dist(e.pos, portal.pos) < portal.radius * 1.22
+                                      )
+                                      .map(e => e.id);
+                                    if (evacIds.includes(this.player.id)) {
+                                        this.transitionToDimension(false, evacIds);
+                                    }
+                                }
+                            } else {
+                                const occKey = `${portal.id}:${other.id}`;
+                                const decayed = Math.max(0, (this.portalCoreOccupancyMs.get(occKey) || 0) - this.fixedSimulationStep * 1000 * 3.2);
+                                if (decayed <= 0) this.portalCoreOccupancyMs.delete(occKey);
+                                else this.portalCoreOccupancyMs.set(occKey, decayed);
+                            }
                         } else {
                             const blackHole = portal.phase === 'BLACK_HOLE';
                             const whiteHole = portal.phase === 'WHITE_HOLE' || portal.phase === 'EXPANDING';
-                            const outerRadius = portal.radius * (whiteHole ? 2.2 : 3.05);
-                            const coreRadius = portal.radius * 0.55;
+                            const outerRadius = portal.radius * (whiteHole ? 2.35 : 3.12);
+                            const coreRadius = portal.radius * 0.62;
                             if (distToCenter < outerRadius) {
                                 // Wormhole gravity model: proportional, directional inverse-distance pull.
                                 // Soft at perimeter, progressively stronger near the core, but still escapable.
@@ -10622,7 +11576,7 @@ export class GameEngine {
                                 const inverseSquare = 1 / (normDist * normDist);
                                 const radialWeight = Math.max(0, 1 - (distToCenter / outerRadius));
                                 const inwardForce = Math.min(1.22, (0.03 + inverseSquare * 0.042) * (0.45 + radialWeight * 0.95));
-                                const whiteHolePull = Math.min(1.45, inwardForce * 1.18 + radialWeight * 0.12);
+                                const whiteHolePull = Math.min(1.5, inwardForce * 1.24 + radialWeight * 0.18);
                                 const force = blackHole ? inwardForce : whiteHolePull;
                                 other.vel = Vector.add(other.vel, Vector.mult(dirToCenter, force));
                                 if (blackHole && Math.random() < (0.08 + radialWeight * 0.2)) {
@@ -10640,13 +11594,24 @@ export class GameEngine {
                                 const occKey = `${portal.id}:${other.id}`;
                                 const occMs = (this.portalCoreOccupancyMs.get(occKey) || 0) + (this.fixedSimulationStep * 1000);
                                 this.portalCoreOccupancyMs.set(occKey, occMs);
-                                if (occMs >= 1200 && portal.phase === 'BLACK_HOLE') {
+                                if (playerInside && !this.pendingDimensionTransition) {
+                                    const stage: VoidTransitStage =
+                                        occMs < 180 ? 'LOCK' :
+                                        occMs < 360 ? 'INVERT' :
+                                        occMs < 580 ? 'BREACH' :
+                                        'SHIFT';
+                                    this.setPlayerPortalStage(stage, occMs / 580);
+                                }
+                                if (occMs >= 180) {
+                                    this.notifyPortalStage(portal, 'LOCK');
+                                }
+                                if (occMs >= 360 && portal.phase === 'BLACK_HOLE') {
                                     portal.phase = 'WHITE_HOLE';
                                     portal.phaseTimerSec = Math.max(portal.phaseTimerSec, 60);
                                     this.particles.push(new Particle(portal.pos.x, portal.pos.y, 'rgba(210,245,255,0.85)', portal.radius * 0.9, 28, 'RING'));
-                                    this.addNotification("WORMHOLE INVERSION", "#d7f3ff");
+                                    this.notifyPortalStage(portal, 'INVERT');
                                 }
-                                if (portal.phase !== 'BLACK_HOLE' && occMs >= 450) {
+                                if (portal.phase !== 'BLACK_HOLE' && occMs >= 560) {
                                     let set = this.portalTransitQueuedIds.get(portal.id);
                                     if (!set) {
                                         set = new Set<number>();
@@ -10659,7 +11624,8 @@ export class GameEngine {
                                       Vector.dist(e.pos, portal.pos) < portal.radius * 1.1
                                     );
                                     for (const e of neighborCombatants) set.add(e.id);
-                                    if (!this.isTransitioning && set.size > 0) {
+                                    if (!this.isTransitioning && set.size > 0 && set.has(this.player.id)) {
+                                        this.notifyPortalStage(portal, 'BREACH');
                                         if (!portal.collapseTriggered) {
                                             portal.collapseTriggered = true;
                                             for (let burst = 0; burst < 42; burst++) {
@@ -10685,7 +11651,7 @@ export class GameEngine {
                     }
                     continue; 
                 }
-                if (this.gameMode === GameMode.TEAMS && a.team === b.team && a.team !== Team.NONE && !this.inVoid) {
+                if ((this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) && a.team === b.team && a.team !== Team.NONE && !this.inVoid) {
                     // Ignore collisions between teammates and teammate bullets/drones/minitanks
                     const aIsProjectile = a.type === EntityType.BULLET || a.type === EntityType.DRONE || a.type === EntityType.MINI_TANK || a.type === EntityType.BASE_DEFENSE_DRONE;
                     const bIsProjectile = b.type === EntityType.BULLET || b.type === EntityType.DRONE || b.type === EntityType.MINI_TANK || b.type === EntityType.BASE_DEFENSE_DRONE;
@@ -11087,6 +12053,11 @@ export class GameEngine {
       this.sound.playExplosion(victim.radius > 20, this.getAudioSpatialOptions(victim.pos, victim.radius > 20));
       if (this.isOnScreen(victim.pos)) { this.spawnParticles(victim.pos, victim.color, victim.radius > 20 ? 12 : 6, victim.radius / 5); }
 
+      if (victim.type === EntityType.DOMINION_TANK) {
+          this.handleDominionTankDefeat(victim as DominionTank);
+          return;
+      }
+
       const resolveTankOwner = (entity: Entity): Tank | null => {
           if (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY) return entity as Tank;
           if (entity.type === EntityType.BULLET) {
@@ -11211,8 +12182,8 @@ export class GameEngine {
             else if (killer.type === EntityType.MINI_TANK) killerName = `${(killer as MiniTank).owner.name}'s Unit`;
             this.addToKillFeed(killerName || 'Unknown', victim.name || 'Unknown');
       }
-      if (victim.type === EntityType.SHAPE || victim.type === EntityType.BOSS) {
-          const v = victim as (Shape | Boss);
+      if (victim.type === EntityType.SHAPE || victim.type === EntityType.BOSS || victim.type === EntityType.CRASHER) {
+          const v = victim as (Shape | Boss | Crasher);
           const totalXp = this.getObjectiveXpReward(v);
           let totalDmg = 0; 
           v.damageDealtBy.forEach(val => totalDmg += val);
@@ -11256,7 +12227,7 @@ export class GameEngine {
       }
       if (killerTank && !isFriendlySummonKill && this.isXpEligibleVictim(victim)) {
           const xp = (victim.type === EntityType.ENEMY || victim.type === EntityType.PLAYER)
-            ? ((victim as Tank).score / 2 || 500)
+            ? this.getTankKillXpReward(victim as Tank, killerTank)
             : 10;
           this.awardXP(killerTank, xp);
           if (killerTank === this.player) this.spawnScoreText(victim.pos, xp);
@@ -11330,16 +12301,19 @@ export class GameEngine {
       const rarityRank = getRarityRank(shape.rarity);
       const shapeWeight =
         shape.shapeType === ShapeType.OCTAGON ? 3.6 :
+        shape.shapeType === ShapeType.HEPTAGON ? 2.95 :
         shape.shapeType === ShapeType.HEXAGON ? 2.4 :
         shape.shapeType === ShapeType.PENTAGON ? 1.6 :
-        shape.shapeType === ShapeType.TRIANGLE ? 1.0 : 0.65;
+        shape.shapeType === ShapeType.TRIANGLE ? 1.0 :
+        shape.shapeType === ShapeType.DIAMOND ? 0.84 : 0.65;
       const rarityFactor = 1 + rarityRank * 1.35;
       const cap = Math.floor(base * shapeWeight * rarityFactor + shape.maxHealth * 0.045);
       return Math.max(1, Math.min(shape.xpValue, cap));
   }
 
-  private getObjectiveXpReward(victim: Shape | Boss): number {
+  private getObjectiveXpReward(victim: Shape | Boss | Crasher): number {
       if (victim instanceof Shape) return this.getShapeXpReward(victim);
+      if (victim instanceof Crasher) return Math.min(victim.xpValue, victim.isAlphaCrasher ? 1200 : 240);
       return Math.min(victim.xpValue, 75000);
   }
 
@@ -11700,6 +12674,9 @@ export class GameEngine {
       
       if (this.gameMode === GameMode.TEAMS && !this.inVoid) {
           this.drawTeamSafeZones(ctx);
+      } else if (this.gameMode === GameMode.DOMINION && !this.inVoid) {
+          this.drawDominionSafeZones(ctx);
+          this.drawDominionZoneFields(ctx);
       }
 
       ctx.strokeStyle = this.inVoid ? '#151515' : (this.darkMode ? '#222222' : COLORS.background); ctx.lineWidth = 1; ctx.beginPath();
@@ -11755,6 +12732,40 @@ export class GameEngine {
 
       drawZone(Team.BLUE, 0, BASE_ZONE_WIDTH, BASE_ZONE_WIDTH, 1);
       drawZone(Team.RED, CANVAS_WIDTH - BASE_ZONE_WIDTH, BASE_ZONE_WIDTH, CANVAS_WIDTH - BASE_ZONE_WIDTH, -1);
+  }
+
+  private drawDominionSafeZones(ctx: CanvasRenderingContext2D) {
+      const teams: Team[] = [Team.BLUE, Team.RED, Team.GREEN, Team.PURPLE];
+      for (const team of teams) {
+          const rect = this.getSafeZoneRect(team);
+          if (!rect) continue;
+          const baseColor = getTeamRgb(team);
+          ctx.save();
+          ctx.fillStyle = `rgba(${baseColor},0.08)`;
+          ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+          ctx.strokeStyle = `rgba(${baseColor},0.35)`;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+          ctx.restore();
+      }
+  }
+
+  private drawDominionZoneFields(ctx: CanvasRenderingContext2D) {
+      const pulse = 0.55 + Math.sin(Date.now() * 0.0038) * 0.45;
+      for (const zone of this.dominionZones) {
+          const rgb = getTeamRgb(zone.owner === Team.NONE ? Team.NONE : zone.owner);
+          ctx.save();
+          ctx.fillStyle = `rgba(${rgb},${zone.owner === Team.NONE ? 0.06 : 0.08 + pulse * 0.04})`;
+          ctx.beginPath();
+          ctx.arc(zone.pos.x, zone.pos.y, zone.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = `rgba(${rgb},${zone.contested ? 0.72 : 0.4 + pulse * 0.16})`;
+          ctx.lineWidth = zone.contested ? 5 : 3;
+          ctx.beginPath();
+          ctx.arc(zone.pos.x, zone.pos.y, zone.radius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+      }
   }
 
   private drawRebirthArea(ctx: CanvasRenderingContext2D) {

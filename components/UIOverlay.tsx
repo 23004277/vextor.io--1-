@@ -53,6 +53,22 @@ const formatDisplayName = (value: string | null | undefined): string => {
   return stripped || 'Unknown';
 };
 
+const getTeamAccent = (team: Team): string => {
+  if (team === Team.BLUE) return COLORS.player;
+  if (team === Team.RED) return COLORS.enemy;
+  if (team === Team.GREEN) return COLORS.allyGreen;
+  if (team === Team.PURPLE) return COLORS.allyPurple;
+  return COLORS.dominionNeutral;
+};
+
+const getTeamRowClass = (team: Team, isPlayer: boolean): string => {
+  if (team === Team.BLUE) return isPlayer ? 'bg-cyan-500/18 text-cyan-100' : 'bg-cyan-500/8 text-cyan-50';
+  if (team === Team.RED) return isPlayer ? 'bg-rose-500/18 text-rose-100' : 'bg-rose-500/8 text-rose-50';
+  if (team === Team.GREEN) return isPlayer ? 'bg-emerald-500/18 text-emerald-100' : 'bg-emerald-500/8 text-emerald-50';
+  if (team === Team.PURPLE) return isPlayer ? 'bg-violet-500/18 text-violet-100' : 'bg-violet-500/8 text-violet-50';
+  return isPlayer ? 'bg-cyan-500/12 text-cyan-200' : 'text-white/80';
+};
+
 const CLASS_CATEGORIES = [
     {
         name: "Assault",
@@ -141,7 +157,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     notifications, inVoid, voidTimeRemaining, isTransformed, transformationTime, 
     transformationReady, activeBuffs, minimapMarkers, sandboxConfig, primedSpawn, abilityHud,
     playerState, evolutionTransitionRemaining, bossChoices, enemyZoneWarningLevel, enemyZoneWarningText,
-    bloodDrainLive, bloodDrainStacks, bloodDrainSession, rebirthEligible
+    bloodDrainLive, bloodDrainStacks, bloodDrainSession, rebirthEligible, dominionScores, dominionOwnedCount, dominionTimeRemaining, dominionZones,
+    voidTransitStage, voidTransitProgress
   } = gameState;
 
   const [sandboxOpen, setSandboxOpen] = useState(false);
@@ -244,6 +261,27 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   }, [health, xpPercent]);
 
   const topFiveLeaderboard = useMemo(() => leaderboard.slice(0, 5), [leaderboard]);
+  const isTeamMode = gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION;
+  const dominionScoreRows = useMemo(() => {
+    if (gameMode !== GameMode.DOMINION) return [];
+    const teams = [Team.BLUE, Team.RED, Team.GREEN, Team.PURPLE];
+    return teams.map((team) => ({
+      team,
+      score: dominionScores?.[team] ?? 0,
+      owned: dominionOwnedCount?.[team] ?? 0,
+      accent: getTeamAccent(team),
+    })).sort((a, b) => b.score - a.score);
+  }, [dominionOwnedCount, dominionScores, gameMode]);
+  const dominionTimerLabel = useMemo(() => {
+    if (typeof dominionTimeRemaining !== 'number') return '--:--';
+    const total = Math.max(0, Math.floor(dominionTimeRemaining));
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }, [dominionTimeRemaining]);
+  const scoreLabelTone = level >= 150 ? 'text-amber-200' : level >= 90 ? 'text-cyan-100' : 'text-white';
+  const compactCurrentClass = String(currentClass || 'Basic Tank').replace(/\s+Tank$/i, '').trim();
+  const contestedDominionCount = dominionZones?.filter((zone) => zone.contested).length ?? 0;
 
   if (isDead) {
     return (
@@ -351,7 +389,6 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     : abilityHud?.id === 'sanguine_pact'
       ? Droplets
       : MousePointer2;
-  const isTeamMode = gameMode === GameMode.TEAMS;
 
   return (
     <div 
@@ -475,39 +512,41 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       )}
 
       {/* Top HUD */}
-      <div className="flex justify-between items-start w-full">
-        <div className="flex flex-col gap-4 pointer-events-none">
-             <div className="bg-black/60 px-3 py-1.5 rounded-lg text-white/80 font-mono text-xs font-bold backdrop-blur-md border border-white/10 shadow-lg w-fit pointer-events-auto">
+      <div className="flex justify-between items-start gap-4 w-full">
+        <div className="flex max-w-[248px] flex-col gap-3 pointer-events-none">
+             {settings.showFps && (
+             <div className="bg-black/55 px-3 py-1.5 rounded-lg text-white/80 font-mono text-xs font-bold backdrop-blur-md border border-white/10 shadow-lg w-fit pointer-events-auto">
                 FPS: <span className={fps < 30 ? 'text-red-400' : 'text-green-400'}>{fps}</span>
-            </div>
-            
-            {showStandardUpgrades && (
+             </div>
+             )}
+             
+             {showStandardUpgrades && (
                 <div 
                   key={`${currentClass}-${unlockableClasses.join('-')}`} 
-                  className="mt-2 animate-in slide-in-from-left-20 duration-500 ease-out fade-in pointer-events-auto"
+                  className="animate-in slide-in-from-left-20 duration-500 ease-out fade-in pointer-events-auto"
                 >
-                    <div className="relative overflow-hidden rounded-2xl border-[3px] border-cyan-400 bg-[#121212]/95 shadow-[0_0_40px_rgba(34,211,238,0.2)] backdrop-blur-xl w-[280px]">
-                        <div className="pt-4 pb-3 px-6 text-center border-b border-white/5 bg-cyan-400/5">
-                            <h3 className="text-cyan-400 font-black text-xl italic tracking-[0.15em]">EVOLUTION</h3>
-                            <p className="text-[8px] font-bold text-cyan-400/40 uppercase mt-0.5 tracking-widest">Select chassis upgrade</p>
+                    <div className="relative overflow-hidden rounded-2xl border border-cyan-400/30 bg-[#0b1119]/88 shadow-[0_12px_32px_rgba(0,0,0,0.32)] backdrop-blur-xl w-[248px]">
+                        <div className="pt-3 pb-2 px-4 text-left border-b border-white/5 bg-cyan-400/5">
+                            <h3 className="text-cyan-300 font-black text-sm uppercase tracking-[0.22em]">Evolution Ready</h3>
+                            <p className="text-[8px] font-bold text-cyan-200/35 uppercase mt-1 tracking-[0.18em]">Select next chassis</p>
                         </div>
-                        <div className="p-4 grid grid-cols-2 gap-3">
+                        <div className="p-3 grid grid-cols-2 gap-2.5">
                             {unlockableClasses.map((cls) => (
                                 <button 
                                   key={cls} 
                                   onClick={() => handleClassSelection(cls as TankClass)} 
                                   onMouseEnter={playHover} 
-                                  className="group flex flex-col items-center justify-between aspect-square rounded-xl bg-[#1e1e1e] border-2 border-[#333] hover:border-cyan-400 hover:bg-cyan-950/20 hover:scale-[1.03] active:scale-95 transition-all shadow-lg"
+                                  className="group flex flex-col items-center justify-between aspect-square rounded-xl bg-[#16202a]/88 border border-white/10 hover:border-cyan-400 hover:bg-cyan-950/20 hover:scale-[1.02] active:scale-95 transition-all shadow-lg"
                                 >
-                                    <div className="flex-1 flex items-center justify-center transform group-hover:scale-110 transition-transform pb-4 pt-2">
+                                    <div className="flex-1 flex items-center justify-center transform group-hover:scale-105 transition-transform pb-2 pt-2">
                                         <TankPreview
                                           key={`${SANDBOX_RESEARCH_ICON_REV}-evo-${cls}`}
                                           tankClass={resolvePreviewClass(cls as TankClass)}
-                                          size={54}
+                                          size={48}
                                         /> 
                                     </div>
                                     <div className="w-full text-center pb-2 bg-black/20 group-hover:bg-cyan-400/10 transition-colors">
-                                        <span className="block text-[9px] font-black text-gray-500 group-hover:text-cyan-200 uppercase tracking-wider">{cls.replace(' Tank', '')}</span>
+                                        <span className="block text-[8px] font-black text-gray-400 group-hover:text-cyan-200 uppercase tracking-[0.12em] px-1">{cls.replace(' Tank', '')}</span>
                                     </div>
                                 </button>
                             ))}
@@ -517,8 +556,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             )}
         </div>
 
-        <div className="flex flex-col items-end gap-3 pointer-events-auto">
-             <div className="flex items-center gap-2">
+        <div className="flex w-[244px] flex-col items-stretch gap-3 pointer-events-auto">
+             <div className="flex items-center justify-end gap-2">
                 {gameMode === GameMode.SANDBOX && (
                     <motion.button 
                         onClick={() => {
@@ -549,10 +588,33 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 </motion.button>
              </div>
 
-             <div className="w-[260px] rounded-2xl border border-cyan-400/20 bg-[#040913]/88 backdrop-blur-xl overflow-hidden shadow-[0_20px_45px_rgba(0,0,0,0.55)]">
-                 <div className="px-3 py-2 border-b border-white/10 bg-cyan-500/[0.05] flex items-center justify-between">
-                   <span className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-200/80">Leaderboard</span>
-                   <span className="text-[9px] font-bold uppercase tracking-wider text-white/35">Live</span>
+             {gameMode === GameMode.DOMINION && (
+                <div className="w-full rounded-2xl border border-amber-400/20 bg-[#0b0913]/84 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
+                  <div className="px-3 py-2 border-b border-white/10 bg-amber-500/[0.06] flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-amber-200/85">Dominion</span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-white/50">{dominionTimerLabel}</span>
+                  </div>
+                  <div className="px-3 py-2 border-b border-white/5 text-[9px] font-bold uppercase tracking-[0.16em] text-white/45">
+                    {contestedDominionCount ? `${contestedDominionCount} active contest${contestedDominionCount > 1 ? 's' : ''}` : 'Secure or contest control points'}
+                  </div>
+                 <div className="flex flex-col">
+                   {dominionScoreRows.map((row) => (
+                     <div key={row.team} className="grid grid-cols-[18px_1fr_auto_auto] items-center gap-2 px-3 py-2 text-xs border-b border-white/5">
+                       <span className="w-2.5 h-2.5 rounded-full" style={{ background: row.accent, boxShadow: `0 0 10px ${row.accent}` }} />
+                       <span className="font-black uppercase tracking-[0.14em] text-white/85">{row.team}</span>
+                       <span className="text-[10px] font-black text-white/55">{row.owned} held</span>
+                       <span className="font-mono text-[11px] text-white/82">{row.score}</span>
+                     </div>
+                   ))}
+                 </div>
+               </div>
+             )}
+
+             {settings.showLeaderboard && gameMode !== GameMode.DOMINION && (
+             <div className="w-full rounded-2xl border border-cyan-400/16 bg-[#040913]/84 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
+                  <div className="px-3 py-2 border-b border-white/10 bg-cyan-500/[0.05] flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-200/80">Leaderboard</span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-white/35">Live</span>
                  </div>
                  <div className="flex flex-col">
                      {topFiveLeaderboard.map((entry, i) => (
@@ -560,11 +622,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                            const entryTeam = entry.teamId ?? entry.team;
                            const rowClass = !isTeamMode
                              ? (entry.isPlayer ? 'bg-cyan-500/12 text-cyan-200' : 'text-white/80')
-                             : entryTeam === Team.BLUE
-                               ? (entry.isPlayer ? 'bg-cyan-500/18 text-cyan-100' : 'bg-cyan-500/8 text-cyan-50')
-                               : entryTeam === Team.RED
-                                 ? (entry.isPlayer ? 'bg-rose-500/18 text-rose-100' : 'bg-rose-500/8 text-rose-50')
-                                 : (entry.isPlayer ? 'bg-cyan-500/12 text-cyan-200' : 'text-white/80');
+                             : getTeamRowClass(entryTeam, entry.isPlayer);
                            const iconClass = entry.currentClass ?? entry.classType;
                            return (
                          <div
@@ -581,38 +639,28 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                            );
                          })()
                       ))}
-                 </div>
-             </div>
-
-             <div className="relative w-[176px] h-[176px] rounded-2xl overflow-hidden bg-black/70 border border-cyan-400/25 shadow-[0_0_0_1px_rgba(34,211,238,0.12),0_18px_40px_rgba(0,0,0,0.6)]">
-                 <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_50%_8%,rgba(34,211,238,0.14),transparent_60%)]" />
-                 <div className="absolute inset-x-0 top-0 h-7 z-10 flex items-center justify-between px-2.5 border-b border-white/10 bg-black/45">
-                   <span className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200/80">Tactical Map</span>
-                   <span className="text-[9px] font-bold text-white/40">x1</span>
-                 </div>
-                 <div className="absolute inset-[10px] top-[36px] rounded-lg overflow-hidden border border-white/10">
-                   <TacticalMinimap markers={minimapMarkers} mapSize={mapSize} camera={camera} inVoid={inVoid} gameMode={gameState.gameMode} />
-                 </div>
-             </div>
+                  </div>
+              </div>
+              )}
 
              {abilityHud && (
-               <div className={`w-[176px] rounded-xl border backdrop-blur-md px-2.5 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.42)] ${
+               <div className={`w-full rounded-2xl border backdrop-blur-md px-3 py-2.5 shadow-[0_12px_28px_rgba(0,0,0,0.35)] ${
                  abilityHud.active
-                   ? 'border-emerald-300/30 bg-emerald-950/35'
+                   ? 'border-emerald-300/28 bg-emerald-950/28'
                    : abilityReady
-                     ? 'border-cyan-300/30 bg-cyan-950/35'
-                     : 'border-white/15 bg-black/60'
+                     ? 'border-cyan-300/24 bg-cyan-950/24'
+                     : 'border-white/12 bg-black/55'
                }`}>
                  <div className="flex items-center justify-between gap-2">
                    <div className="flex items-center gap-2 min-w-0">
-                     <div className={`w-6 h-6 rounded-md border flex items-center justify-center shrink-0 ${
+                     <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
                        abilityHud.active ? 'border-emerald-300/35 bg-emerald-400/12' : abilityReady ? 'border-cyan-300/30 bg-cyan-400/10' : 'border-white/20 bg-white/5'
                      }`}>
-                       {React.createElement(abilityIcon, { className: `w-3.5 h-3.5 ${abilityHud.active ? 'text-emerald-300' : abilityReady ? 'text-cyan-300' : 'text-amber-300'}` })}
+                       {React.createElement(abilityIcon, { className: `w-4 h-4 ${abilityHud.active ? 'text-emerald-300' : abilityReady ? 'text-cyan-300' : 'text-amber-300'}` })}
                      </div>
                      <div className="min-w-0">
-                       <div className="text-[9px] font-black uppercase tracking-[0.12em] text-white/85 truncate">{abilityHud.name}</div>
-                       <div className="text-[8px] font-bold uppercase tracking-[0.16em] text-white/50 truncate">{abilityHud.trigger}</div>
+                       <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/90 truncate">{abilityHud.name}</div>
+                       <div className="text-[8px] font-bold uppercase tracking-[0.16em] text-white/45 truncate">{abilityHud.trigger}</div>
                      </div>
                    </div>
                    <span className={`text-[8px] font-black uppercase tracking-[0.14em] shrink-0 ${
@@ -631,8 +679,21 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                  </div>
                </div>
              )}
-         </div>
-      </div>
+
+             {settings.showMinimap && (
+             <div className={`relative w-full overflow-hidden bg-black/70 border border-cyan-400/18 shadow-[0_0_0_1px_rgba(34,211,238,0.1),0_18px_40px_rgba(0,0,0,0.44)] ${gameMode === GameMode.DOMINION ? 'aspect-[0.88]' : 'aspect-square'} rounded-2xl`}>
+                  <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_50%_8%,rgba(34,211,238,0.14),transparent_60%)]" />
+                  <div className="absolute inset-x-0 top-0 h-7 z-10 flex items-center justify-between px-2.5 border-b border-white/10 bg-black/45">
+                    <span className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200/80">Tactical Map</span>
+                    <span className="text-[9px] font-bold text-white/40">{gameMode === GameMode.DOMINION ? 'priority' : 'x1'}</span>
+                  </div>
+                  <div className="absolute inset-[10px] top-[36px] rounded-lg overflow-hidden border border-white/10">
+                    <TacticalMinimap markers={minimapMarkers} mapSize={mapSize} camera={camera} inVoid={inVoid} gameMode={gameState.gameMode} />
+                  </div>
+               </div>
+              )}
+          </div>
+       </div>
 
       {/* Sandbox Command Panel */}
       <AnimatePresence>
@@ -1036,15 +1097,15 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
         
       {/* stat menu remastered: more compact horizontal-ish layout or smaller vertical stack */}
       <div className={`
-        absolute bottom-6 left-6 w-[280px] pointer-events-auto transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]
+        absolute bottom-5 left-4 w-[252px] pointer-events-auto transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]
         ${showStatUpgradeUI ? 'translate-y-0 opacity-100' : 'translate-y-12 opacity-0 pointer-events-none'}
       `}>
-         <div className="bg-[#0a0a0a]/90 backdrop-blur-3xl p-4 rounded-[1.5rem] border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] relative overflow-hidden group/stats">
+         <div className="bg-[#0a0f15]/84 backdrop-blur-3xl p-3 rounded-[1.35rem] border border-white/10 shadow-[0_18px_42px_rgba(0,0,0,0.42)] relative overflow-hidden group/stats">
              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-500 opacity-50 group-hover/stats:opacity-100 transition-opacity"></div>
              
              <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5 px-1">
                   <div className="flex flex-col">
-                    <span className="text-white font-black text-[10px] uppercase tracking-[0.2em] italic">Tactical_Upgrade</span>
+                    <span className="text-white font-black text-[10px] uppercase tracking-[0.18em]">Upgrade Bay</span>
                   </div>
                   {availableStatPoints > 0 && (
                     <div className="flex items-center gap-1.5 bg-cyan-500/10 px-2 py-0.5 rounded-lg border border-cyan-500/20">
@@ -1056,7 +1117,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                   )}
              </div>
 
-             <div className="grid grid-cols-1 gap-1">
+              <div className="grid grid-cols-1 gap-1">
              {currentStatOrder.map((stat, idx) => {
                const currentVal = stats[stat];
                const isMaxed = currentVal >= 8;
@@ -1073,7 +1134,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                  <div 
                   key={stat} 
                   className={`
-                    group flex items-center gap-2 rounded-lg py-1 px-2 transition-all duration-200 border
+                     group flex items-center gap-2 rounded-lg py-1 px-2 transition-all duration-200 border
                     ${canUpgrade 
                       ? 'bg-white/5 border-transparent hover:border-cyan-500/40 hover:bg-white/10 cursor-pointer' 
                       : 'bg-transparent border-transparent opacity-60'}
@@ -1093,7 +1154,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
 
                    <div className="flex flex-col flex-1 min-w-0">
                       <div className="flex justify-between items-center mb-0.5">
-                        <span className={`text-[8px] font-black uppercase tracking-wider truncate leading-none ${canUpgrade ? 'text-white' : 'text-white/40'}`}>
+                        <span className={`text-[8px] font-black uppercase tracking-[0.1em] truncate leading-none ${canUpgrade ? 'text-white' : 'text-white/40'}`}>
                           {displayLabel}
                         </span>
                         <span className={`text-[7px] font-mono font-bold ${isMaxed ? 'text-yellow-500' : 'text-white/20'}`}>
@@ -1124,26 +1185,64 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       </div>
 
         {/* Center HUD */}
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-[40%] max-w-2xl flex flex-col items-center pointer-events-auto">
-            <div className="mb-2 text-center">
-               <div className="text-4xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] tracking-tighter leading-none">{scoreLabel}</div>
-               <div className="text-[10px] font-black text-white/60 uppercase tracking-[0.2em] mt-2">Lvl {level} {currentClass}</div>
-               {isDrainingClass && (
-                 <div className="mt-2 inline-flex items-center gap-2 rounded-lg border border-rose-400/35 bg-black/55 px-2.5 py-1.5">
-                   <span className="text-[9px] font-black uppercase tracking-[0.14em] text-rose-200/90">Drain</span>
-                   <span className="text-[10px] font-black text-rose-300">{formatScoreValue(liveDrainValue, settings.compactScoreNotation)}</span>
-                   <span className="text-[9px] font-black text-amber-300">x{liveDrainStacks}</span>
-                   <span className="text-[9px] font-bold text-white/55">Session {formatScoreValue(sessionDrainValue, settings.compactScoreNotation)}</span>
-                 </div>
-               )}
-             </div>
-            <div className="w-full h-4 mb-1.5 bg-black/60 rounded-full border border-gray-600/50 relative shadow-lg overflow-hidden group">
-                <div className={`h-full transition-all duration-75 ease-out relative ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / maxHealth) * 100)}%` }} />
-                <div className="absolute inset-0 flex items-center justify-center text-[9px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] z-10 tracking-wider">{Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}</div>
-            </div>
-            <div className="w-full h-4 bg-black/60 rounded-full border border-gray-600/50 relative shadow-xl overflow-hidden group">
-               <div className="h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-75 ease-out relative" style={{ width: `${displayXpPercent}%` }}></div>
-               <div className="absolute inset-0 flex items-center justify-center text-[9px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] z-10 tracking-wider"><span>{Math.floor(displayXpPercent)}%</span></div>
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[min(460px,42vw)] flex flex-col items-center pointer-events-auto">
+            {voidTransitStage && (
+              <div className="mb-2 w-full rounded-2xl border border-violet-300/22 bg-[#0b0816]/72 backdrop-blur-xl px-3.5 py-2 shadow-[0_12px_28px_rgba(0,0,0,0.28)]">
+                <div className="flex items-center justify-between gap-3 text-[8px] font-black uppercase tracking-[0.2em] text-violet-100/82">
+                  <span>{voidTransitStage}</span>
+                  <span>{Math.round((voidTransitProgress || 0) * 100)}%</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full border border-violet-300/12 bg-black/45">
+                  <div
+                    className="h-full bg-gradient-to-r from-violet-400 via-cyan-300 to-white transition-all duration-100 ease-out"
+                    style={{ width: `${Math.max(0, Math.min(100, (voidTransitProgress || 0) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="w-full rounded-[1.4rem] border border-white/8 bg-[#070d13]/68 backdrop-blur-xl shadow-[0_14px_28px_rgba(0,0,0,0.28)] px-4 py-3">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="min-w-0">
+                  <div className="text-[8px] font-black uppercase tracking-[0.24em] text-cyan-300/55">Combat Telemetry</div>
+                  <div className={`text-[28px] font-black tracking-tight leading-none mt-1 ${scoreLabelTone}`}>{scoreLabel}</div>
+                  <div className="mt-1 text-[9px] font-black text-white/50 uppercase tracking-[0.16em]">Lvl {level} {compactCurrentClass}</div>
+                </div>
+                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                  {availableStatPoints > 0 && (
+                    <div className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/18 bg-cyan-500/6 px-2.5 py-1">
+                      <span className="text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/70">Points</span>
+                      <span className="text-[12px] font-black text-cyan-300">{availableStatPoints}</span>
+                    </div>
+                  )}
+                  {isDrainingClass && (
+                    <div className="inline-flex items-center gap-2 rounded-xl border border-rose-400/24 bg-rose-950/20 px-2.5 py-1">
+                      <span className="text-[8px] font-black uppercase tracking-[0.16em] text-rose-200/85">Drain</span>
+                      <span className="text-[9px] font-black text-rose-300">{formatScoreValue(liveDrainValue, settings.compactScoreNotation)}</span>
+                      <span className="text-[8px] font-black text-amber-300">x{liveDrainStacks}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-[7px] font-black uppercase tracking-[0.16em] text-white/42">
+                    <span>Hull Integrity</span>
+                    <span>{Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-black/50 rounded-full border border-gray-600/35 relative shadow-lg overflow-hidden">
+                      <div className={`h-full transition-all duration-75 ease-out relative ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / maxHealth) * 100)}%` }} />
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-[7px] font-black uppercase tracking-[0.16em] text-white/42">
+                    <span>Experience</span>
+                    <span>{Math.floor(displayXpPercent)}%</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-black/50 rounded-full border border-gray-600/35 relative shadow-xl overflow-hidden">
+                     <div className="h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-75 ease-out relative" style={{ width: `${displayXpPercent}%` }}></div>
+                  </div>
+                </div>
+              </div>
             </div>
         </div>
       </div>

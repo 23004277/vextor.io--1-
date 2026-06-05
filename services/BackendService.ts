@@ -55,6 +55,7 @@ const SHOP_ITEM_IDS = new Set(SHOP_ITEMS.map((item) => item.id));
 const TANK_CLASS_VALUES = new Set(Object.values(TankClass) as TankClass[]);
 const SECURITY_LOG_KEY = 'vextor_security_log';
 const RATE_LIMIT_STATE_KEY = 'vextor_rate_limit_state';
+const SCORE_GUARD_KEY = 'vextor_score_guard';
 const OPERATION_COOLDOWNS_MS = {
   stats: 1800,
   purchase: 700,
@@ -76,12 +77,17 @@ const RATE_LIMIT_RULES = {
   callsign: { maxEvents: 3, windowMs: 60_000, penaltyMs: 180_000 },
 } as const;
 const MAX_SESSION_SCORE = 25_000_000;
-const MAX_SESSION_LEVEL = 100;
+const MAX_SESSION_LEVEL = 200;
 const MAX_SESSION_KILLS = 5_000;
 const MAX_SESSION_ELITE_KILLS = 250;
 const MAX_SESSION_TRANSFORMATIONS = 50;
 const MAX_SESSION_ELITE_DAMAGE = 25_000_000;
+const MAX_SUPPORT_CONTRIBUTION = 100;
+const MAX_ACCOUNT_CURRENCY = 25_000_000;
+const MAX_SUPPORT_TOTAL = 10_000_000;
 const MAX_TOTAL_CURRENCY_REWARD = 500_000;
+const SCORE_GUARD_WINDOW_MS = 10 * 60_000;
+const SCORE_GUARD_HISTORY_LIMIT = 12;
 const operationWindows = new Map<string, number>();
 const rateLimitMemory = new Map<string, { hits: number[]; blockedUntil: number }>();
 
@@ -321,15 +327,25 @@ function sanitizeInventory(inventory: unknown): string[] {
 }
 
 function sanitizeSessionStats(gameData: Partial<UserStats>): Partial<UserStats> {
+  const totalGames = clampInt(gameData.totalGames, 0, 1, 0);
+  const totalScore = clampInt(gameData.totalScore, 0, MAX_SESSION_SCORE, 0);
+  const totalKills = clampInt(gameData.totalKills, 0, MAX_SESSION_KILLS, 0);
+  const eliteKills = clampInt(gameData.eliteKills, 0, Math.min(MAX_SESSION_ELITE_KILLS, totalKills), 0);
+  const transformations = clampInt(
+    gameData.transformations,
+    0,
+    totalGames > 0 ? Math.min(MAX_SESSION_TRANSFORMATIONS, 2) : 0,
+    0
+  );
   return {
-    totalGames: clampInt(gameData.totalGames, 0, 1, 0),
-    totalScore: clampInt(gameData.totalScore, 0, MAX_SESSION_SCORE, 0),
-    highScore: clampInt(gameData.highScore, 0, MAX_SESSION_SCORE, 0),
+    totalGames,
+    totalScore,
+    highScore: clampInt(gameData.highScore, 0, totalScore || MAX_SESSION_SCORE, 0),
     maxLevel: clampInt(gameData.maxLevel, 1, MAX_SESSION_LEVEL, 1),
-    totalKills: clampInt(gameData.totalKills, 0, MAX_SESSION_KILLS, 0),
-    totalDeaths: clampInt(gameData.totalDeaths, 0, 1, 0),
-    eliteKills: clampInt(gameData.eliteKills, 0, MAX_SESSION_ELITE_KILLS, 0),
-    transformations: clampInt(gameData.transformations, 0, MAX_SESSION_TRANSFORMATIONS, 0),
+    totalKills,
+    totalDeaths: clampInt(gameData.totalDeaths, 0, totalGames > 0 ? 1 : 0, 0),
+    eliteKills,
+    transformations,
     highestEliteDamage: clampInt(gameData.highestEliteDamage, 0, MAX_SESSION_ELITE_DAMAGE, 0),
   };
 }
@@ -339,6 +355,74 @@ function deriveCurrencyRewardFromSession(gameData: Partial<UserStats>): number {
   const killReward = (gameData.totalKills || 0) * 10;
   const eliteReward = (gameData.eliteKills || 0) * 100;
   return clampInt(scoreReward + killReward + eliteReward, 0, MAX_TOTAL_CURRENCY_REWARD, 0);
+}
+
+function describeSessionAnomalies(rawGameData: Partial<UserStats>, sanitizedSession: Partial<UserStats>): string[] {
+  const issues: string[] = [];
+  if ((rawGameData.totalGames || 0) > 1) issues.push('multi_game_payload');
+  if ((rawGameData.totalDeaths || 0) > 1) issues.push('multi_death_payload');
+  if ((rawGameData.highScore || 0) > (sanitizedSession.totalScore || 0) && (sanitizedSession.totalScore || 0) > 0) issues.push('high_score_exceeds_session_score');
+  if ((rawGameData.eliteKills || 0) > (rawGameData.totalKills || 0)) issues.push('elite_kills_exceed_total_kills');
+  if ((rawGameData.transformations || 0) > 2) issues.push('excess_transformations');
+  return issues;
+}
+
+type ScoreGuardEntry = {
+  actorId: string;
+  signature: string;
+  at: number;
+};
+
+function loadScoreGuardEntries(): ScoreGuardEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(SCORE_GUARD_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const now = Date.now();
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((entry): entry is ScoreGuardEntry =>
+        !!entry &&
+        typeof entry.actorId === 'string' &&
+        typeof entry.signature === 'string' &&
+        typeof entry.at === 'number' &&
+        Number.isFinite(entry.at) &&
+        entry.at > now - SCORE_GUARD_WINDOW_MS
+      )
+      .slice(-SCORE_GUARD_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function persistScoreGuardEntries(entries: ScoreGuardEntry[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(SCORE_GUARD_KEY, JSON.stringify(entries.slice(-SCORE_GUARD_HISTORY_LIMIT)));
+  } catch {
+    // Ignore local persistence failures.
+  }
+}
+
+function buildScoreSubmissionSignature(actorId: string, score: number, level: number, classType: TankClass): string {
+  return `${actorId}|${score}|${level}|${classType}`;
+}
+
+function shouldBlockDuplicateScoreSubmission(actorId: string, score: number, level: number, classType: TankClass): boolean {
+  const entries = loadScoreGuardEntries();
+  const signature = buildScoreSubmissionSignature(actorId, score, level, classType);
+  return entries.some((entry) => entry.actorId === actorId && entry.signature === signature);
+}
+
+function rememberScoreSubmission(actorId: string, score: number, level: number, classType: TankClass): void {
+  const entries = loadScoreGuardEntries();
+  entries.push({
+    actorId,
+    signature: buildScoreSubmissionSignature(actorId, score, level, classType),
+    at: Date.now(),
+  });
+  persistScoreGuardEntries(entries);
 }
 
 function mapFirebaseAuthError(err: any): string {
@@ -770,6 +854,21 @@ export class BackendService {
 
     const sanitizedSession = sanitizeSessionStats(gameData);
     const sanitizedUnlocks = sanitizeUnlockedEliteSkins(unlockedSkins);
+    const sessionAnomalies = describeSessionAnomalies(gameData, sanitizedSession);
+    if (sessionAnomalies.length > 0) {
+      logSecurityEvent('stats_implausible_session', {
+        uid: currentUser.uid,
+        anomalies: sessionAnomalies,
+        raw: {
+          totalGames: gameData.totalGames || 0,
+          totalScore: gameData.totalScore || 0,
+          highScore: gameData.highScore || 0,
+          totalKills: gameData.totalKills || 0,
+          eliteKills: gameData.eliteKills || 0,
+          transformations: gameData.transformations || 0,
+        }
+      });
+    }
     const expectedReward = deriveCurrencyRewardFromSession(sanitizedSession);
     const requestedReward = clampInt(currencyReward, 0, MAX_TOTAL_CURRENCY_REWARD, 0);
     if (requestedReward !== expectedReward) {
@@ -851,7 +950,10 @@ export class BackendService {
     const achievementBonus = newlyUnlocked.reduce((sum, a) => sum + (a.rewardCurrency || 0), 0);
     const questBonus = newlyUnlockedQuests.reduce((sum, q) => sum + (q.rewardCurrency || 0), 0);
     const totalReward = clampInt(expectedReward + achievementBonus + questBonus, 0, MAX_TOTAL_CURRENCY_REWARD, 0);
-    const nextCurrency = (user.currency || 0) + totalReward;
+    const nextCurrency = clampInt((user.currency || 0) + totalReward, 0, MAX_ACCOUNT_CURRENCY, 0);
+    if (nextCurrency >= MAX_ACCOUNT_CURRENCY && (user.currency || 0) + totalReward > MAX_ACCOUNT_CURRENCY) {
+      logSecurityEvent('currency_cap_reached', { uid: currentUser.uid, previousCurrency: user.currency || 0, attemptedReward: totalReward });
+    }
 
     const nextUnlockedEliteSkins = [...(user.unlockedEliteSkins || [])];
     for (const skin of sanitizedUnlocks) {
@@ -907,7 +1009,10 @@ export class BackendService {
     const normalizedItemId = typeof itemId === 'string' ? itemId.trim() : '';
     const item = SHOP_ITEMS.find(i => i.id === normalizedItemId);
 
-    if (!item) return { success: false, error: 'Item configuration not found' };
+    if (!item) {
+      logSecurityEvent('purchase_invalid_item', { uid: currentUser.uid, itemId: normalizedItemId || itemId });
+      return { success: false, error: 'Item configuration not found' };
+    }
     if (item.isAchievementReward) return { success: false, error: 'Reward skins unlock through gameplay only' };
     if (item.type === 'elite_skin') return { success: false, error: 'Elite variants unlock through gameplay only' };
     user.inventory = sanitizeInventory(user.inventory);
@@ -958,6 +1063,11 @@ export class BackendService {
     const user = this.migrateUser(userDoc!.data(), currentUser.uid);
     const normalizedItemId = typeof itemId === 'string' ? itemId.trim() : '';
     user.inventory = sanitizeInventory(user.inventory);
+    const isKnownItem = SHOP_ITEM_IDS.has(normalizedItemId) || eliteSkinIdToClass(normalizedItemId) !== null;
+    if (!isKnownItem) {
+      logSecurityEvent('equip_invalid_item', { uid: currentUser.uid, itemId: normalizedItemId || itemId });
+      return { success: false, error: 'Equipment record not found' };
+    }
 
     const eliteClass = eliteSkinIdToClass(normalizedItemId);
     const hasEliteUnlock = eliteClass ? (user.unlockedEliteSkins || []).includes(eliteClass) : false;
@@ -1003,13 +1113,24 @@ export class BackendService {
       return { success: false, error: rateLimitMessage(supportBurst.retryAfterMs, 'Support uplink is cooling down.') };
     }
     if (!beginOperationWindow('support', currentUser.uid)) return { success: false, error: 'Support uplink cooling down' };
-    const normalized = Math.max(1, Math.floor(amount || 0));
+    const requestedAmount = typeof amount === 'number' && Number.isFinite(amount) ? Math.floor(amount) : 0;
+    if (requestedAmount < 1) {
+      logSecurityEvent('support_invalid_amount', { uid: currentUser.uid, amount });
+      return { success: false, error: 'Support amount must be positive' };
+    }
+    const normalized = clampInt(requestedAmount, 1, MAX_SUPPORT_CONTRIBUTION, 1);
+    if (requestedAmount !== normalized) {
+      logSecurityEvent('support_amount_clamped', { uid: currentUser.uid, requestedAmount, normalized });
+    }
     const userDocRef = doc(db, 'users', currentUser.uid);
     try {
       const snap = await getDoc(userDocRef);
       if (!snap.exists()) return { success: false, error: 'Pilot record not found' };
       const user = this.migrateUser(snap.data(), currentUser.uid);
-      const nextTotal = Math.max(0, (user.supportTotal || 0) + normalized);
+      const nextTotal = clampInt((user.supportTotal || 0) + normalized, 0, MAX_SUPPORT_TOTAL, 0);
+      if ((user.supportTotal || 0) + normalized > MAX_SUPPORT_TOTAL) {
+        logSecurityEvent('support_total_cap_reached', { uid: currentUser.uid, previousTotal: user.supportTotal || 0, normalized });
+      }
       await updateDoc(userDocRef, { supportTotal: nextTotal });
       user.supportTotal = nextTotal;
       user.supporterRank = await this.getSupporterRank(currentUser.uid);
@@ -1076,7 +1197,8 @@ export class BackendService {
   static async submitHighScore(name: string, score: number, level: number, classType: TankClass, userId?: string): Promise<void> {
     if (score <= 0) return;
 
-    const actorId = userId || auth.currentUser?.uid || 'anonymous';
+    const authUid = auth.currentUser?.uid || null;
+    const actorId = authUid || userId || 'anonymous';
     const scoreBurst = consumeRateLimit('scoreSubmit', actorId);
     if (!scoreBurst.ok) {
       logSecurityEvent('score_burst_limited', { actorId, retryAfterMs: scoreBurst.retryAfterMs, score });
@@ -1087,13 +1209,22 @@ export class BackendService {
       return;
     }
 
+    if (authUid && userId && userId !== authUid) {
+      logSecurityEvent('score_user_mismatch', { authUid, suppliedUserId: userId, score, level });
+    }
+
     const recordId = `score_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const highScorePath = `highScores/${recordId}`;
-    const resolvedUserId = userId || auth.currentUser?.uid || null;
+    const resolvedUserId = authUid || userId || null;
     const cleanScore = clampInt(score, 1, MAX_SESSION_SCORE, 1);
     const cleanLevel = clampInt(level, 1, MAX_SESSION_LEVEL, 1);
     const cleanName = sanitizeCallsign(name, 'ANONYMOUS_UNIT');
     const cleanClassType = TANK_CLASS_VALUES.has(classType) ? classType : TankClass.BASIC;
+
+    if (shouldBlockDuplicateScoreSubmission(actorId, cleanScore, cleanLevel, cleanClassType)) {
+      logSecurityEvent('score_duplicate_blocked', { actorId, score: cleanScore, level: cleanLevel, classType: cleanClassType });
+      return;
+    }
 
     try {
       await setDoc(doc(db, 'highScores', recordId), {
@@ -1104,6 +1235,7 @@ export class BackendService {
         classType: cleanClassType,
         date: new Date().toISOString()
       });
+      rememberScoreSubmission(actorId, cleanScore, cleanLevel, cleanClassType);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, highScorePath);
     }
@@ -1178,13 +1310,13 @@ export class BackendService {
     const finalUser = { ...user };
     finalUser.token = token;
     finalUser.username = sanitizeCallsign(finalUser.username, buildCleanUsername(undefined, undefined, 'PILOT'));
-    finalUser.currency = clampInt(finalUser.currency, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.currency = clampInt(finalUser.currency, 0, MAX_ACCOUNT_CURRENCY, 0);
     finalUser.inventory = sanitizeInventory(finalUser.inventory);
     finalUser.equippedItem = typeof finalUser.equippedItem === 'string' && finalUser.equippedItem.trim()
       ? finalUser.equippedItem.trim()
       : 'color_default';
     finalUser.unlockedEliteSkins = sanitizeUnlockedEliteSkins(finalUser.unlockedEliteSkins || []);
-    finalUser.supportTotal = clampInt(finalUser.supportTotal, 0, Number.MAX_SAFE_INTEGER, 0);
+    finalUser.supportTotal = clampInt(finalUser.supportTotal, 0, MAX_SUPPORT_TOTAL, 0);
     finalUser.supporterRank = SUPPORTER_RANKS.has(finalUser.supporterRank) ? finalUser.supporterRank : 'standard';
 
     if (!finalUser.stats) finalUser.stats = { ...INITIAL_STATS };

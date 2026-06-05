@@ -112,9 +112,14 @@ export const COLORS = {
   backgroundFill: '#b4b4b4',
   player: '#00b2e1', // Blue Team Color
   enemy: '#f14e54',  // Red Team Color
+  allyGreen: '#34d399',
+  allyPurple: '#a78bfa',
+  dominionNeutral: '#facc15',
   square: '#ffe869',
+  diamond: '#74f0d2',
   triangle: '#fc7677',
   pentagon: '#768dfc',
+  heptagon: '#c989ff',
   hexagon: '#9f76fc', // Purple-ish Hexagon
   octagon: '#ffcc33', // Vibrant Gold/Amber
   crasher: '#f177dd', // Pink Crasher color
@@ -461,8 +466,10 @@ export const CLASS_PROJECTILE_MODIFIERS: Partial<Record<TankClass, {
 
 export const SHAPE_STATS: Record<ShapeType, { health: number; xp: number; damage: number; radius: number; color: string; sides: number }> = {
     [ShapeType.SQUARE]: { health: 25, xp: 50, damage: 8, radius: 12.5, color: COLORS.square, sides: 4 },
+    [ShapeType.DIAMOND]: { health: 48, xp: 88, damage: 11, radius: 15, color: COLORS.diamond, sides: 4 },
     [ShapeType.TRIANGLE]: { health: 80, xp: 145, damage: 14, radius: 18.75, color: COLORS.triangle, sides: 3 },
     [ShapeType.PENTAGON]: { health: 300, xp: 440, damage: 20, radius: 31.25, color: COLORS.pentagon, sides: 5 },
+    [ShapeType.HEPTAGON]: { health: 560, xp: 760, damage: 28, radius: 40, color: COLORS.heptagon, sides: 7 },
     [ShapeType.HEXAGON]: { health: 800, xp: 1080, damage: 35, radius: 50, color: COLORS.hexagon, sides: 6 },
     [ShapeType.OCTAGON]: { health: 2500, xp: 2650, damage: 60, radius: 110, color: COLORS.octagon, sides: 8 },
 };
@@ -873,6 +880,56 @@ export const QUESTS: Quest[] = [
 ];
 
 export const UPDATE_LOG = [
+    {
+        id: 'v1.8.0',
+        title: "DOMINION AND VOID ASCENT",
+        date: "JUN 2026",
+        content: "Large systems update focused on four-team objective warfare, staged wormhole transit, tougher backend hardening, and smarter bots that read pressure, objectives, and extraction flow more reliably.",
+        theme: "Systems",
+        tags: ["Dominion", "Void", "AI", "Security", "HUD"],
+        sections: [
+            {
+                label: "Dominion Warfare",
+                items: [
+                    "Launched Dominion as a four-team control mode with corner safe zones, live objective scoring, and dominion point ownership tracked on the tactical HUD and minimap.",
+                    "Reworked dominion objective tanks into distinct defensive variants instead of identical turret walls, including Destroyer, Gunner, Trapper-style barrier control, and Triple loadouts.",
+                    "Adjusted Dominion HUD priority so objective awareness and tactical map presence matter more than personal leaderboard noise during capture fights.",
+                ],
+            },
+            {
+                label: "Void Transit",
+                items: [
+                    "Rebuilt wormhole travel into staged portal flow with lock, inversion, breach, and shift phases so entering the Void reads like a sequence instead of a bugged instant snap.",
+                    "Removed the fragile one-second timeout-based dimension jump and replaced it with engine-driven transition handling for cleaner entry, exit, and evac behavior.",
+                    "Stabilized white exit portal behavior so extraction is more reliable and transit groups preserve the right tanks, summons, and projectile ownership through dimension swaps.",
+                ],
+            },
+            {
+                label: "Bot Intelligence",
+                items: [
+                    "Extended bot pathfinding with stronger route-risk scoring, stuck recovery, hazard avoidance, and objective routing across Teams, Dominion, and general combat modes.",
+                    "Improved combat discipline so enemy tanks commit harder when healthy, retreat later, choose cleaner targets, and stop wasting shots or body-slamming dangerous farm targets.",
+                    "Taught bots to understand wormholes and void extraction windows so they can pursue transit opportunities instead of acting blind to portal state.",
+                ],
+            },
+            {
+                label: "Progression and PvE",
+                items: [
+                    "Retuned tank-kill rewards, crasher rewards, shape distribution, and common farm pacing so progression stays steadier across normal combat, PvE clearing, and rebirth-tier encounters.",
+                    "Expanded the shape roster and visual language with new forms and cleaner spawn and defeat presentation to make resource fields read less repetitively.",
+                    "Reworked boss and elite behavior to reduce runaway speed, improve class barrel fidelity, and create clearer boss-fight patterns instead of pure rush pressure.",
+                ],
+            },
+            {
+                label: "Interface and Security",
+                items: [
+                    "Remastered core match HUD surfaces, tactical rails, health and XP presentation, support terminal, archive styling, and almanac readability to reduce combat clutter.",
+                    "Added stronger backend-side abuse resistance for session stat writes, leaderboard submissions, invalid equips and purchases, support totals, and suspicious duplicate score traffic.",
+                    "Improved trust-facing presentation with richer update notes, cleaner shared-link previews, and clearer player feedback for rewards, achievements, and combat telemetry.",
+                ],
+            },
+        ],
+    },
     {
         id: 'v1.7.0',
         title: "TACTICAL SYSTEMS REMASTER",

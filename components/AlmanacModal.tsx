@@ -193,8 +193,10 @@ const CATEGORIES: CategoryMeta[] = [
 
 const SHAPE_STRATEGIES: Partial<Record<ShapeType, string[]>> = {
     [ShapeType.SQUARE]: ['Starter farm target', 'Low durability', 'Safe early XP chain'],
+    [ShapeType.DIAMOND]: ['Sharper drift profile', 'Higher reward than squares', 'Great bridge into mid-map farming'],
     [ShapeType.TRIANGLE]: ['Fast drifting shape', 'Lead shots slightly', 'Good early-mid payout'],
     [ShapeType.PENTAGON]: ['Tanky resource core', 'Central farming priority', 'Strong level 30+ XP source'],
+    [ShapeType.HEPTAGON]: ['Dense faceted shell', 'Late-mid resource spike', 'Rewards stable sustained fire'],
     [ShapeType.HEXAGON]: ['High integrity shell', 'Rewards sustained DPS', 'Great for upgraded builds'],
     [ShapeType.OCTAGON]: ['Ancient relic target', 'Massive XP jackpot', 'Contestable high-value spawn'],
 };

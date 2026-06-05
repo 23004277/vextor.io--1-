@@ -62,10 +62,16 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
             size: 2 + Math.random() * 3
         }));
 
-        const traceShape = (ctx: CanvasRenderingContext2D, sides: number, radius: number) => {
+        const getShapeAngleOffset = (): number => {
+            if (type === ShapeType.DIAMOND) return Math.PI * 0.25;
+            if (type === ShapeType.TRIANGLE || type === ShapeType.HEPTAGON) return -Math.PI / 2;
+            return 0;
+        };
+
+        const traceShape = (ctx: CanvasRenderingContext2D, sides: number, radius: number, angleOffset: number = 0) => {
             ctx.beginPath();
             for (let i = 0; i < sides; i++) {
-                const angle = (i * 2 * Math.PI) / sides;
+                const angle = angleOffset + (i * 2 * Math.PI) / sides;
                 const x = Math.cos(angle) * radius;
                 const y = Math.sin(angle) * radius;
                 if (i === 0) ctx.moveTo(x, y);
@@ -182,6 +188,62 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
             ctx.restore();
         };
 
+        const drawAdvancedDiamond = (ctx: CanvasRenderingContext2D, r: number, fillColor: string, strokeColor: string, glowBlur: number, glowColor: string) => {
+            if (glowBlur > 0) { ctx.shadowBlur = glowBlur; ctx.shadowColor = glowColor; }
+            ctx.rotate(Math.PI * 0.25);
+            traceShape(ctx, 4, r);
+            const shell = ctx.createLinearGradient(-r, -r, r, r);
+            shell.addColorStop(0, 'rgba(255,255,255,0.22)');
+            shell.addColorStop(0.45, fillColor);
+            shell.addColorStop(1, '#103d37');
+            ctx.fillStyle = shell;
+            ctx.fill();
+            ctx.lineWidth = 3.5;
+            ctx.strokeStyle = strokeColor;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            ctx.save();
+            ctx.globalAlpha = 0.4;
+            ctx.rotate(-rotation * 0.55);
+            ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(0, -r * 0.82);
+            ctx.lineTo(0, r * 0.82);
+            ctx.moveTo(-r * 0.82, 0);
+            ctx.lineTo(r * 0.82, 0);
+            ctx.stroke();
+            ctx.restore();
+        };
+
+        const drawAdvancedHeptagon = (ctx: CanvasRenderingContext2D, r: number, fillColor: string, strokeColor: string, glowBlur: number, glowColor: string) => {
+            if (glowBlur > 0) { ctx.shadowBlur = glowBlur; ctx.shadowColor = glowColor; }
+            traceShape(ctx, 7, r, -Math.PI / 2);
+            const shell = ctx.createRadialGradient(0, -r * 0.18, r * 0.1, 0, 0, r);
+            shell.addColorStop(0, 'rgba(255,255,255,0.26)');
+            shell.addColorStop(0.42, fillColor);
+            shell.addColorStop(1, '#1f1638');
+            ctx.fillStyle = shell;
+            ctx.fill();
+            ctx.lineWidth = 3.2;
+            ctx.strokeStyle = strokeColor;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+            ctx.lineWidth = 1.5;
+            for (let i = 0; i < 7; i++) {
+                const angle = -Math.PI / 2 + (i * Math.PI * 2) / 7;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(Math.cos(angle) * r * 0.82, Math.sin(angle) * r * 0.82);
+                ctx.stroke();
+            }
+            ctx.restore();
+        };
+
         const render = () => {
             const dt = 0.016;
             pulseTimer += dt * (isBoss ? 2 : 3);
@@ -189,7 +251,7 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
             const sides = stats.sides || 0;
             const t = Date.now() / 1000;
             
-            rotation += (type === ShapeType.OCTAGON ? 0.008 : (isBoss ? 0.01 : 0.015));
+            rotation += type === ShapeType.OCTAGON ? 0.008 : type === ShapeType.HEPTAGON ? 0.011 : (isBoss ? 0.01 : 0.015);
             swirlAngle += dt * 2;
 
             ctx.clearRect(0, 0, size, size);
@@ -305,11 +367,15 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
                     ctx.save();
                     if (type === ShapeType.OCTAGON) {
                         drawAdvancedOctagon(ctx, effectiveRadius, fillColor, strokeColor, glowBlur, glowColor);
+                    } else if (type === ShapeType.DIAMOND) {
+                        drawAdvancedDiamond(ctx, effectiveRadius, fillColor, strokeColor, glowBlur, glowColor);
+                    } else if (type === ShapeType.HEPTAGON) {
+                        drawAdvancedHeptagon(ctx, effectiveRadius, fillColor, strokeColor, glowBlur, glowColor);
                     } else {
                         ctx.scale(1.0 + Math.sin(pulseTimer) * 0.04, 1.0 + Math.sin(pulseTimer) * 0.04);
                         if (glowBlur > 0) { ctx.shadowBlur = glowBlur; ctx.shadowColor = glowColor; }
                         ctx.rotate(rotation);
-                        traceShape(ctx, sides, effectiveRadius);
+                        traceShape(ctx, sides, effectiveRadius, getShapeAngleOffset());
                         ctx.fillStyle = fillColor; ctx.fill();
                         ctx.lineWidth = isBoss ? 10 : 3; ctx.strokeStyle = strokeColor; ctx.stroke();
                     }

@@ -1,5 +1,5 @@
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Achievement } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -9,10 +9,30 @@ interface AchievementPopupProps {
 }
 
 export const AchievementPopup: React.FC<AchievementPopupProps> = ({ achievements, onClose }) => {
+    const closeTimerRef = useRef<number | null>(null);
+    const closeTokenRef = useRef(0);
+    const achievementKey = achievements.map((achievement) => achievement.id).join('|');
+
     useEffect(() => {
-        const timer = setTimeout(onClose, 6000);
-        return () => clearTimeout(timer);
-    }, [onClose]);
+        closeTokenRef.current += 1;
+        const token = closeTokenRef.current;
+        if (closeTimerRef.current !== null) {
+            window.clearTimeout(closeTimerRef.current);
+        }
+
+        closeTimerRef.current = window.setTimeout(() => {
+            if (closeTokenRef.current !== token) return;
+            closeTimerRef.current = null;
+            onClose();
+        }, 1750);
+
+        return () => {
+            if (closeTimerRef.current !== null) {
+                window.clearTimeout(closeTimerRef.current);
+                closeTimerRef.current = null;
+            }
+        };
+    }, [achievementKey, onClose]);
 
     return (
         <div className="fixed top-8 right-8 z-[2000] flex flex-col gap-4 pointer-events-none">

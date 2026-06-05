@@ -32,7 +32,7 @@ const SUPPORT_OPTIONS = [5, 25, 100] as const;
 
 const DEFAULT_SETTINGS: GameSettings = {
     volume: 0.15,
-    musicVolume: 0.1,
+    musicVolume: 1,
     darkMode: true,
     showMinimap: true,
     showLeaderboard: true,
@@ -189,7 +189,7 @@ const App: React.FC = () => {
 
     const unlockMainMenuAudio = () => {
       engine.sound.enable();
-      menuMusicRef.current?.start().catch(() => undefined);
+      menuMusicRef.current?.resume().catch(() => undefined);
     };
 
     window.addEventListener('pointerdown', unlockMainMenuAudio, { once: true });
@@ -226,7 +226,7 @@ const App: React.FC = () => {
       return;
     }
 
-    music.start().catch(() => undefined);
+    music.resume().catch(() => undefined);
   }, [isPlaying]);
 
   useEffect(() => {
@@ -474,10 +474,11 @@ const App: React.FC = () => {
   const handleStartGame = (e: React.FormEvent) => {
     e.preventDefault();
     if (engine) {
-        if (gameMode === GameMode.TEAMS && !engine.canJoinTeam(selectedTeam)) {
+        if ((gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION) && !engine.canJoinTeam(selectedTeam)) {
             engine.addNotification("TEAM UNBALANCED - CHOOSE OTHER SIDE", "#ff4444");
             return;
         }
+        menuMusicRef.current?.pause();
         engine.sound.enable();
         engine.sound.playUIClick();
         engine.setPlayerName(playerName || 'GUEST_PILOT');
@@ -528,7 +529,7 @@ const App: React.FC = () => {
     }
   };
 
-  const teamCounts = engine?.getTeamCounts() || { [Team.BLUE]: 0, [Team.RED]: 0, [Team.NONE]: 0 };
+  const teamCounts = engine?.getTeamCounts() || { [Team.BLUE]: 0, [Team.RED]: 0, [Team.GREEN]: 0, [Team.PURPLE]: 0, [Team.NONE]: 0 };
 
   return (
     <div onMouseMove={handleMouseMoveApp} className="relative w-full h-full overflow-hidden bg-[#010101] font-ubuntu selection:bg-cyan-500 selection:text-black cursor-none">
@@ -688,18 +689,18 @@ const App: React.FC = () => {
                                 </p>
                             </div>
 
-                            <div className="mt-5 grid grid-cols-3 gap-2 shrink-0">
-                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                            <div className="mt-5 grid grid-cols-2 gap-2 shrink-0 sm:grid-cols-3">
+                                <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
                                     <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Releases</div>
                                     <div className="mt-1 text-lg font-black text-cyan-300">{UPDATE_LOG.length}</div>
                                 </div>
-                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
                                     <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Latest</div>
-                                    <div className="mt-1 text-sm font-black text-white">{UPDATE_LOG[0]?.id ?? '--'}</div>
+                                    <div className="mt-1 break-words text-sm font-black leading-tight text-white">{UPDATE_LOG[0]?.id ?? '--'}</div>
                                 </div>
-                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                <div className="col-span-2 min-w-0 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 sm:col-span-1">
                                     <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Focus</div>
-                                    <div className="mt-1 text-sm font-black text-emerald-300">{selectedUpdate?.theme ?? 'Live'}</div>
+                                    <div className="mt-1 break-words text-xs font-black leading-tight text-emerald-300 sm:text-sm">{selectedUpdate?.theme ?? 'Live'}</div>
                                 </div>
                             </div>
 
