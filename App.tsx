@@ -299,13 +299,22 @@ const App: React.FC = () => {
   }, [highScores, playerName, user]);
 
   useEffect(() => {
-      BackendService.getSession().then(res => {
+      const initAuth = async () => {
+          const redirectResult = await BackendService.resolveGoogleRedirect();
+          if (redirectResult.success && redirectResult.user) {
+              hydrateSupportRank(redirectResult.user).then(setUser).catch(() => setUser(redirectResult.user!));
+              setPlayerName(prev => prev.trim() ? prev : redirectResult.user!.username);
+              return;
+          }
+
+          const res = await BackendService.getSession();
           if (res.success && res.user) {
               hydrateSupportRank(res.user).then(setUser).catch(() => setUser(res.user!));
-              // Keep player's custom in-game callsign if they already set one.
               setPlayerName(prev => prev.trim() ? prev : res.user!.username);
           }
-      });
+      };
+
+      initAuth();
   }, []);
 
   useEffect(() => {

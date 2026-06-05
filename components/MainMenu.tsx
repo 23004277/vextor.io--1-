@@ -216,7 +216,6 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           style={{ background: 'linear-gradient(160deg, #020810 0%, #010508 50%, #020c14 100%)' }}
         >
           <Scanlines />
-          <MenuMusicVisualizer snapshot={musicSnapshot} />
 
           <div className="absolute inset-0 pointer-events-none z-0">
             <div className="absolute inset-0 opacity-[0.025]" style={{
@@ -792,6 +791,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     );
                   })}
                 </div>
+              </div>
+
+              <div className="rounded-3xl border border-cyan-400/10 bg-[rgba(1,5,11,0.85)] p-4">
+                <MenuMusicVisualizer snapshot={musicSnapshot} />
               </div>
 
               <div className="flex flex-col gap-4">

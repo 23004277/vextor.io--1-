@@ -2,7 +2,8 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
-  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   updateProfile
 } from 'firebase/auth';
 import {
@@ -656,22 +657,36 @@ export class BackendService {
    * second one.
    */
   static async loginWithGoogle(): Promise<AuthResponse> {
-    const googleActor = auth.currentUser?.uid || 'google_popup';
+    const googleActor = auth.currentUser?.uid || 'google_redirect';
     const googleLimit = consumeRateLimit('authGoogle', googleActor);
     if (!googleLimit.ok) {
       logSecurityEvent('auth_google_rate_limited', { actor: googleActor, retryAfterMs: googleLimit.retryAfterMs });
       return { success: false, error: rateLimitMessage(googleLimit.retryAfterMs, 'Google sign-in is cooling down.') };
     }
+
     try {
-      console.log('[Auth] Google popup sign-in start');
-      const result = await withTimeout(
-        signInWithPopup(auth, googleProvider),
-        20000,
-        'auth/operation-timeout',
-        'Google sign-in popup timed out.'
-      );
+      console.log('[Auth] Google redirect sign-in start');
+      await signInWithRedirect(auth, googleProvider);
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Auth] Google redirect initiation failed', err);
+      return { success: false, error: mapFirebaseAuthError(err) };
+    }
+  }
+
+  /**
+   * Resolve the redirect result after returning from Google authentication.
+   */
+  static async resolveGoogleRedirect(): Promise<AuthResponse> {
+    try {
+      console.log('[Auth] Resolving Google redirect result');
+      const result = await getRedirectResult(auth);
+      if (!result || !result.user) {
+        return { success: false };
+      }
+
       const firebaseUser = result.user;
-      console.log('[Auth] Google popup sign-in success', { uid: firebaseUser.uid, email: firebaseUser.email });
+      console.log('[Auth] Google redirect sign-in success', { uid: firebaseUser.uid, email: firebaseUser.email });
 
       const fallbackUser: User = {
         username: buildCleanUsername(firebaseUser.displayName, firebaseUser.email),
@@ -689,35 +704,31 @@ export class BackendService {
       let userDoc: DocumentSnapshot;
       try {
         console.log('[Auth] Fetching Firestore user doc', `users/${firebaseUser.uid}`);
-        // getOrFetchUserProfile owns the timeout; do NOT double-wrap here.
         userDoc = await getOrFetchUserProfile(firebaseUser.uid);
       } catch (err) {
         throttledAuthWarning('[Auth] Firestore user doc read failed, falling back to local profile', err);
-        // Sync in background — player enters game immediately.
         ensureUserProfileDoc(firebaseUser.uid, fallbackUser).catch(() => {});
         localStorage.setItem(SESSION_KEY, JSON.stringify({ username: fallbackUser.username, uid: firebaseUser.uid }));
         return { success: true, user: fallbackUser };
       }
 
-      let finalUser: User;
+      const finalUser = userDoc.exists()
+        ? this.migrateUser(userDoc.data(), firebaseUser.uid)
+        : fallbackUser;
 
       if (!userDoc.exists()) {
-        // First Google sign-in — create profile in background.
-        finalUser = fallbackUser;
         ensureUserProfileDoc(firebaseUser.uid, finalUser).catch(() => {});
-      } else {
-        finalUser = this.migrateUser(userDoc.data(), firebaseUser.uid);
       }
 
       localStorage.setItem(SESSION_KEY, JSON.stringify({ username: finalUser.username, uid: firebaseUser.uid }));
-      console.log('[Auth] Google login flow resolved', { uid: firebaseUser.uid, username: finalUser.username });
+      console.log('[Auth] Google redirect flow resolved', { uid: firebaseUser.uid, username: finalUser.username });
 
       return {
         success: true,
         user: { ...finalUser, token: firebaseUser.uid }
       };
     } catch (err: any) {
-      console.error('[Auth] Google authentication failed', err);
+      console.error('[Auth] Google redirect resolution failed', err);
       return { success: false, error: mapFirebaseAuthError(err) };
     }
   }

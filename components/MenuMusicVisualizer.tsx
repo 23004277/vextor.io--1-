@@ -9,8 +9,8 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
   if (!snapshot) return null;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-5 z-[6] flex justify-center px-4">
-      <div className="relative w-full max-w-[760px] overflow-hidden rounded-[28px] border border-cyan-400/15 bg-[linear-gradient(180deg,rgba(2,8,16,0.72),rgba(1,4,10,0.84))] px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-md">
+    <div className="pointer-events-none w-full">
+      <div className="relative w-full overflow-hidden rounded-[28px] border border-cyan-400/15 bg-[linear-gradient(180deg,rgba(2,8,16,0.72),rgba(1,4,10,0.84))] px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-md">
         <div
           className="absolute inset-0 opacity-60"
           style={{

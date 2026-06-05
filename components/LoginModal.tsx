@@ -19,6 +19,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onLoginSuccess 
     const [mounted, setMounted] = useState(false);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef<number>(0);
+    const googleActionRef = useRef(false);
 
     // Mount animation
     useEffect(() => {
@@ -115,20 +116,24 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onLoginSuccess 
     }, []);
 
     const handleGoogleLogin = async () => {
+        if (googleActionRef.current) return;
+        googleActionRef.current = true;
         setError(null);
         setGoogleLoading(true);
+
         try {
             const response = await BackendService.loginWithGoogle();
             if (response.success && response.user) {
                 onLoginSuccess(response.user);
                 onClose();
-            } else {
-                setError(response.error || 'Google authentication failed.');
+            } else if (response.error) {
+                setError(response.error);
             }
         } catch {
             setError('Google sign-in failed. Please try again.');
         } finally {
             setGoogleLoading(false);
+            googleActionRef.current = false;
         }
     };
 
