@@ -681,17 +681,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
              )}
 
              {settings.showMinimap && (
-             <div className={`relative w-full overflow-hidden bg-black/70 border border-cyan-400/18 shadow-[0_0_0_1px_rgba(34,211,238,0.1),0_18px_40px_rgba(0,0,0,0.44)] ${gameMode === GameMode.DOMINION ? 'aspect-[0.88]' : 'aspect-square'} rounded-2xl`}>
-                  <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_50%_8%,rgba(34,211,238,0.14),transparent_60%)]" />
-                  <div className="absolute inset-x-0 top-0 h-7 z-10 flex items-center justify-between px-2.5 border-b border-white/10 bg-black/45">
-                    <span className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200/80">Tactical Map</span>
-                    <span className="text-[9px] font-bold text-white/40">{gameMode === GameMode.DOMINION ? 'priority' : 'x1'}</span>
-                  </div>
-                  <div className="absolute inset-[10px] top-[36px] rounded-lg overflow-hidden border border-white/10">
-                    <TacticalMinimap markers={minimapMarkers} mapSize={mapSize} camera={camera} inVoid={inVoid} gameMode={gameState.gameMode} />
-                  </div>
-               </div>
-              )}
+              <div className={`relative w-full overflow-hidden rounded-[1.15rem] border border-cyan-400/14 bg-[#050b12]/76 shadow-[0_10px_24px_rgba(0,0,0,0.28)] ${gameMode === GameMode.DOMINION ? 'aspect-[0.9]' : 'aspect-[0.92]'}`}>
+                   <div className="absolute inset-x-0 top-0 z-10 flex h-6 items-center justify-between border-b border-white/8 bg-black/30 px-2">
+                     <span className="text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/78">Tactical Map</span>
+                     <span className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/32">{gameMode === GameMode.DOMINION ? 'zone' : 'x1'}</span>
+                   </div>
+                   <div className="absolute inset-[7px] top-[30px] overflow-hidden rounded-md border border-white/8">
+                     <TacticalMinimap markers={minimapMarkers} mapSize={mapSize} camera={camera} inVoid={inVoid} gameMode={gameState.gameMode} />
+                   </div>
+                </div>
+               )}
           </div>
        </div>
 
@@ -1185,9 +1184,9 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       </div>
 
         {/* Center HUD */}
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[min(460px,42vw)] flex flex-col items-center pointer-events-auto">
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex w-[min(380px,34vw)] flex-col items-center pointer-events-auto">
             {voidTransitStage && (
-              <div className="mb-2 w-full rounded-2xl border border-violet-300/22 bg-[#0b0816]/72 backdrop-blur-xl px-3.5 py-2 shadow-[0_12px_28px_rgba(0,0,0,0.28)]">
+              <div className="mb-2 w-full rounded-xl border border-violet-300/18 bg-[#0b0816]/66 px-3 py-2 backdrop-blur-lg shadow-[0_8px_18px_rgba(0,0,0,0.22)]">
                 <div className="flex items-center justify-between gap-3 text-[8px] font-black uppercase tracking-[0.2em] text-violet-100/82">
                   <span>{voidTransitStage}</span>
                   <span>{Math.round((voidTransitProgress || 0) * 100)}%</span>
@@ -1200,22 +1199,22 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 </div>
               </div>
             )}
-            <div className="w-full rounded-[1.4rem] border border-white/8 bg-[#070d13]/68 backdrop-blur-xl shadow-[0_14px_28px_rgba(0,0,0,0.28)] px-4 py-3">
-              <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="w-full rounded-[1.1rem] border border-white/7 bg-[#070d13]/58 px-3 py-2.5 backdrop-blur-lg shadow-[0_10px_20px_rgba(0,0,0,0.22)]">
+              <div className="mb-2 flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-[8px] font-black uppercase tracking-[0.24em] text-cyan-300/55">Combat Telemetry</div>
-                  <div className={`text-[28px] font-black tracking-tight leading-none mt-1 ${scoreLabelTone}`}>{scoreLabel}</div>
-                  <div className="mt-1 text-[9px] font-black text-white/50 uppercase tracking-[0.16em]">Lvl {level} {compactCurrentClass}</div>
+                  <div className="text-[7px] font-black uppercase tracking-[0.22em] text-cyan-300/52">Combat Telemetry</div>
+                  <div className={`mt-0.5 text-[24px] font-black leading-none tracking-tight ${scoreLabelTone}`}>{scoreLabel}</div>
+                  <div className="mt-1 text-[8px] font-black uppercase tracking-[0.15em] text-white/48">Lvl {level} {compactCurrentClass}</div>
                 </div>
-                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <div className="flex shrink-0 flex-col items-end gap-1.5">
                   {availableStatPoints > 0 && (
-                    <div className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/18 bg-cyan-500/6 px-2.5 py-1">
+                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/16 bg-cyan-500/6 px-2 py-0.5">
                       <span className="text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/70">Points</span>
-                      <span className="text-[12px] font-black text-cyan-300">{availableStatPoints}</span>
+                      <span className="text-[11px] font-black text-cyan-300">{availableStatPoints}</span>
                     </div>
                   )}
                   {isDrainingClass && (
-                    <div className="inline-flex items-center gap-2 rounded-xl border border-rose-400/24 bg-rose-950/20 px-2.5 py-1">
+                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/20 bg-rose-950/18 px-2 py-0.5">
                       <span className="text-[8px] font-black uppercase tracking-[0.16em] text-rose-200/85">Drain</span>
                       <span className="text-[9px] font-black text-rose-300">{formatScoreValue(liveDrainValue, settings.compactScoreNotation)}</span>
                       <span className="text-[8px] font-black text-amber-300">x{liveDrainStacks}</span>
@@ -1224,25 +1223,25 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 </div>
               </div>
               <div className="space-y-1.5">
-                <div>
+                <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">
                   <div className="mb-1 flex items-center justify-between text-[7px] font-black uppercase tracking-[0.16em] text-white/42">
                     <span>Hull Integrity</span>
                     <span>{Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}</span>
                   </div>
-                  <div className="w-full h-2.5 bg-black/50 rounded-full border border-gray-600/35 relative shadow-lg overflow-hidden">
-                      <div className={`h-full transition-all duration-75 ease-out relative ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / maxHealth) * 100)}%` }} />
+                  <div className="relative h-2 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
+                      <div className={`relative h-full transition-all duration-75 ease-out ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / maxHealth) * 100)}%` }} />
                   </div>
                 </div>
-                <div>
+                <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">
                   <div className="mb-1 flex items-center justify-between text-[7px] font-black uppercase tracking-[0.16em] text-white/42">
                     <span>Experience</span>
                     <span>{Math.floor(displayXpPercent)}%</span>
                   </div>
-                  <div className="w-full h-2.5 bg-black/50 rounded-full border border-gray-600/35 relative shadow-xl overflow-hidden">
-                     <div className="h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-75 ease-out relative" style={{ width: `${displayXpPercent}%` }}></div>
-                  </div>
-                </div>
-              </div>
+                  <div className="relative h-2 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
+                     <div className="relative h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-75 ease-out" style={{ width: `${displayXpPercent}%` }}></div>
+                   </div>
+                 </div>
+               </div>
             </div>
         </div>
       </div>

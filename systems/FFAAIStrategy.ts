@@ -24,7 +24,7 @@ const TUNING = {
   targetLatchMax: 30,
   separationRadius: 170,
   cohesionRadius: 300,
-  bulletAvoidRadius: 430,
+  bulletAvoidRadius: 520,
   maxSteering: 4.5,
 };
 
@@ -52,7 +52,7 @@ export class FFAAIStrategy implements IAIStrategy {
     if (inParanoia) {
       bot.aiState = AIState.FLEE;
       bot.aiShooting = false;
-      goal = this.panicGoal(bot, enemies);
+      goal = this.panicGoal(bot, enemies, bullets);
     } else if (target) {
       bot.aiState = AIState.COMBAT;
       bot.aiShooting = true;
@@ -132,7 +132,7 @@ export class FFAAIStrategy implements IAIStrategy {
     return p;
   }
 
-  private panicGoal(bot: IAITank, enemies: any[]): Vector2 {
+  private panicGoal(bot: IAITank, enemies: any[], bullets: any[]): Vector2 {
     if (enemies.length === 0) {
       return this.movement.arriveForce(bot.pos, { x: this.worldWidth() * 0.5, y: this.worldHeight() * 0.5 }, 520, 20);
     }
@@ -147,7 +147,9 @@ export class FFAAIStrategy implements IAIStrategy {
       }
     }
 
-    return this.movement.fleeForce(bot.pos, nearest.pos);
+    const flee = this.movement.fleeForce(bot.pos, nearest.pos);
+    const avoid = this.bulletAvoidance(bot, bullets);
+    return this.movement.composeSteering([flee, avoid], [1.0, 0.76], 1.35);
   }
 
   private combatGoal(bot: IAITank, target: any, memory: Memory): Vector2 {
@@ -191,11 +193,24 @@ export class FFAAIStrategy implements IAIStrategy {
       const rel = Vector.sub(bot.pos, b.pos);
       const d2 = Math.max(1, Vector.magSq(rel));
       if (d2 > maxD2) continue;
+      const vel = b.vel || ZERO;
+      const velMagSq = Vector.magSq(vel);
+      const velDir = velMagSq > 0.0001 ? Vector.normalize(vel) : ZERO;
       const away = Vector.normalize(rel);
-      const inbound = Vector.dot(rel, b.vel || ZERO) > 0 ? 1.25 : 0.35;
-      const w = (21000 / d2) * inbound;
-      fx += away.x * w;
-      fy += away.y * w;
+      const along = Vector.dot(rel, velDir);
+      const timeToClosest = velMagSq > 0.0001 ? Vector.dot(rel, vel) / velMagSq : Infinity;
+      const cross = velDir.x * rel.y - velDir.y * rel.x;
+      const sideSign = cross >= 0 ? 1 : -1;
+      const side = { x: -velDir.y * sideSign, y: velDir.x * sideSign };
+      const corridor = Math.min(Math.abs(cross), Math.max(1, Math.sqrt(d2)));
+      const inbound = along > 0 ? 1.28 : 0.32;
+      const directThreat = timeToClosest > 0 && timeToClosest < 22 && corridor < 68;
+      const laneRisk = directThreat ? 1.82 : corridor < 84 ? 1.52 : corridor < 150 ? 0.96 : 0.44;
+      const speedFactor = 1 + Math.min(1, Math.sqrt(velMagSq) * 0.08);
+      const timeRisk = timeToClosest > 0 ? 1 / (1 + timeToClosest * 0.12) : 0.62;
+      const w = (26000 / d2) * inbound * laneRisk * timeRisk * speedFactor;
+      fx += (away.x * 0.36 + side.x * 1.02) * w;
+      fy += (away.y * 0.36 + side.y * 1.02) * w;
     }
 
     if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;

@@ -19,6 +19,8 @@ type Memory = {
   stuckTicks: number;
   lastThreatPos: Vector2 | null;
   lastThreatVel: Vector2;
+  lastThreatHpRatio: number;
+  lastThreatRetreating: boolean;
   lastThreatTick: number;
   investigateUntil: number;
   cautionUntil: number;
@@ -88,29 +90,29 @@ const TUNING = {
   localCountRadius: 760,
   separationRadius: 185,
   crowdSeparationRadius: 280,
-  cohesionRadius: 620,
-  fleeHealthRatio: 0.35,
+  cohesionRadius: 500,
+  fleeHealthRatio: 0.28,
   criticalRetreatHealthRatio: 0.14,
   outnumberedMargin: 2,
   stateLatchMinTicks: 20,
   stateLatchMaxTicks: 30,
   targetLatchMinTicks: 20,
   targetLatchMaxTicks: 30,
-  bulletAvoidRadius: 420,
-  dangerFleePressure: 1.25,
-  cautionPressure: 0.76,
+  bulletAvoidRadius: 520,
+  dangerFleePressure: 1.4,
+  cautionPressure: 0.78,
   finisherTargetHpRatio: 0.34,
-  pressureTargetBonus: 0.24,
+  pressureTargetBonus: 0.32,
   farmSenseRadius: 860,
   boundaryPadding: 260,
   boundaryLookAhead: 180,
   investigateTicks: 44,
-  stuckDistanceSq: 10 * 10,
+  stuckDistanceSq: 12 * 12,
   stuckTargetDistanceSq: 120 * 120,
-  maxStuckTicks: 6,
+  maxStuckTicks: 5,
   routeProbeRadius: 250,
-  routeCorridorRadius: 220,
-  detourTicks: 34,
+  routeCorridorRadius: 260,
+  detourTicks: 48,
   aimLaneAvoidRadius: 660,
   woundedRangeBoost: 0.16,
   combatRange: 360,
@@ -170,9 +172,21 @@ export class TDMAISystem {
     const target = this.resolveTargetLock(mem, desiredTarget, sensed.enemies, bot.id);
     this.updateThreatMemory(mem, target);
     const investigatePoint = !target && !shouldRetreat ? this.getInvestigatePoint(mem) : null;
-    const dominionObjective = !target && !investigatePoint && !shouldRetreat ? this.pickDominionObjective(bot, mem) : null;
-    const portalObjective = !target && !investigatePoint && !dominionObjective && !shouldRetreat ? this.pickPortalObjective(bot, sensed.portals, hpRatio, dangerPressure) : null;
-    const farmTarget = !target && !investigatePoint && !dominionObjective && !portalObjective && !shouldRetreat ? this.pickFarmTarget(bot, sensed.farmTargets, sensed.enemies) : null;
+    const farmFirstInDominion = this.shouldPrioritizeFarmBeforeDominion(bot, sensed.farmTargets);
+    const earlyFarmTarget =
+      !target && !investigatePoint && !shouldRetreat && farmFirstInDominion
+        ? this.pickFarmTarget(bot, sensed.farmTargets, sensed.enemies)
+        : null;
+    const dominionObjective =
+      !target && !investigatePoint && !earlyFarmTarget && !shouldRetreat
+        ? this.pickDominionObjective(bot, mem)
+        : null;
+    const portalObjective = !target && !investigatePoint && !dominionObjective && !earlyFarmTarget && !shouldRetreat ? this.pickPortalObjective(bot, sensed.portals, hpRatio, dangerPressure) : null;
+    const farmTarget =
+      earlyFarmTarget ??
+      (!target && !investigatePoint && !dominionObjective && !portalObjective && !shouldRetreat
+        ? this.pickFarmTarget(bot, sensed.farmTargets, sensed.enemies)
+        : null);
     const combatCaution = this.getCombatCaution(mem, dangerPressure, sensed.allyCount, sensed.enemyCount, sensed.bullets.length);
     const desiredState: TacticalState = shouldRetreat ? AIState.FLEE : desiredTarget ? AIState.COMBAT : AIState.HUNT;
     const state = this.applyStateLatch(mem, desiredState, bot.id);
@@ -386,24 +400,25 @@ export class TDMAISystem {
       const hpRatio = (e.health ?? 100) / Math.max(1, e.maxHealth ?? 100);
       const lowHp = hpRatio < 0.55 ? (1 - hpRatio) * 0.9 : 0;
       const focus = e.aiTargetId === bot.id ? 0.4 : 0;
-      const allyUnderFire = e.aiTargetId != null && allies.some((a) => a.id === e.aiTargetId) ? 0.34 : 0;
+      const allyUnderFire = e.aiTargetId != null && allies.some((a) => a.id === e.aiTargetId) ? 0.18 : 0;
       const finisherWindow = hpRatio <= TUNING.finisherTargetHpRatio ? 0.36 : 0;
       const pressureTarget = e.aiTargetId === bot.id ? TUNING.pressureTargetBonus : e.aiTargetId != null ? TUNING.pressureTargetBonus * 0.55 : 0;
       const focusPenalty = this.getAllyFocusPenalty(e.id, allies);
       const laneAffinity = this.getLaneAffinity(bot, mem, e.pos);
-      const supportWindow = this.countFriendlyPressureAt(e.pos, allies, 310);
+      const supportWindow = this.countFriendlyPressureAt(e.pos, allies, 310) * 0.55;
       const coverWindow = this.countEnemyPressureAt(e.id, e.pos, enemies, 310);
       const interceptPenalty = this.getInterceptDifficulty(bot, e);
       const overextendPenalty = this.getEnemySafeZonePenalty(bot.team, e.pos);
       const routePenalty = this.getRouteDangerPenalty(bot.pos, e.pos, enemies, e.id);
       const shotLanePenalty = this.getTargetShotLanePenalty(bot, e, allies);
       const collapsePenalty = Math.max(0, coverWindow - supportWindow) * 0.72;
-      const isolationBonus = Math.max(0, 0.42 - coverWindow * 0.2);
-      const reachableBonus = Math.max(0, 0.3 - interceptPenalty * 0.5);
+      const isolationBonus = Math.max(0, 0.5 - coverWindow * 0.18);
+      const reachableBonus = Math.max(0, 0.34 - interceptPenalty * 0.44);
       const ideal = this.getIdealRange(bot.classType);
       const rangeFitBonus = Math.max(0, 0.28 - Math.abs(distance - ideal) / Math.max(ideal, 1) * 0.16);
       const routeClarityBonus = Math.max(0, 0.2 - routePenalty * 0.24);
-      const stickiness = mem.targetId === e.id ? 0.42 : 0;
+      const stickiness = mem.targetId === e.id ? 0.52 : 0;
+      const soloWindow = supportWindow <= 0.12 ? 0.18 : 0;
       const score =
         900000 / d2 +
         lowHp +
@@ -417,8 +432,9 @@ export class TDMAISystem {
         reachableBonus +
         rangeFitBonus +
         routeClarityBonus +
-        stickiness -
-        coverWindow -
+        stickiness +
+        soloWindow -
+        coverWindow * 0.82 -
         collapsePenalty -
         overextendPenalty -
         routePenalty -
@@ -465,7 +481,7 @@ export class TDMAISystem {
 
     if (this.tick >= mem.strafeFlipTick) {
       mem.strafeDir = mem.strafeDir === 1 ? -1 : 1;
-      mem.strafeFlipTick = this.tick + 24 + (bot.id % 13);
+      mem.strafeFlipTick = this.tick + 34 + (bot.id % 17);
     }
 
     const strafe = { x: -dir.y * mem.strafeDir, y: dir.x * mem.strafeDir };
@@ -536,26 +552,31 @@ export class TDMAISystem {
     const distSq = Vector.magSq(toTarget);
     const dist = Math.max(1, Math.sqrt(distSq));
     const dir = Vector.normalize(toTarget);
-    const orbitSign = (bot.id & 1) === 0 ? 1 : -1;
     const shapeRadius = this.getFarmTargetRadius(target);
     const botRadius = this.getBotRadius(bot);
-    const panicRange = botRadius + shapeRadius + 90;
-    const holdRange = Math.max(175, shapeRadius + 235 + (target.type === 'CRASHER' ? 70 : 0));
+    const occupancy = this.getSharedTargetOccupancy(bot, target.id);
+    const slot = this.getSharedTargetSlot(bot, target.id, occupancy);
+    const slotAngle = (Math.PI * 2 * slot) / Math.max(1, occupancy);
+    const orbit = { x: Math.cos(slotAngle), y: Math.sin(slotAngle) };
+    const tangent = { x: -orbit.y, y: orbit.x };
+    const panicRange = botRadius + shapeRadius + (target.type === 'CRASHER' ? 120 : target.type === 'BOSS' ? 135 : 96);
+    const holdRange = Math.max(185, shapeRadius + 235 + (target.type === 'CRASHER' ? 88 : target.type === 'BOSS' ? 54 : 0) + Math.min(70, occupancy * 18));
+    const approachBias = target.type === 'CRASHER' ? 0.78 : target.type === 'BOSS' ? 0.86 : 1;
 
     if (dist < panicRange) {
       return this.movement.composeSteering(
         [
           this.movement.fleeForce(bot.pos, target.pos),
-          { x: -dir.y, y: dir.x }
+          tangent
         ],
-        [1.18, 0.34],
+        [1.28, 0.42],
         1.4
       );
     }
 
     const anchor = {
-      x: target.pos.x - dir.x * holdRange - dir.y * orbitSign * Math.min(70, shapeRadius + 24),
-      y: target.pos.y - dir.y * holdRange + dir.x * orbitSign * Math.min(70, shapeRadius + 24)
+      x: target.pos.x - orbit.x * holdRange * approachBias + tangent.x * Math.min(40, shapeRadius + occupancy * 8),
+      y: target.pos.y - orbit.y * holdRange * approachBias + tangent.y * Math.min(40, shapeRadius + occupancy * 8)
     };
     return this.movement.arriveForce(bot.pos, anchor, 250, 24);
   }
@@ -569,12 +590,13 @@ export class TDMAISystem {
       const d2 = Math.max(1, Vector.distSq(bot.pos, f.pos));
       const xp = Math.max(40, f.xpValue ?? (f.type === 'BOSS' ? 1200 : f.type === 'CRASHER' ? 220 : 110));
       const rarityBoost = f.rarity === 'Legendary' || f.rarity === 'Mythical' || f.rarity === 'Eternal' ? 1.5 : 1.0;
-      const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, f) ? 0.48 : 1;
+      const antiOverlap = this.isShapeTargetCrowdedByAlly(bot, f) ? 0.74 : 1;
       const shapeRadius = this.getFarmTargetRadius(f);
       const botRadius = this.getBotRadius(bot);
       const bodyRiskPenalty = d2 < (botRadius + shapeRadius + 48) * (botRadius + shapeRadius + 48) ? 0.15 : 1;
-      const contestPenalty = 1 + this.getFarmContestPressure(f, enemies, farmTargets);
-      const score = ((xp * rarityBoost) / Math.sqrt(d2)) * antiOverlap * bodyRiskPenalty / contestPenalty;
+      const contestPenalty = 1 + this.getFarmContestPressure(f, enemies, farmTargets) * 0.82;
+      const soloFarmBonus = this.isShapeTargetCrowdedByAlly(bot, f) ? 0 : 1.16;
+      const score = ((xp * rarityBoost) / Math.sqrt(d2)) * antiOverlap * bodyRiskPenalty * soloFarmBonus / contestPenalty;
       if (score > bestScore) {
         best = f;
         bestScore = score;
@@ -623,7 +645,8 @@ export class TDMAISystem {
       if (d2 > r2) continue;
       const d = Math.sqrt(d2);
       const t = 1 - Math.min(1, d / radius);
-      const w = (t * t) * 1.9;
+      const sharedTarget = bot.aiTargetId != null && ally.aiTargetId === bot.aiTargetId;
+      const w = (t * t) * (sharedTarget ? 1.15 : 1.9);
       fx += (dx / d) * w;
       fy += (dy / d) * w;
       count++;
@@ -655,9 +678,16 @@ export class TDMAISystem {
       const closeness = 1 - Math.min(1, d / pressureRadius);
       const typeWeight = target.type === 'CRASHER' ? 2.45 : target.type === 'BOSS' ? 1.7 : 1.28;
       const urgency = d2 <= personalR2 ? 2.25 : 1.0;
+      const avoidance = { x: dx / d, y: dy / d };
+      const tangent = { x: -avoidance.y, y: avoidance.x };
       const weight = closeness * closeness * typeWeight * urgency;
-      fx += (dx / d) * weight;
-      fy += (dy / d) * weight;
+      fx += avoidance.x * weight;
+      fy += avoidance.y * weight;
+      if (d < pressureRadius * 0.82) {
+        const sideWeight = weight * (target.type === 'CRASHER' ? 0.42 : 0.28);
+        fx += tangent.x * sideWeight;
+        fy += tangent.y * sideWeight;
+      }
     }
 
     if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;
@@ -724,7 +754,8 @@ export class TDMAISystem {
     const bulletSpeed = 5 + (bot.stats?.[StatType.BULLET_SPEED] ?? 0) * 0.8;
     const rel = Vector.sub(target.pos, bot.pos);
     const dist = Math.max(1, Math.sqrt(Vector.magSq(rel)));
-    const t = Math.min(1.0, dist / Math.max(12, bulletSpeed * 56));
+    const leadScale = target.type === 'SHAPE' ? 0.42 : target.type === 'CRASHER' ? 0.34 : target.type === 'BOSS' ? 0.28 : 1.0;
+    const t = Math.min(1.0, (dist / Math.max(12, bulletSpeed * 56)) * leadScale);
     const tv = target.vel ?? ZERO;
     return { x: target.pos.x + tv.x * t * 60, y: target.pos.y + tv.y * t * 60 };
   }
@@ -752,26 +783,26 @@ export class TDMAISystem {
       };
       const missDistance = Math.sqrt(Math.max(1, Vector.distSq(bot.pos, closest)));
       const cross = velDir.x * rel.y - velDir.y * rel.x;
-      const side = {
-        x: -velDir.y * (cross >= 0 ? 1 : -1),
-        y: velDir.x * (cross >= 0 ? 1 : -1)
-      };
+      const sideSign = cross >= 0 ? 1 : -1;
+      const side = { x: -velDir.y * sideSign, y: velDir.x * sideSign };
       const corridor = Math.min(Math.abs(cross), missDistance);
-      const inbound = along > 0 ? 1.22 : 0.26;
-      const laneRisk = corridor < 84 ? 1.35 : corridor < 150 ? 0.86 : 0.36;
-      const timeRisk = 1 / (1 + timeToClosest * 0.075);
-      const w = (22000 / d2) * inbound * laneRisk * timeRisk;
-      fx += (away.x * 0.48 + side.x * 0.92) * w;
-      fy += (away.y * 0.48 + side.y * 0.92) * w;
+      const inbound = along > 0 ? 1.28 : 0.32;
+      const directThreat = missDistance < 52 && timeToClosest < 18;
+      const laneRisk = directThreat ? 1.72 : corridor < 84 ? 1.55 : corridor < 150 ? 0.94 : 0.44;
+      const speedFactor = 1 + Math.min(1, Math.sqrt(velMagSq) * 0.08);
+      const timeRisk = 1 / (1 + timeToClosest * 0.1);
+      const w = (24000 / d2) * inbound * laneRisk * timeRisk * speedFactor;
+      fx += (away.x * 0.42 + side.x * 0.98) * w;
+      fy += (away.y * 0.42 + side.y * 0.98) * w;
     }
     if (Math.abs(fx) + Math.abs(fy) < 0.0001) return ZERO;
     return Vector.normalize({ x: fx, y: fy });
   }
 
   private getBoidWeights(cls: TankClass): { separation: number; alignment: number; cohesion: number } {
-    if (this.isSupport(cls)) return { separation: 1.8, alignment: 0.55, cohesion: 0.18 };
-    if (this.isRusher(cls)) return { separation: 1.45, alignment: 0.4, cohesion: 0.1 };
-    return { separation: 1.6, alignment: 0.45, cohesion: 0.14 };
+    if (this.isSupport(cls)) return { separation: 1.9, alignment: 0.42, cohesion: 0.08 };
+    if (this.isRusher(cls)) return { separation: 1.5, alignment: 0.28, cohesion: 0.04 };
+    return { separation: 1.7, alignment: 0.32, cohesion: 0.06 };
   }
 
   private computeHostileRepulsion(bot: IAITank, enemies: Player[], radius: number, idealRange: number): Vector2 {
@@ -854,11 +885,15 @@ export class TDMAISystem {
       coverBias = this.movement.fleeForce(centroid, target.pos);
     }
     const flankBase = this.isSupport(bot.classType) ? TUNING.flankOffset * 1.1 : this.isRusher(bot.classType) ? TUNING.flankOffset * 0.72 : TUNING.flankOffset;
+    const sharedTargetCount = this.getSharedTargetOccupancy(bot, target.id);
+    const slot = this.getSharedTargetSlot(bot, target.id, sharedTargetCount);
+    const slotAngle = (Math.PI * 2 * slot) / Math.max(1, sharedTargetCount);
+    const slotDir = { x: Math.cos(slotAngle), y: Math.sin(slotAngle) };
     const flank = flankBase * (1 + caution * 0.34);
     const pullback = ideal * (0.76 + caution * 0.18);
     return {
-      x: aimPoint.x + targetDrift.x * 14 - toTarget.x * pullback + side.x * flank + coverBias.x * (55 + caution * 22),
-      y: aimPoint.y + targetDrift.y * 14 - toTarget.y * pullback + side.y * flank + coverBias.y * (55 + caution * 22),
+      x: aimPoint.x + targetDrift.x * 14 - toTarget.x * pullback + side.x * flank + slotDir.x * Math.min(52, sharedTargetCount * 10) + coverBias.x * (55 + caution * 22),
+      y: aimPoint.y + targetDrift.y * 14 - toTarget.y * pullback + side.y * flank + slotDir.y * Math.min(52, sharedTargetCount * 10) + coverBias.y * (55 + caution * 22),
     };
   }
 
@@ -918,11 +953,12 @@ export class TDMAISystem {
     if (state === AIState.FLEE && dist > ideal * 0.82 && ((target.health ?? 100) / Math.max(1, target.maxHealth ?? 100)) > 0.38) return false;
     if (target.type === 'CRASHER' && dist < this.getFarmTargetRadius(target) + this.getBotRadius(bot) + 120) return false;
     const confidence = this.getShotConfidence(bot, target, dist, state);
+    const targetHpRatio = (target.health ?? 100) / Math.max(1, target.maxHealth ?? 100);
     const threshold =
       state === AIState.FLEE
         ? 0.7
         : target.type === 'SHAPE' || target.type === 'CRASHER' || target.type === 'BOSS'
-          ? 0.42
+          ? dist < ideal * 0.9 || targetHpRatio < 0.5 ? 0.34 : 0.42
           : 0.52;
     if (confidence < threshold) return false;
     return !this.hasFriendlyObstruction(bot.pos, aimPoint, allies);
@@ -939,7 +975,8 @@ export class TDMAISystem {
       if (forward <= 30 || forward >= len - 24) continue;
       const closest = { x: from.x + dir.x * forward, y: from.y + dir.y * forward };
       const perp = Math.sqrt(Vector.distSq(ally.pos, closest));
-      if (perp <= TUNING.shotObstructionRadius) return true;
+      const sameTarget = ally.aiTargetId != null && Vector.distSq(ally.pos, to) < 180 * 180;
+      if (perp <= TUNING.shotObstructionRadius && !(sameTarget && forward > len * 0.72)) return true;
     }
     return false;
   }
@@ -963,8 +1000,8 @@ export class TDMAISystem {
       const personalSpace = this.getBotRadius(bot) + radius + 110;
       const d2 = Math.max(1, Vector.distSq(bot.pos, target.pos));
       if (d2 > personalSpace * personalSpace) continue;
-      const hazardWeight = target.type === 'CRASHER' ? 0.6 : target.type === 'BOSS' ? 0.42 : 0.18;
-      pressure += hazardWeight * (personalSpace * personalSpace / d2) * 0.22;
+      const hazardWeight = target.type === 'CRASHER' ? 0.8 : target.type === 'BOSS' ? 0.56 : 0.22;
+      pressure += hazardWeight * (personalSpace * personalSpace / d2) * 0.24;
     }
     return pressure;
   }
@@ -973,16 +1010,19 @@ export class TDMAISystem {
     if (!target) return;
     mem.lastThreatPos = { x: target.pos.x, y: target.pos.y };
     mem.lastThreatVel = target.vel ? { x: target.vel.x, y: target.vel.y } : ZERO;
+    mem.lastThreatHpRatio = (target.health ?? 100) / Math.max(1, target.maxHealth ?? 100);
+    mem.lastThreatRetreating = target.aiState === AIState.FLEE || mem.lastThreatHpRatio < 0.34;
     mem.lastThreatTick = this.tick;
     mem.investigateUntil = this.tick + TUNING.investigateTicks;
   }
 
   private getInvestigatePoint(mem: Memory): Vector2 | null {
     if (!mem.lastThreatPos || this.tick > mem.investigateUntil) return null;
-    const driftTicks = Math.max(0, Math.min(18, this.tick - mem.lastThreatTick));
+    const driftTicks = Math.max(0, Math.min(mem.lastThreatRetreating ? 24 : 18, this.tick - mem.lastThreatTick));
+    const pursuitLead = mem.lastThreatRetreating ? 0.92 : 0.7;
     return {
-      x: this.clamp(mem.lastThreatPos.x + mem.lastThreatVel.x * driftTicks * 0.7, 140, this.config.worldWidth - 140),
-      y: this.clamp(mem.lastThreatPos.y + mem.lastThreatVel.y * driftTicks * 0.7, 140, this.config.worldHeight - 140),
+      x: this.clamp(mem.lastThreatPos.x + mem.lastThreatVel.x * driftTicks * pursuitLead, 140, this.config.worldWidth - 140),
+      y: this.clamp(mem.lastThreatPos.y + mem.lastThreatVel.y * driftTicks * pursuitLead, 140, this.config.worldHeight - 140),
     };
   }
 
@@ -991,7 +1031,7 @@ export class TDMAISystem {
     const bulletPressure = Math.max(0, bulletCount - 1) * 0.12;
     let caution =
       Math.max(0, (dangerPressure - TUNING.cautionPressure) * 0.8) +
-      enemyAdvantage * 0.22 +
+      enemyAdvantage * 0.14 +
       bulletPressure;
 
     if (caution > 0.08) {
@@ -1060,13 +1100,18 @@ export class TDMAISystem {
     mem.strafeFlipTick = this.tick + 20 + (bot.id % 9);
 
     const toward = desiredPoint ? Vector.normalize(Vector.sub(desiredPoint, bot.pos)) : Vector.normalize(goal);
-    const side = Vector.magSq(toward) > 0.0001
+    const baseSide = Vector.magSq(toward) > 0.0001
       ? { x: -toward.y * mem.strafeDir, y: toward.x * mem.strafeDir }
       : { x: Math.cos(mem.wanderAngle), y: Math.sin(mem.wanderAngle) };
-    mem.wanderAngle += 0.41;
+    const rebound = Vector.magSq(goal) > 0.0001 ? Vector.normalize(goal) : toward;
+    const detourDir = Vector.normalize({
+      x: baseSide.x * 0.82 + rebound.x * 0.36,
+      y: baseSide.y * 0.82 + rebound.y * 0.36,
+    });
+    mem.wanderAngle += 0.33;
     const detourPoint = {
-      x: this.clamp(bot.pos.x + side.x * 260 + toward.x * 90, 140, this.config.worldWidth - 140),
-      y: this.clamp(bot.pos.y + side.y * 260 + toward.y * 90, 140, this.config.worldHeight - 140),
+      x: this.clamp(bot.pos.x + detourDir.x * 280 + toward.x * 60, 140, this.config.worldWidth - 140),
+      y: this.clamp(bot.pos.y + detourDir.y * 280 + toward.y * 60, 140, this.config.worldHeight - 140),
     };
     mem.detourPoint = detourPoint;
     mem.detourUntil = this.tick + TUNING.detourTicks;
@@ -1081,7 +1126,7 @@ export class TDMAISystem {
       TUNING.boundaryLookAhead
     );
 
-    return this.movement.composeSteering([detourSeek, side, steering, boundary], [1.28, 0.78, 0.5, 0.74], 1.48);
+    return this.movement.composeSteering([detourSeek, baseSide, steering, boundary], [1.28, 0.78, 0.5, 0.74], 1.48);
   }
 
   private getRouteDangerPenalty(from: Vector2, to: Vector2, enemies: Player[], ignoreId: number): number {
@@ -1130,6 +1175,35 @@ export class TDMAISystem {
       pressure += other.type === 'CRASHER' ? 0.24 : other.type === 'BOSS' ? 0.36 : 0.08;
     }
     return Math.min(1.4, pressure);
+  }
+
+  private shouldPrioritizeFarmBeforeDominion(bot: IAITank, farmTargets: Player[]): boolean {
+    if (this.config.dominionZones.length === 0 || farmTargets.length === 0) return false;
+    const level = (bot as { level?: number }).level ?? 1;
+    const score = (bot as { score?: number }).score ?? 0;
+    const hpRatio = bot.health / Math.max(1, bot.maxHealth);
+    const urgentDefense = this.config.dominionZones.some((zone) => {
+      if (zone.owner !== bot.team || !zone.contested) return false;
+      return Vector.distSq(bot.pos, zone.pos) < 1500 * 1500;
+    });
+    if (urgentDefense && level >= 14 && hpRatio >= 0.46) return false;
+
+    let nearbyFarmValue = 0;
+    let nearbyLargeShape = false;
+    for (let i = 0; i < farmTargets.length; i++) {
+      const farm = farmTargets[i];
+      const d2 = Vector.distSq(bot.pos, farm.pos);
+      if (d2 > 1650 * 1650) continue;
+      const xpValue = farm.xpValue ?? 0;
+      const radius = farm.radius ?? 0;
+      const proximity = 1 - Math.min(1, Math.sqrt(d2) / 1650);
+      nearbyFarmValue += (xpValue / 220) * (0.45 + proximity * 0.55);
+      if (radius >= 34 || xpValue >= 400) nearbyLargeShape = true;
+    }
+
+    const underLeveled = level < 22 || score < 6500;
+    const strongFarmWindow = nearbyFarmValue >= 2.1 || (nearbyLargeShape && level < 30);
+    return hpRatio >= 0.42 && (underLeveled || strongFarmWindow);
   }
 
   private pickDominionObjective(bot: IAITank, mem: Memory): DominionZoneState | null {
@@ -1207,6 +1281,8 @@ export class TDMAISystem {
       stuckTicks: 0,
       lastThreatPos: null,
       lastThreatVel: ZERO,
+      lastThreatHpRatio: 1,
+      lastThreatRetreating: false,
       lastThreatTick: 0,
       investigateUntil: 0,
       cautionUntil: 0,
@@ -1251,10 +1327,32 @@ export class TDMAISystem {
       if (ally.id === bot.id || ally.team !== bot.team) continue;
       if (ally.type === 'BULLET' || ally.type === 'SHAPE' || ally.type === 'BOSS' || ally.type === 'CRASHER') continue;
       const sameTarget = ally.aiTargetId === target.id;
-      const nearTarget = Vector.distSq(ally.pos, target.pos) <= 180 * 180;
+      const nearTarget = Vector.distSq(ally.pos, target.pos) <= 140 * 140;
       if (sameTarget || nearTarget) return true;
     }
     return false;
+  }
+
+  private getSharedTargetOccupancy(bot: IAITank, targetId: number): number {
+    let count = 1;
+    for (const ally of this.playersById.values()) {
+      if (ally.id === bot.id || ally.team !== bot.team) continue;
+      if (ally.type === 'BULLET' || ally.type === 'SHAPE' || ally.type === 'BOSS' || ally.type === 'CRASHER') continue;
+      if (ally.aiTargetId === targetId && Vector.distSq(ally.pos, bot.pos) <= 520 * 520) count++;
+    }
+    return Math.max(1, count);
+  }
+
+  private getSharedTargetSlot(bot: IAITank, targetId: number, occupancy: number): number {
+    const ids = [bot.id];
+    for (const ally of this.playersById.values()) {
+      if (ally.id === bot.id || ally.team !== bot.team) continue;
+      if (ally.type === 'BULLET' || ally.type === 'SHAPE' || ally.type === 'BOSS' || ally.type === 'CRASHER') continue;
+      if (ally.aiTargetId === targetId && Vector.distSq(ally.pos, bot.pos) <= 520 * 520) ids.push(ally.id);
+    }
+    ids.sort((a, b) => a - b);
+    const index = Math.max(0, ids.indexOf(bot.id));
+    return occupancy <= 0 ? 0 : index % occupancy;
   }
 
   private getFarmTargetRadius(target: Player): number {
@@ -1304,7 +1402,9 @@ export class TDMAISystem {
       const perp = Math.sqrt(Math.max(0, Vector.distSq(ally.pos, closest)));
       if (perp > Math.max(TUNING.shotObstructionRadius, radius)) continue;
       const closeness = 1 - Math.min(1, perp / Math.max(1, radius));
-      penalty += 0.36 + closeness * 0.3;
+      const sameTarget = ally.aiTargetId === target.id;
+      const nearImpact = proj > len * 0.72;
+      penalty += sameTarget && nearImpact ? 0.12 + closeness * 0.12 : 0.36 + closeness * 0.3;
     }
 
     return Math.min(0.85, penalty);
@@ -1372,7 +1472,7 @@ export class TDMAISystem {
     const finishBonus = ((target.health ?? 100) / Math.max(1, target.maxHealth ?? 100)) < 0.4 ? 0.16 : 0;
     const farmBonus = target.type === 'SHAPE' || target.type === 'CRASHER' || target.type === 'BOSS' ? 0.18 : 0;
     const fleePenalty = state === AIState.FLEE ? 0.18 : 0;
-    const aggressionBonus = this.isRusher(bot.classType) ? 0.12 : this.isSupport(bot.classType) ? 0.02 : 0.08;
+    const aggressionBonus = this.isRusher(bot.classType) ? 0.18 : this.isSupport(bot.classType) ? 0.04 : 0.12;
     return Math.max(0, Math.min(1.2, 1 + finishBonus + farmBonus + aggressionBonus + closingBonus + duelBonus - travelPenalty - lateralPenalty - fleePenalty));
   }
 
@@ -1400,8 +1500,10 @@ export class TDMAISystem {
       return;
     }
     const diff = this.normalizeAngle(desiredAngle - bot.aiTargetRot);
-    if (Math.abs(diff) <= TUNING.aimDeadzone) return;
-    const step = combatTracking ? TUNING.aimTurnStepCombat : TUNING.aimTurnStepFallback;
+    if (Math.abs(diff) <= (combatTracking ? TUNING.aimDeadzone : TUNING.aimDeadzone * 1.8)) return;
+    const step = combatTracking
+      ? (Math.abs(diff) > 1.4 ? TUNING.aimTurnStepCombat * 0.58 : TUNING.aimTurnStepCombat * 0.92)
+      : TUNING.aimTurnStepFallback * 0.9;
     bot.aiTargetRot = this.normalizeAngle(bot.aiTargetRot + diff * step);
   }
 

@@ -1587,8 +1587,14 @@ class Tank extends Entity {
   }
 
   private resolveVisualHsl(): { base: Hsl; final: Hsl; skin: SkinDefinition } {
-      const base = teamBaseHsl(this.team);
-      const skin = SKINS.find((s) => s.id === this.skinId) ?? SKINS.find((s) => s.id === 'default')!;
+            const base = teamBaseHsl(this.team);
+            // Defensive lookup: support older/alternate item id prefixes like `elite_skin_*`.
+            const candidates = [this.skinId];
+            if (typeof this.skinId === 'string') {
+                if (this.skinId.startsWith('elite_skin_')) candidates.push('skin_' + this.skinId.slice('elite_skin_'.length));
+                if (this.skinId.startsWith('elite_')) candidates.push('skin_' + this.skinId.slice('elite_'.length));
+            }
+            let skin = SKINS.find((s) => candidates.includes(s.id)) ?? SKINS.find((s) => s.id === 'default')!;
       const shifted: Hsl = {
           h: wrapHue(base.h + skin.modifier.hueShift),
           s: clampNum(base.s * skin.modifier.saturationMult, SKIN_APPLICATION.clamp.saturation[0], SKIN_APPLICATION.clamp.saturation[1]),
@@ -4639,21 +4645,22 @@ class Boss extends Entity {
 
     constructor(id: number, archetype?: 'SINGULARITY' | 'SIEGEBREAKER' | 'SWARMLORD') {
         const resolved = archetype ?? (Math.random() < 0.33 ? 'SIEGEBREAKER' : Math.random() < 0.5 ? 'SWARMLORD' : 'SINGULARITY');
-        super(id, EntityType.BOSS, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, resolved === 'SIEGEBREAKER' ? 152 : resolved === 'SWARMLORD' ? 138 : 148, '#0055ff');
+        const radius = resolved === 'SIEGEBREAKER' ? 188 : resolved === 'SWARMLORD' ? 176 : 198;
+        super(id, EntityType.BOSS, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, radius, '#0055ff');
         this.archetype = resolved;
-        this.maxHealth = resolved === 'SIEGEBREAKER' ? 165000 : resolved === 'SWARMLORD' ? 142000 : 152000;
+        this.maxHealth = resolved === 'SIEGEBREAKER' ? 205000 : resolved === 'SWARMLORD' ? 178000 : 198000;
         this.health = this.maxHealth;
         this.displayHealth = this.maxHealth;
-        this.damage = resolved === 'SIEGEBREAKER' ? 185 : resolved === 'SWARMLORD' ? 120 : 150;
-        this.mass = resolved === 'SIEGEBREAKER' ? 17000 : 13000;
-        this.friction = 0.99;
+        this.damage = resolved === 'SIEGEBREAKER' ? 168 : resolved === 'SWARMLORD' ? 132 : 148;
+        this.mass = resolved === 'SIEGEBREAKER' ? 24500 : resolved === 'SWARMLORD' ? 19000 : 21500;
+        this.friction = 0.995;
         this.name = resolved === 'SIEGEBREAKER' ? "GRAND SIEGEBREAKER" : resolved === 'SWARMLORD' ? "GRAND SWARMLORD" : "GRAND SINGULARITY";
         this.color = resolved === 'SIEGEBREAKER' ? '#a855f7' : resolved === 'SWARMLORD' ? '#14b8a6' : '#0055ff';
-        this.pulseCooldown = resolved === 'SIEGEBREAKER' ? 3.6 : resolved === 'SWARMLORD' ? 4.8 : 4.2;
-        this.summonCooldown = resolved === 'SWARMLORD' ? 6.4 : 8.5;
-        this.volleyCooldown = resolved === 'SIEGEBREAKER' ? 2.8 : 3.6;
-        this.pos.x += Vector.randomRange(-100, 100);
-        this.pos.y += Vector.randomRange(-100, 100);
+        this.pulseCooldown = resolved === 'SIEGEBREAKER' ? 4.2 : resolved === 'SWARMLORD' ? 5.4 : 5.0;
+        this.summonCooldown = resolved === 'SWARMLORD' ? 7.8 : resolved === 'SINGULARITY' ? 14.0 : 10.8;
+        this.volleyCooldown = resolved === 'SIEGEBREAKER' ? 3.4 : resolved === 'SWARMLORD' ? 4.4 : 7.2;
+        this.pos.x += Vector.randomRange(-130, 130);
+        this.pos.y += Vector.randomRange(-130, 130);
     }
     
     override takeDamage(amount: number, sourceId: number | null = null, isBodyDamage: boolean = false) {
@@ -4673,7 +4680,16 @@ class Boss extends Entity {
             this.health = Math.min(this.health + 50 * dt * 60, this.maxHealth);
         }
         
-        super.update(dt); 
+        super.update(dt);
+
+        const speedCap =
+            this.archetype === 'SINGULARITY' ? 1.12 :
+            this.archetype === 'SIEGEBREAKER' ? 1.22 :
+            1.18;
+        const speed = Vector.mag(this.vel);
+        if (speed > speedCap) {
+            this.vel = Vector.mult(Vector.normalize(this.vel), speedCap);
+        }
     }
     
     override drawBody(ctx: CanvasRenderingContext2D) {
@@ -4681,13 +4697,56 @@ class Boss extends Entity {
         const hpRatio = this.health / this.maxHealth;
         
         ctx.save();
-        const auraSize = this.radius * (1.3 + Math.sin(t * 2) * 0.08);
-        const grad = ctx.createRadialGradient(0, 0, this.radius * 0.8, 0, 0, auraSize);
-        grad.addColorStop(0, 'rgba(0, 85, 255, 0.4)');
+        const auraSize = this.radius * (this.archetype === 'SINGULARITY' ? 1.5 + Math.sin(t * 1.6) * 0.06 : 1.3 + Math.sin(t * 2) * 0.08);
+        const grad = ctx.createRadialGradient(0, 0, this.radius * 0.72, 0, 0, auraSize);
+        grad.addColorStop(0, this.archetype === 'SINGULARITY' ? 'rgba(72, 163, 255, 0.38)' : 'rgba(0, 85, 255, 0.4)');
         grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
         ctx.fillStyle = grad;
         ctx.beginPath(); ctx.arc(0, 0, auraSize, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
+
+        if (this.archetype === 'SINGULARITY') {
+            for (let ring = 0; ring < 3; ring++) {
+                ctx.save();
+                ctx.rotate((ring % 2 === 0 ? 1 : -1) * t * (0.28 + ring * 0.13));
+                ctx.beginPath();
+                ctx.lineWidth = 10 - ring * 2;
+                ctx.strokeStyle = ring === 0 ? 'rgba(120, 210, 255, 0.62)' : ring === 1 ? 'rgba(84, 120, 255, 0.46)' : 'rgba(255,255,255,0.26)';
+                ctx.arc(0, 0, this.radius * (0.72 + ring * 0.19), 0, Math.PI * (1.28 + ring * 0.2));
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            ctx.save();
+            ctx.rotate(-t * 0.42);
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const angle = (i * Math.PI * 2) / 6;
+                const wobble = 0.88 + Math.sin(t * 2.2 + i * 0.8) * 0.08;
+                const x = Math.cos(angle) * this.radius * wobble;
+                const y = Math.sin(angle) * this.radius * wobble;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(15, 28, 72, 0.88)';
+            ctx.strokeStyle = 'rgba(132, 218, 255, 0.78)';
+            ctx.lineWidth = 12;
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+
+            const corePulse = 1 + Math.sin(t * 3.6) * 0.06;
+            const coreGrad = ctx.createRadialGradient(0, 0, this.radius * 0.06, 0, 0, this.radius * 0.42 * corePulse);
+            coreGrad.addColorStop(0, '#ffffff');
+            coreGrad.addColorStop(0.45, '#8de9ff');
+            coreGrad.addColorStop(1, 'rgba(55, 120, 255, 0.15)');
+            ctx.beginPath();
+            ctx.fillStyle = coreGrad;
+            ctx.arc(0, 0, this.radius * 0.42 * corePulse, 0, Math.PI * 2);
+            ctx.fill();
+            return;
+        }
 
         for (let j = 0; j < 2; j++) {
             ctx.save();
@@ -4994,6 +5053,11 @@ class Shape extends Entity {
         ctx.restore();
         return;
     }
+    if (this.rarity === ShapeRarity.COMMON) {
+        this.drawCommonVisuals(ctx, fillColor, strokeColor);
+        ctx.restore();
+        return;
+    }
     if (this.shapeType === ShapeType.DIAMOND) {
         this.drawAdvancedDiamond(ctx, fillColor, strokeColor, glowBlur, glowColor);
         ctx.restore();
@@ -5043,19 +5107,14 @@ class Shape extends Entity {
     }
     this.traceShape(ctx, sides, this.radius, this.getShapeTraceRotationOffset());
     
-    const glintPos = (Math.sin(Date.now() / 2000) + 1) / 2; 
+    const glintPos = (Math.sin(Date.now() / 2000) + 1) / 2;
     const grad = ctx.createLinearGradient(-this.radius * 2, -this.radius * 2, this.radius * 2, this.radius * 2);
-    
-    if (this.rarity !== ShapeRarity.COMMON) {
-        grad.addColorStop(0, fillColor);
-        grad.addColorStop(Math.max(0, glintPos - 0.1), fillColor);
-        grad.addColorStop(glintPos, 'rgba(255,255,255,0.4)');
-        grad.addColorStop(Math.min(1, glintPos + 0.1), fillColor);
-        grad.addColorStop(1, fillColor);
-        ctx.fillStyle = grad;
-    } else {
-        ctx.fillStyle = fillColor;
-    }
+    grad.addColorStop(0, fillColor);
+    grad.addColorStop(Math.max(0, glintPos - 0.1), fillColor);
+    grad.addColorStop(glintPos, 'rgba(255,255,255,0.4)');
+    grad.addColorStop(Math.min(1, glintPos + 0.1), fillColor);
+    grad.addColorStop(1, fillColor);
+    ctx.fillStyle = grad;
     
     ctx.fill(); 
     ctx.shadowBlur = 0; 
@@ -5145,6 +5204,81 @@ if (this.rarity !== ShapeRarity.COMMON && this.rarity !== ShapeRarity.UNCOMMON) 
     ctx.stroke();
     ctx.restore();
   }
+
+    private drawCommonVisuals(ctx: CanvasRenderingContext2D, fillColor: string, strokeColor: string) {
+        const sides = SHAPE_STATS[this.shapeType].sides;
+        const t = Date.now() / 1000;
+        const highlight = 'rgba(255,255,255,0.35)';
+        const accent = 'rgba(255,255,255,0.12)';
+
+        const grad = ctx.createLinearGradient(-this.radius, -this.radius, this.radius, this.radius);
+        grad.addColorStop(0, this.lightenColor(fillColor, 0.12));
+        grad.addColorStop(0.45, fillColor);
+        grad.addColorStop(1, this.darkenColor(fillColor, 0.1));
+
+        ctx.fillStyle = grad;
+        this.traceShape(ctx, sides, this.radius, this.getShapeTraceRotationOffset());
+        ctx.fill();
+
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = strokeColor;
+        ctx.stroke();
+
+        ctx.save();
+        ctx.globalAlpha = 0.42;
+        ctx.strokeStyle = highlight;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 10]);
+        this.traceShape(ctx, sides, this.radius * 0.84, this.getShapeTraceRotationOffset());
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i < sides; i++) {
+            const angle = this.getShapeTraceRotationOffset() + (i * 2 * Math.PI) / sides;
+            const inner = { x: Math.cos(angle) * this.radius * 0.4, y: Math.sin(angle) * this.radius * 0.4 };
+            ctx.moveTo(0, 0);
+            ctx.lineTo(inner.x, inner.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    private lightenColor(color: string, amount: number): string {
+        const [r, g, b] = this.hexToRgb(color);
+        return this.rgbToHex(
+            Math.min(255, Math.round(r + (255 - r) * amount)),
+            Math.min(255, Math.round(g + (255 - g) * amount)),
+            Math.min(255, Math.round(b + (255 - b) * amount))
+        );
+    }
+
+    private darkenColor(color: string, amount: number): string {
+        const [r, g, b] = this.hexToRgb(color);
+        return this.rgbToHex(
+            Math.max(0, Math.round(r * (1 - amount))),
+            Math.max(0, Math.round(g * (1 - amount))),
+            Math.max(0, Math.round(b * (1 - amount)))
+        );
+    }
+
+    private hexToRgb(hex: string): [number, number, number] {
+        const sanitized = hex.replace('#', '');
+        const bigint = parseInt(sanitized.length === 3 ? sanitized.split('').map((c) => c + c).join('') : sanitized, 16);
+        return [
+            (bigint >> 16) & 255,
+            (bigint >> 8) & 255,
+            bigint & 255,
+        ];
+    }
+
+    private rgbToHex(r: number, g: number, b: number): string {
+        const toHex = (n: number) => n.toString(16).padStart(2, '0');
+        return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+    }
 
   private drawTranscendentBody(ctx: CanvasRenderingContext2D, sides: number) {
     const hue = Math.floor(this.hueTimer % 360);
@@ -6763,6 +6897,8 @@ export class GameEngine {
   bossSpawnTimer: number = 0;
   eliteSpawnTimer: number = 0;
   shapeSpawnTimer: number = 0;
+    commonShapeCooldown: number = 0;
+    commonShapeMaxActive: number = 180;
   killFeed: KillFeedEntry[] = [];
   attractMode: boolean = true;
   spectateTarget: Tank | null = null;
@@ -7425,13 +7561,23 @@ export class GameEngine {
       const recentlyUsed = this.recentSpawnZoneHistory.includes(i);
       const distFromMidNorm = Math.min(1, Vector.dist({ x: zone.cx, y: zone.cy }, center) / (Math.hypot(CANVAS_WIDTH, CANVAS_HEIGHT) * 0.5));
       const midBias = 1 - distFromMidNorm;
+      const nestBias = Math.max(0, 1 - distFromMidNorm / 0.34);
+      const quietBias = Math.max(0, Math.min(1, (4 - pressure) / 4));
 
       let score = 1.0;
       score += Math.max(0, 5 - shapes) * 1.2;
       score += Math.max(0, 3 - pressure) * 1.4;
       if (recentlyUsed) score -= 2.0;
 
-      if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
+      if (this.gameMode === GameMode.DOMINION) {
+        const greenPressure = this.zoneTeamPressureGreen[i] || 0;
+        const purplePressure = this.zoneTeamPressurePurple[i] || 0;
+        const teamSpread = Math.max(bluePressure, redPressure, greenPressure, purplePressure) - Math.min(bluePressure, redPressure, greenPressure, purplePressure);
+        score += midBias * 1.9;
+        score += nestBias * 2.8;
+        score += quietBias * 1.2;
+        score += Math.max(0, 2 - teamSpread) * 0.85;
+      } else if (this.gameMode === GameMode.TEAMS) {
         const teamDiff = Math.abs(bluePressure - redPressure);
         score += midBias * 2.2;
         score += Math.max(0, 2 - teamDiff) * 1.0;
@@ -7468,16 +7614,17 @@ export class GameEngine {
     const quietness = Math.max(0, Math.min(1, (4 - playerPressure) / 4));
     const lowDensity = Math.max(0, Math.min(1, (8 - shapePressure) / 8));
     const commonBias = quietness * 0.6 + lowDensity * 0.4;
+    const nestBias = Math.max(0, 1 - distNorm / 0.26);
     const roll = Math.random();
 
     if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
       const midBias = 1 - distNorm;
-      const octThresh = Math.max(0.0004, 0.0011 + midBias * 0.0075 - commonBias * 0.001);
-      const hexThresh = octThresh + Math.max(0.0026, 0.0064 + midBias * 0.016 - commonBias * 0.0055);
-      const heptThresh = hexThresh + Math.max(0.006, 0.011 + midBias * 0.022 - commonBias * 0.007);
-      const pentThresh = heptThresh + Math.max(0.015, 0.029 + midBias * 0.04 - commonBias * 0.015);
-      const triThresh = Math.min(0.9, pentThresh + 0.47 + commonBias * 0.07);
-      const diaThresh = Math.min(0.975, triThresh + 0.17 + commonBias * 0.055);
+      const octThresh = Math.max(0.0006, 0.0014 + midBias * 0.006 + nestBias * 0.0035 - commonBias * 0.0008);
+      const hexThresh = octThresh + Math.max(0.0032, 0.0072 + midBias * 0.012 + nestBias * 0.01 - commonBias * 0.0048);
+      const heptThresh = hexThresh + Math.max(0.0072, 0.0128 + midBias * 0.016 + nestBias * 0.016 - commonBias * 0.0062);
+      const pentThresh = heptThresh + Math.max(0.022, 0.036 + midBias * 0.03 + nestBias * 0.05 - commonBias * 0.012);
+      const triThresh = Math.min(0.9, pentThresh + 0.43 + commonBias * 0.05 - nestBias * 0.06);
+      const diaThresh = Math.min(0.975, triThresh + 0.16 + commonBias * 0.05 - nestBias * 0.015);
       if (roll < octThresh) return ShapeType.OCTAGON;
       if (roll < hexThresh) return ShapeType.HEXAGON;
       if (roll < heptThresh) return ShapeType.HEPTAGON;
@@ -7500,6 +7647,27 @@ export class GameEngine {
     if (roll < triThresh) return ShapeType.TRIANGLE;
     if (roll < diaThresh) return ShapeType.DIAMOND;
     return ShapeType.SQUARE;
+  }
+
+  private isPentagonNestZone(zoneIndex: number): boolean {
+    const zone = this.spawnZones[zoneIndex];
+    if (!zone) return false;
+    const center = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+    const distNorm = Math.min(1, Vector.dist({ x: zone.cx, y: zone.cy }, center) / (Math.hypot(CANVAS_WIDTH, CANVAS_HEIGHT) * 0.5));
+    return distNorm <= 0.25;
+  }
+
+  private getPentagonNestSpawnPosition(): Vector2 {
+    const center = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+    const angle = Math.random() * Math.PI * 2;
+    const ringBias = Math.random();
+    const dist = ringBias < 0.6
+      ? 220 + Math.sqrt(Math.random()) * 760
+      : 680 + Math.sqrt(Math.random()) * 540;
+    return {
+      x: center.x + Math.cos(angle) * dist,
+      y: center.y + Math.sin(angle) * dist,
+    };
   }
 
   nextId() { return ++this.idCounter; }
@@ -7994,7 +8162,8 @@ export class GameEngine {
 
   spawnBoss() {
     if (this.entities?.find(e => e.type === EntityType.BOSS)) return;
-    const boss = new Boss(this.nextId());
+    const archetype = this.gameMode === GameMode.DOMINION ? undefined : 'SINGULARITY';
+    const boss = new Boss(this.nextId(), archetype);
     this.entities.push(boss);
     this.addNotification(`⚠️ ${boss.name} HAS ARRIVED ⚠️`, "#00ffff");
     this.sound.playRoar();
@@ -9043,19 +9212,29 @@ export class GameEngine {
         }); 
     }
 
-    this.refreshSpawnHeatmap(dt);
-      this.shapeSpawnTimer += dt;
+        this.refreshSpawnHeatmap(dt);
+        this.commonShapeCooldown = Math.max(0, this.commonShapeCooldown - dt);
+        this.shapeSpawnTimer += dt;
       const activePlayers = this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && !e.isDead).length;
-      const modeBaseInterval = (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) ? 0.082 : 0.105;
+      const modeBaseInterval =
+        this.gameMode === GameMode.DOMINION ? 0.068 :
+        this.gameMode === GameMode.TEAMS ? 0.078 :
+        0.105;
       const populationScale = Math.max(0.75, Math.min(1.45, 1.2 - activePlayers * 0.01));
       const spawnInterval = modeBaseInterval * populationScale;
     if (this.currentShapeCount < (this.sandboxConfig?.shapeMaxCount || 400) && this.shapeSpawnTimer >= spawnInterval) {
         if (this.gameMode !== GameMode.SANDBOX || (this.sandboxConfig?.spawningEnabled)) {
             const fillPercent = this.currentShapeCount / (this.sandboxConfig?.shapeMaxCount || 400);
-            const modeBaseProb = (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) ? 0.72 : 0.6;
-            const spawnProb = Math.max(0.05, modeBaseProb * (1 - fillPercent));
-            if (Math.random() < spawnProb) {
+            const modeBaseProb =
+              this.gameMode === GameMode.DOMINION ? 0.81 :
+              this.gameMode === GameMode.TEAMS ? 0.75 :
+              0.6;
+            const spawnProb = Math.max(0.12, modeBaseProb * (1 - fillPercent));
+            const commonInWorld = this.entities.filter(e => e.type === EntityType.SHAPE && (e as Shape).rarity === ShapeRarity.COMMON).length;
+            const canSpawnCommon = this.commonShapeCooldown <= 0 && commonInWorld < this.commonShapeMaxActive;
+            if (canSpawnCommon && Math.random() < spawnProb) {
                 this.spawnShape();
+                this.commonShapeCooldown = 0.85;
                 this.shapeSpawnTimer = 0;
             }
         }
@@ -9533,27 +9712,62 @@ export class GameEngine {
           !e.isDead &&
           Vector.dist(e.pos, boss.pos) < 2200
       ) as Tank[];
-      const target = this.findNearest(boss, targets) as Tank | null;
+
+      let target: Tank | null = null;
+      let bestScore = -Infinity;
+      for (const candidate of targets) {
+          const dist = Math.max(1, Vector.dist(boss.pos, candidate.pos));
+          const hpRatio = candidate.maxHealth > 0 ? candidate.health / candidate.maxHealth : 1;
+          const score =
+              (1600 / dist) +
+              (candidate.type === EntityType.PLAYER ? 90 : 0) +
+              (candidate.type === EntityType.ELITE_TANK ? 40 : 0) +
+              (1 - hpRatio) * 120;
+          if (score > bestScore) {
+              bestScore = score;
+              target = candidate;
+          }
+      }
+
       if (!target) return;
 
       const toTarget = Vector.sub(target.pos, boss.pos);
       const distance = Math.max(1, Vector.mag(toTarget));
       const dir = Vector.normalize(toTarget);
       const isSingularity = boss.archetype === 'SINGULARITY';
-      const desiredRange = boss.archetype === 'SIEGEBREAKER' ? 360 : boss.archetype === 'SWARMLORD' ? 520 : 600;
+      const singularityCycle = boss.phaseTimer % 10.5;
+      const singularityPhase =
+        singularityCycle < 3.8 ? 'DRIFT' :
+        singularityCycle < 7.3 ? 'LATTICE' :
+        'REPOSITION';
+      const desiredRange = boss.archetype === 'SIEGEBREAKER' ? 420 : boss.archetype === 'SWARMLORD' ? 560 : singularityPhase === 'REPOSITION' ? 900 : 760;
       const moveForce = isSingularity
-        ? distance > desiredRange + 110 ? 0.34 : distance < 440 ? -0.24 : 0.05
-        : distance > desiredRange ? 0.85 : -0.35;
+        ? singularityPhase === 'DRIFT'
+          ? distance > desiredRange + 120 ? 0.12 : distance < 560 ? -0.08 : 0.01
+          : singularityPhase === 'LATTICE'
+            ? distance > desiredRange + 90 ? 0.10 : distance < 600 ? -0.05 : 0.0
+            : distance > desiredRange ? 0.04 : -0.10
+        : distance > desiredRange ? 0.48 : -0.22;
       const orbitDir = Vector.normalize({ x: -dir.y, y: dir.x });
-      const orbitBias = isSingularity ? (0.42 + Math.sin(boss.phaseTimer * 0.9) * 0.18) : 0;
-      const moveVector = Vector.add(Vector.mult(dir, moveForce), Vector.mult(orbitDir, orbitBias));
-      boss.acc = Vector.limit(Vector.add(boss.acc, moveVector), isSingularity ? 0.58 : 1.15);
+      const orbitBias = isSingularity
+        ? singularityPhase === 'DRIFT'
+          ? 0.14 + Math.sin(boss.phaseTimer * 0.55) * 0.04
+          : singularityPhase === 'LATTICE'
+            ? 0.20 + Math.sin(boss.phaseTimer * 0.7) * 0.05
+            : 0.08
+        : 0;
+      let bossAccel = Vector.add(boss.acc, Vector.mult(dir, moveForce));
+      bossAccel = Vector.add(bossAccel, Vector.mult(orbitDir, orbitBias));
+      if (distance < boss.radius + 180) {
+          bossAccel = Vector.add(bossAccel, Vector.mult(dir, -0.12));
+      }
+      boss.acc = Vector.limit(bossAccel, isSingularity ? 0.16 : 0.55);
 
       // Soft singularity pull so bosses feel "present" and threatening.
-      const pullRadius = boss.archetype === 'SINGULARITY' ? 640 : 760;
+      const pullRadius = boss.archetype === 'SINGULARITY' ? 520 : 760;
       if (distance < pullRadius) {
           const pull = boss.archetype === 'SINGULARITY'
-            ? 0.008 + (1 - distance / pullRadius) * 0.022
+            ? 0.004 + (1 - distance / pullRadius) * 0.011
             : 0.018 + (1 - distance / pullRadius) * 0.06;
           target.vel = Vector.add(target.vel, Vector.mult(dir, pull * 60 * dt));
       }
@@ -9561,6 +9775,7 @@ export class GameEngine {
       if (boss.pulseCooldown <= 0 && distance < 760) {
           const pulseRadius = boss.archetype === 'SIEGEBREAKER' ? 520 : boss.archetype === 'SWARMLORD' ? 420 : 410;
           const pulseDamage = boss.archetype === 'SIEGEBREAKER' ? 220 : boss.archetype === 'SWARMLORD' ? 150 : 128;
+          if (!isSingularity || singularityPhase !== 'REPOSITION') {
           for (let i = 0; i < this.entities.length; i++) {
               const e = this.entities[i];
               if (e.isDead || (e.type !== EntityType.PLAYER && e.type !== EntityType.ENEMY && e.type !== EntityType.ELITE_TANK)) continue;
@@ -9572,6 +9787,7 @@ export class GameEngine {
           this.particles.push(new Particle(boss.pos.x, boss.pos.y, boss.color, boss.radius * 0.55, 12, 'RING'));
           this.sound.playExplosion(true, this.getAudioSpatialOptions(boss.pos, true));
           boss.pulseCooldown = boss.archetype === 'SIEGEBREAKER' ? 4.2 : boss.archetype === 'SWARMLORD' ? 5.0 : 6.2;
+          }
       }
 
       if (boss.summonCooldown <= 0) {
@@ -9579,13 +9795,13 @@ export class GameEngine {
           for (let i = 0; i < spawnCount; i++) {
               const a = (Math.PI * 2 * i) / spawnCount + Math.random() * 0.4;
               const r = boss.radius + 80 + Math.random() * 45;
-              this.entities.push(new Crasher(this.nextId(), boss.pos.x + Math.cos(a) * r, boss.pos.y + Math.sin(a) * r, Math.random() < 0.22));
+              this.entities.push(new Crasher(this.nextId(), boss.pos.x + Math.cos(a) * r, boss.pos.y + Math.sin(a) * r, boss.archetype === 'SINGULARITY' ? false : Math.random() < 0.22));
           }
-          boss.summonCooldown = boss.archetype === 'SWARMLORD' ? 6.8 : boss.archetype === 'SINGULARITY' ? 10.8 : 9.5;
+          boss.summonCooldown = boss.archetype === 'SWARMLORD' ? 6.8 : boss.archetype === 'SINGULARITY' ? 12.6 : 9.5;
       }
 
       if (boss.volleyCooldown <= 0 && distance < 1200) {
-          const volleyCount = boss.archetype === 'SIEGEBREAKER' ? 6 : boss.archetype === 'SINGULARITY' ? 3 : 4;
+          const volleyCount = boss.archetype === 'SIEGEBREAKER' ? 6 : boss.archetype === 'SINGULARITY' ? 2 : 4;
           for (let i = 0; i < volleyCount; i++) {
               const angle = Math.atan2(dir.y, dir.x) + (i - (volleyCount - 1) / 2) * (boss.archetype === 'SIEGEBREAKER' ? 0.14 : 0.22);
               const spawnPos = {
@@ -9609,7 +9825,7 @@ export class GameEngine {
               }
           }
           this.sound.playShoot(TankClass.DESTROYER, this.getAudioSpatialOptions(boss.pos, true));
-          boss.volleyCooldown = boss.archetype === 'SIEGEBREAKER' ? 3.1 : boss.archetype === 'SINGULARITY' ? 5.1 : 3.9;
+          boss.volleyCooldown = boss.archetype === 'SIEGEBREAKER' ? 3.1 : boss.archetype === 'SINGULARITY' ? 6.4 : 3.9;
       }
   }
 
@@ -10049,15 +10265,15 @@ export class GameEngine {
       const victimScore = Math.max(0, victim.score || 0);
       const levelDelta = victimLevel - killerLevel;
       const challengeMult = levelDelta >= 0
-        ? 1 + Math.min(0.55, levelDelta * 0.028)
-        : Math.max(0.8, 1 + levelDelta * 0.018);
-      const scoreComponent = Math.min(1200, Math.sqrt(victimScore) * 6.5);
+        ? 1 + Math.min(0.85, levelDelta * 0.035)
+        : Math.max(0.7, 1 + levelDelta * 0.03);
+      const scoreComponent = Math.min(2200, Math.sqrt(victimScore) * 9.0);
 
-      let reward = (140 + victimLevel * 24 + scoreComponent) * challengeMult;
+      let reward = (180 + victimLevel * 32 + scoreComponent) * challengeMult;
       const isRebirthVictim = this.isBossClass(victim.classType) || (victim.isTransformed && this.isRebirthClass(victim.classType));
       if (isRebirthVictim) reward *= 2.85;
 
-      return Math.max(isRebirthVictim ? 2400 : 320, Math.floor(reward));
+      return Math.max(isRebirthVictim ? 2800 : 420, Math.floor(reward));
   }
 
   private awardDamageXpForVictim(attacker: Tank, victim: Entity, rawDamage: number, coefficient: number) {
@@ -11296,7 +11512,7 @@ export class GameEngine {
       }
 
       if (tank.type === EntityType.ELITE_TANK) {
-        effectiveSpeed = Math.min(effectiveSpeed, 1.95);
+        effectiveSpeed = Math.min(effectiveSpeed, 1.58);
       }
 
       if (isRamClass) {
@@ -11312,20 +11528,24 @@ export class GameEngine {
         effectiveSpeed *= (1 - overRatio * 0.3);
       }
 
-      // Smooth steering vector to reduce micro-jitter from fast directional input changes.
-      const steerBlend = 0.24;
-      const desiredDir = Vector.normalize(dir);
-      tank.lastSteering.x += (desiredDir.x - tank.lastSteering.x) * steerBlend;
-      tank.lastSteering.y += (desiredDir.y - tank.lastSteering.y) * steerBlend;
-      const smoothDir = Vector.mag(tank.lastSteering) > 0.001 ? Vector.normalize(tank.lastSteering) : desiredDir;
-      tank.acc = Vector.mult(smoothDir, effectiveSpeed * (1 - tank.friction) / tank.friction); 
+            // Smooth steering locally to reduce micro-jitter from fast directional input changes.
+            // Do NOT mutate `tank.lastSteering` here — AI systems own that vector.
+            const steerBlend = 0.24;
+            const desiredDir = Vector.normalize(dir);
+            const baseSteer = tank.lastSteering || { x: 0, y: 0 };
+            const localSteer = {
+                x: baseSteer.x + (desiredDir.x - baseSteer.x) * steerBlend,
+                y: baseSteer.y + (desiredDir.y - baseSteer.y) * steerBlend,
+            };
+            const smoothDir = Vector.mag(localSteer) > 0.001 ? Vector.normalize(localSteer) : desiredDir;
+            tank.acc = Vector.mult(smoothDir, effectiveSpeed * (1 - tank.friction) / tank.friction);
       
       // Update chassis rotation smoothly
       const targetChassisRot = Math.atan2(smoothDir.y, smoothDir.x);
       let diff = targetChassisRot - tank.chassisRotation;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      tank.chassisRotation += diff * 0.15;
+            tank.chassisRotation += diff * 0.12;
     }
   }
 
@@ -11456,7 +11676,11 @@ export class GameEngine {
         else type = ShapeType.SQUARE;
     } else if (this.gameMode !== GameMode.SANDBOX) {
         const zoneIndex = this.pickSpawnZoneIndex();
-        pos = this.getSpawnPositionInZone(zoneIndex);
+        const useNestCluster =
+          (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) &&
+          this.isPentagonNestZone(zoneIndex) &&
+          Math.random() < 0.72;
+        pos = useNestCluster ? this.getPentagonNestSpawnPosition() : this.getSpawnPositionInZone(zoneIndex);
         type = this.pickShapeTypeForSpawn(zoneIndex);
         this.recentSpawnZoneHistory.push(zoneIndex);
         if (this.recentSpawnZoneHistory.length > 6) this.recentSpawnZoneHistory.shift();

@@ -45,6 +45,7 @@ export interface IAITank {
     socialGestureUntil?: number;
     socialWiggleUntil?: number;
     savedByPlayerUntil?: number;
+    lastAimTargetId?: number | null;
 }
 
 export interface IGameEngine {
@@ -171,6 +172,7 @@ export class EnemyAITanks {
         const bullets: any[] = [];
         const teammates: any[] = [];
         const threats: any[] = []; // Immediate close hazards
+        let enemyPressure = 0;
 
         for (const e of neighbors) {
             if (e.id === bot.id || e.isDead) continue;
@@ -186,6 +188,7 @@ export class EnemyAITanks {
                 if (engine.gameMode === GameMode.FFA || e.team !== bot.team) {
                     enemies.push(e);
                     if (d < 450) threats.push(e);
+                    enemyPressure += Math.max(0, 1 - d / 900);
                 } else {
                     teammates.push(e);
                 }
@@ -194,11 +197,12 @@ export class EnemyAITanks {
                 if (e.type === EntityType.CRASHER && d < 350) {
                     enemies.push(e); // treat aggressive crashers as combatants
                     threats.push(e);
+                    enemyPressure += Math.max(0, 1 - d / 700);
                 }
             }
         }
 
-        return { enemies, shapes, bullets, teammates, threats };
+        return { enemies, shapes, bullets, teammates, threats, enemyPressure };
     }
 
     private static selectTacticalTarget(bot: IAITank, data: any, nearestOnly: boolean = false) {
@@ -221,13 +225,20 @@ export class EnemyAITanks {
 
         for (const e of data.enemies) {
             const dist = Vector.dist(bot.pos, e.pos);
-            const hpRatio = e.health / e.maxHealth;
-            
-            // Strategic scoring (Proximity, low HP finishers, squishy high priority healers first)
-            let score = (1200 / dist);
-            if (hpRatio < 0.45) score *= (1.5 + (1 - hpRatio)); // execute weak targets
-            if (this.isPacifist(e.classType)) score *= 1.45;    // focus support classes
-            if (e.type === EntityType.PLAYER) score *= 1.25;    // challenge regular player
+            const hpRatio = Math.max(0, Math.min(1, e.health / Math.max(1, e.maxHealth)));
+
+            let score = 1400 / (dist + 70);
+            score += (1 - hpRatio) * 190;
+            if (e.aiTargetId === bot.id) score += 75; // repel direct attackers
+            else if (e.aiTargetId != null) score += 28; // join focused fire
+            if (this.isPacifist(e.classType)) score += 28;
+            if (e.type === EntityType.PLAYER) score += 22;
+            if (e.type === EntityType.BOSS) score += 90;
+            if (e.type === EntityType.CRASHER) score += 45;
+            if (dist > 880) score *= 0.72; // avoid chasing too far for weak bots
+
+            // Favor targets that are already engaged by allies to make bot behavior coherent
+            if (e.aiTargetId != null && e.aiTargetId !== bot.id) score *= 1.15;
 
             if (score > bestScore) {
                 bestScore = score;
@@ -244,18 +255,27 @@ export class EnemyAITanks {
 
         for (const s of data.shapes) {
             const dist = Vector.dist(bot.pos, s.pos);
-            let score = 500 / dist;
-            
-            // Prefer dense/high value shapes for hyper-leveling
+            let score = 520 / (dist + 18);
+
             if (s.type === EntityType.BOSS) {
                 score *= 3.0;
             } else if (s.shapeType === 'ALPHA_PENTAGON') {
-                score *= 2.0;
-            } else if (s.shapeType === 'PENTAGON') {
-                score *= 1.4;
+                score *= 2.2;
             } else if (s.shapeType === 'BETA_PENTAGON') {
-                score *= 1.7;
+                score *= 1.9;
+            } else if (s.shapeType === 'PENTAGON') {
+                score *= 1.45;
             }
+
+            const nearbyAllies = data.teammates.filter((t: any) => Vector.dist(t.pos, s.pos) < 220).length;
+            score *= 1 - Math.min(0.42, nearbyAllies * 0.11);
+
+            const nearestEnemyDist = data.enemies.reduce((min: number, e: any) => {
+                const d = Vector.dist(e.pos, s.pos);
+                return d < min ? d : min;
+            }, Infinity);
+            if (nearestEnemyDist < 260) score *= 0.62;
+            if (nearestEnemyDist < 180) score *= 0.48;
 
             if (score > bestScore) {
                 bestScore = score;
@@ -263,6 +283,60 @@ export class EnemyAITanks {
             }
         }
         return bestTarget;
+    }
+
+    private static chooseExploreAnchor(bot: IAITank, data: any, engine: IGameEngine): Vector2 {
+        const safeMargin = 320;
+        const inBounds = (pos: Vector2) => ({
+            x: Math.max(safeMargin, Math.min(CANVAS_WIDTH - safeMargin, pos.x)),
+            y: Math.max(safeMargin, Math.min(CANVAS_HEIGHT - safeMargin, pos.y)),
+        });
+
+        if (engine.gameMode === GameMode.TEAMS && bot.team !== Team.NONE && data.teammates.length > 0) {
+            const allyCenter = data.teammates.reduce((sum: Vector2, t: any) => ({ x: sum.x + t.pos.x, y: sum.y + t.pos.y }), { x: 0, y: 0 });
+            const allyAvg = { x: allyCenter.x / data.teammates.length, y: allyCenter.y / data.teammates.length };
+            const enemyCenter = data.enemies.length > 0
+                ? data.enemies.reduce((sum: Vector2, e: any) => ({ x: sum.x + e.pos.x, y: sum.y + e.pos.y }), { x: 0, y: 0 })
+                : { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+            const enemyAvg = data.enemies.length > 0
+                ? { x: enemyCenter.x / data.enemies.length, y: enemyCenter.y / data.enemies.length }
+                : { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+
+            const pushAnchor = {
+                x: (allyAvg.x + enemyAvg.x) * 0.5 + Vector.randomRange(-180, 180),
+                y: (allyAvg.y + enemyAvg.y) * 0.5 + Vector.randomRange(-120, 120),
+            };
+            return inBounds(pushAnchor);
+        }
+
+        if (data.shapes.length > 0) {
+            let best = null;
+            let bestValue = -Infinity;
+            for (const s of data.shapes) {
+                const dist = Vector.dist(bot.pos, s.pos);
+                let value = 1200 / (dist + 40);
+                if (s.type === EntityType.BOSS) value += 180;
+                if (s.shapeType === 'ALPHA_PENTAGON') value += 82;
+                if (s.shapeType === 'BETA_PENTAGON') value += 56;
+                const nearestEnemyDist = data.enemies.reduce((min: number, e: any) => {
+                    const d = Vector.dist(e.pos, s.pos);
+                    return d < min ? d : min;
+                }, Infinity);
+                if (nearestEnemyDist < 260) value -= 120;
+                if (!best || value > bestValue) {
+                    bestValue = value;
+                    best = s;
+                }
+            }
+            if (best) {
+                return inBounds({ x: best.pos.x + Vector.randomRange(-160, 160), y: best.pos.y + Vector.randomRange(-160, 160) });
+            }
+        }
+
+        const forwardPoint = data.enemyPressure > 1.25
+            ? { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 }
+            : { x: Vector.randomRange(safeMargin, CANVAS_WIDTH - safeMargin), y: Vector.randomRange(safeMargin, CANVAS_HEIGHT - safeMargin) };
+        return inBounds(forwardPoint);
     }
 
     private static resolveSocialState(bot: IAITank, data: any, engine: IGameEngine, fallback: AIState): AIState {
@@ -563,47 +637,25 @@ export class EnemyAITanks {
             bot.aiShooting = dist < 800; // start pre-firing as they approach
 
         } else {
-            // 🗺️ SENTIENT EXPLORATION: Move dynamically towards key map regions
+            // 🗺️ SENTIENT EXPLORATION: Move towards meaningful map regions instead of random wandering.
             bot.aiShooting = false;
 
             if (!bot.patrolTimer) bot.patrolTimer = 0;
             bot.patrolTimer -= 0.1;
 
-            if (!bot.patrolTarget || bot.patrolTimer <= 0 || Vector.dist(bot.pos, bot.patrolTarget) < 150) {
-                bot.patrolTimer = 10.0 + Math.random() * 12.0; // new path every 10-22s
-                
-                const roll = Math.random();
-                if (engine.gameMode === GameMode.TEAMS && bot.team !== Team.NONE && roll < 0.35 && data.teammates.length > 0) {
-                    // Squad up: follow a teammate
-                    const buddy = data.teammates[Math.floor(Math.random() * data.teammates.length)];
-                    bot.patrolTarget = { 
-                        x: buddy.pos.x + Vector.randomRange(-150, 150), 
-                        y: buddy.pos.y + Vector.randomRange(-150, 150) 
-                    };
-                } else if (roll < 0.70) {
-                    // Drift towards Pentagon Nest Center
-                    bot.patrolTarget = {
-                        x: CANVAS_WIDTH / 2 + Vector.randomRange(-350, 350),
-                        y: CANVAS_HEIGHT / 2 + Vector.randomRange(-350, 350)
-                    };
-                } else {
-                    // Random map crawl
-                    bot.patrolTarget = {
-                        x: Vector.randomRange(350, CANVAS_WIDTH - 350),
-                        y: Vector.randomRange(350, CANVAS_HEIGHT - 350)
-                    };
-                }
+            if (!bot.patrolTarget || bot.patrolTimer <= 0 || Vector.dist(bot.pos, bot.patrolTarget) < 140) {
+                bot.patrolTimer = 10.0 + Math.random() * 9.0; // refresh path every 10-19s
+                bot.patrolTarget = this.chooseExploreAnchor(bot, data, engine);
             }
 
             const travelDir = Vector.normalize(Vector.sub(bot.patrolTarget, bot.pos));
             for (let i = 0; i < numRays; i++) {
-                interests[i] = Math.max(0, Vector.dot(rays[i], travelDir) * 0.85);
+                interests[i] = Math.max(0, Vector.dot(rays[i], travelDir) * 1.05);
             }
 
-            // Life-like search sweeping: smoothly wag the barrel left and right searching for targets!
-            bot.scanTimer += 0.055;
+            bot.scanTimer += 0.05;
             const headingAngle = Math.atan2(travelDir.y, travelDir.x);
-            const scanWobble = Math.sin(bot.scanTimer * 2.1) * 0.65; // ±37 degrees
+            const scanWobble = Math.sin(bot.scanTimer * 2.25) * 0.58;
             bot.aiTargetRot = headingAngle + scanWobble;
         }
 
@@ -716,7 +768,25 @@ export class EnemyAITanks {
         const bSpeed = (BASE_STATS.bulletSpeed + bot.stats[StatType.BULLET_SPEED] * 0.8);
         const targetVel = target.vel || { x: 0, y: 0 };
         const aimPos = engine.getInterceptPoint(bot.pos, bSpeed, target.pos, targetVel);
-        bot.aiTargetRot = Math.atan2(aimPos.y - bot.pos.y, aimPos.x - bot.pos.x);
+        const desired = Math.atan2(aimPos.y - bot.pos.y, aimPos.x - bot.pos.x);
+        if (bot.lastAimTargetId !== target.id || !Number.isFinite(bot.aiTargetRot)) {
+            bot.aiTargetRot = desired;
+            bot.lastAimTargetId = target.id;
+            return;
+        }
+        let diff = desired - bot.aiTargetRot;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        const targetSpeed = Vector.mag(targetVel);
+        const blend = target.type === EntityType.SHAPE || target.type === EntityType.CRASHER || target.type === EntityType.BOSS
+            ? 0.28
+            : targetSpeed > 2.2
+                ? 0.44
+                : 0.36;
+        if (Math.abs(diff) > 0.004) {
+            bot.aiTargetRot += diff * blend;
+        }
+        bot.lastAimTargetId = target.id;
     }
 
     private static applySmoothRotation(bot: IAITank, dt: number) {
@@ -727,16 +797,19 @@ export class EnemyAITanks {
         while (diff < -Math.PI) diff += Math.PI * 2;
         
         // Turn speeds optimized dynamically!
-        let baseTurnSpeed = 0.16;
+        let baseTurnSpeed = 0.14;
         if (bot.classType === TankClass.SNIPER || bot.classType === TankClass.ASSASSIN || bot.classType === TankClass.RANGER || bot.classType === TankClass.STALKER) {
-            baseTurnSpeed = 0.082; // precise sniper tracking
+            baseTurnSpeed = 0.074; // precise sniper tracking
         } else if (bot.classType === TankClass.BOOSTER || bot.classType === TankClass.TRI_ANGLE || bot.classType === TankClass.FIGHTER) {
-            baseTurnSpeed = 0.28;  // rapid rammer snapping
+            baseTurnSpeed = 0.21;  // fast but less twitchy close-range turning
         } else if (bot.aiState === AIState.IDLE) {
-            baseTurnSpeed = 0.07;  // relaxing scouting sweep
+            baseTurnSpeed = 0.06;  // relaxing scouting sweep
         }
 
         const step = baseTurnSpeed * dt * 60;
+        if (Math.abs(diff) < 0.003) {
+            return;
+        }
         if (Math.abs(diff) < step) {
             bot.rotation = bot.aiTargetRot;
         } else {

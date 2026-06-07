@@ -132,8 +132,8 @@ export const COLORS = {
 };
 
 export const XP_CURVE_MULTIPLIER = 1.06; // Slower tier gates, smoother recursive XP scaling.
-export const MAX_LEVEL = 100;
-export const REBIRTH_LEVEL = 150;
+export const MAX_LEVEL = 130;
+export const REBIRTH_LEVEL = 110;
 export const REBIRTH_AREA_POS = { x: 20000, y: 20000 };
 export const REBIRTH_AREA_SIZE = 2000;
 
@@ -881,230 +881,35 @@ export const QUESTS: Quest[] = [
 
 export const UPDATE_LOG = [
     {
-        id: 'v1.8.2',
-        title: "AUDIO REACTOR ALIGNMENT",
+        id: 'v1.8.3',
+        title: "ENEMY AI COMBAT BRAIN",
         date: "07/06/26",
-        content: "Focused on tightening the main menu hero stage, making the soundtrack reactor fill its panel properly, and improving how release posts read when they land in Discord.",
-        theme: "Interface",
-        tags: ["Menu", "Audio", "Discord", "UX"],
+        content: "Enemy tanks got a proper battlefield intelligence pass. They now route around danger, choose cleaner fights, dodge smarter, and hold better combat spacing instead of blindly rushing or wobbling under pressure.",
+        theme: "AI",
+        tags: ["Enemy AI", "Pathfinding", "Targeting", "Combat"],
         sections: [
             {
-                label: "Hero Stage Fit",
+                label: "Enemy Movement",
                 items: [
-                    "Expanded the main menu soundtrack reactor so the visualizer fills the center hero stage more completely instead of leaving a dead lower slab of blue space.",
-                    "Retuned visualizer overlays and lower-stage blending so the bars, glow, and telemetry feel integrated with the full container rather than cut off in the upper half.",
-                    "Kept the tank preview and beat-reactive stage synchronized so the menu centerpiece feels like one coherent live display.",
+                    "Added route-corridor awareness so bots avoid pushing straight through enemy clusters, crashers, bosses, and dangerous shape lanes.",
+                    "Added remembered detour points for stuck recovery, reducing jittery left-right movement when bots get blocked.",
+                    "Added enemy aim-lane avoidance so bots sidestep obvious hostile barrel lines instead of walking into free shots.",
                 ],
             },
             {
-                label: "Release Relay",
+                label: "Targeting",
                 items: [
-                    "Replaced the bland deploy-style Discord relay phrasing with a more informative tactical update broadcast built from the actual release title, date, summary, and highlights.",
-                    "Improved the update-delivery wording so Discord posts read like real patch notes instead of generic branch and commit noise.",
-                    "Prepared the relay pipeline to surface the newest menu and soundtrack improvements more clearly in future channel updates.",
-                ],
-            },
-        ],
-    },
-    {
-        id: 'v1.8.1',
-        title: "COMMAND INTERFACE SYNC",
-        date: "07/06/26",
-        content: "Focused on main menu presentation, spectate stability, beat-reactive soundtrack visuals, and update-log delivery so the command interface feels cleaner, smarter, and more alive.",
-        theme: "Interface",
-        tags: ["Menu", "Audio", "Spectate", "Update Log", "UX"],
-        sections: [
-            {
-                label: "Main Menu Command Deck",
-                items: [
-                    "Remastered the home screen into a cleaner fixed-height cockpit layout with better panel balance, larger featured leaderboard presence, and less wasted space.",
-                    "Removed the empty scroll slab under the main menu by locking the shell to viewport height and tightening panel spacing, footer sizing, and hero-stage proportions.",
-                    "Improved menu readability by reducing clipped labels, letting key update and mode text wrap properly, and redistributing control/navigation panels into more intentional zones.",
+                    "Improved target scoring with route safety, shot-lane quality, range fit, ally pressure, finisher windows, and enemy isolation.",
+                    "Bots now prioritize enemies attacking them or nearby allies, making team fights feel more responsive.",
+                    "Farming targets now account for route danger so bots are less likely to body-slam through bad PvE paths.",
                 ],
             },
             {
-                label: "Spectate and Frontend Stability",
+                label: "Combat Discipline",
                 items: [
-                    "Reworked spectate mode so it can reliably follow live bots instead of drifting into invalid targets or weak observer states.",
-                    "Refined the spectate launch flow and observer presentation so bot-watching feels like a real feature instead of a fallback utility button.",
-                    "Hardened achievement toast cleanup so rewards now dismiss after 1.75 seconds without getting stuck on screen from stale timing state.",
-                ],
-            },
-            {
-                label: "Mainframe Audio Reactor",
-                items: [
-                    "Switched the menu soundtrack over to Final Sector Charge and kept it menu-only with proper fade-in, fade-out, and in-match mute behavior.",
-                    "Expanded the audio visualizer into a full hero-stage reactor that uses beat pulse, downbeat accenting, timeline progress, and loop state instead of a tiny passive meter.",
-                    "Improved visualizer sync so columns, orb pulse, and glow spikes react harder to musical hits and stronger bar transitions.",
-                ],
-            },
-            {
-                label: "Patch Relay and Release Notes",
-                items: [
-                    "Extended the release-note pipeline so the in-game update archive, changelog file, and Discord relay can be sourced from the same more detailed release structure.",
-                    "Added richer patch-note framing for recent feature drops including menu remasters, objective warfare, bot intelligence, and interface polish.",
-                    "Prepared the latest release packaging so Discord update announcements can reflect the current live feature set more accurately.",
-                ],
-            },
-        ],
-    },
-    {
-        id: 'v1.8.0',
-        title: "DOMINION AND VOID ASCENT",
-        date: "05/06/26",
-        content: "Large systems update focused on four-team objective warfare, staged wormhole transit, tougher backend hardening, and smarter bots that read pressure, objectives, and extraction flow more reliably.",
-        theme: "Systems",
-        tags: ["Dominion", "Void", "AI", "Security", "HUD"],
-        sections: [
-            {
-                label: "Dominion Warfare",
-                items: [
-                    "Launched Dominion as a four-team control mode with corner safe zones, live objective scoring, and dominion point ownership tracked on the tactical HUD and minimap.",
-                    "Reworked dominion objective tanks into distinct defensive variants instead of identical turret walls, including Destroyer, Gunner, Trapper-style barrier control, and Triple loadouts.",
-                    "Adjusted Dominion HUD priority so objective awareness and tactical map presence matter more than personal leaderboard noise during capture fights.",
-                ],
-            },
-            {
-                label: "Void Transit",
-                items: [
-                    "Rebuilt wormhole travel into staged portal flow with lock, inversion, breach, and shift phases so entering the Void reads like a sequence instead of a bugged instant snap.",
-                    "Removed the fragile one-second timeout-based dimension jump and replaced it with engine-driven transition handling for cleaner entry, exit, and evac behavior.",
-                    "Stabilized white exit portal behavior so extraction is more reliable and transit groups preserve the right tanks, summons, and projectile ownership through dimension swaps.",
-                ],
-            },
-            {
-                label: "Bot Intelligence",
-                items: [
-                    "Extended bot pathfinding with stronger route-risk scoring, stuck recovery, hazard avoidance, and objective routing across Teams, Dominion, and general combat modes.",
-                    "Improved combat discipline so enemy tanks commit harder when healthy, retreat later, choose cleaner targets, and stop wasting shots or body-slamming dangerous farm targets.",
-                    "Taught bots to understand wormholes and void extraction windows so they can pursue transit opportunities instead of acting blind to portal state.",
-                ],
-            },
-            {
-                label: "Progression and PvE",
-                items: [
-                    "Retuned tank-kill rewards, crasher rewards, shape distribution, and common farm pacing so progression stays steadier across normal combat, PvE clearing, and rebirth-tier encounters.",
-                    "Expanded the shape roster and visual language with new forms and cleaner spawn and defeat presentation to make resource fields read less repetitively.",
-                    "Reworked boss and elite behavior to reduce runaway speed, improve class barrel fidelity, and create clearer boss-fight patterns instead of pure rush pressure.",
-                ],
-            },
-            {
-                label: "Interface and Security",
-                items: [
-                    "Remastered core match HUD surfaces, tactical rails, health and XP presentation, support terminal, archive styling, and almanac readability to reduce combat clutter.",
-                    "Added stronger backend-side abuse resistance for session stat writes, leaderboard submissions, invalid equips and purchases, support totals, and suspicious duplicate score traffic.",
-                    "Improved trust-facing presentation with richer update notes, cleaner shared-link previews, and clearer player feedback for rewards, achievements, and combat telemetry.",
-                ],
-            },
-        ],
-    },
-    {
-        id: 'v1.7.0',
-        title: "TACTICAL SYSTEMS REMASTER",
-        date: "15/05/26",
-        content: "Major battlefield intelligence, interface, and presentation overhaul focused on smarter bots, cleaner archives, safer progression, and stronger social trust.",
-        theme: "Featured",
-        tags: ["AI", "UI", "Security", "Social"],
-        sections: [
-            {
-                label: "Combat Intelligence",
-                items: [
-                    "Remastered TDM and FFA bot logic so tanks make better shot decisions instead of spraying mindlessly.",
-                    "Added stronger pathfinding, pressure awareness, local danger spacing, and target scoring for AI squads.",
-                    "Elite boss variants now spawn properly in live matches and use their own movement brains, anchor logic, and combat styles.",
-                ],
-            },
-            {
-                label: "World and PvE",
-                items: [
-                    "Shapes now enter the arena with improved spawn animation timing and cleaner defeat effects.",
-                    "Common farm targets like yellow squares and red triangles appear more often for steadier progression.",
-                    "Shapes no longer destroy each other by bumping into one another, preserving map flow and XP consistency.",
-                ],
-            },
-            {
-                label: "Systems and Security",
-                items: [
-                    "Added a lightweight anti-abuse layer for purchases, equips, support actions, leaderboard updates, and callsign changes.",
-                    "Closed reward-skin loopholes so achievement cosmetics cannot be acquired for free through the market flow.",
-                    "Supporter skin resonance now hooks into live supporter totals and rank-aware account data.",
-                ],
-            },
-            {
-                label: "Interface and Sharing",
-                items: [
-                    "Rebuilt the almanac into a cleaner tactical database with less clutter and much lighter rendering cost.",
-                    "Refined the hangar and shop structure for better readability and smoother browsing.",
-                    "Added a dedicated social preview card image and tuned link metadata so shared Vextor links present more cleanly across platforms that support rich previews.",
-                ],
-            },
-        ],
-    },
-    {
-        id: 'v1.6.0',
-        title: "ACHIEVEMENT PROTOCOL",
-        date: "24/04/26",
-        content: "Deployed tactical achievement tracking, elite unlock rewards, and long-run progression hooks for account-backed pilots.",
-        theme: "Progression",
-        tags: ["Progression", "Rewards"],
-        sections: [
-            {
-                label: "Pilot Records",
-                items: [
-                    "Launched the achievement system for combat milestones, survivability benchmarks, and elite takedowns.",
-                    "Introduced exclusive chassis rewards tied to gameplay progression instead of store access.",
-                ],
-            },
-        ],
-    },
-    {
-        id: 'v1.5.0',
-        title: "TACTICAL REMASTER",
-        date: "03/04/26",
-        content: "Focused on readability upgrades, interface feedback, and battlefield browsing tools.",
-        theme: "Interface",
-        tags: ["Almanac", "HUD", "UX"],
-        sections: [
-            {
-                label: "Interface Layer",
-                items: [
-                    "Remastered the Vextor OS almanac presentation for stronger readability and navigation.",
-                    "Improved tactical cursor feedback and overall menu clarity.",
-                    "Tuned regeneration-facing combat presentation for more legible match flow.",
-                ],
-            },
-        ],
-    },
-    {
-        id: 'v1.4.8',
-        title: "SOCIAL LINK SYNC",
-        date: "13/03/26",
-        content: "Opened the social support layer and external hub links for pilots following development.",
-        theme: "Community",
-        tags: ["Support", "Discord"],
-        sections: [
-            {
-                label: "Community Systems",
-                items: [
-                    "Integrated the tactical Discord hub into the live menu flow.",
-                    "Added command support pathways for players who want to back active development.",
-                ],
-            },
-        ],
-    },
-    {
-        id: 'v1.4.5',
-        title: "UI OVERHAUL",
-        date: "20/02/26",
-        content: "Main menu remaster with stronger structure, cleaner navigation, and better terminal presentation.",
-        theme: "Foundation",
-        tags: ["Menu", "Layout"],
-        sections: [
-            {
-                label: "Main Menu",
-                items: [
-                    "Reframed the home screen around tactical clarity and cleaner navigation terminals.",
-                    "Improved layout organization and reduced visual clutter across menu surfaces.",
+                    "Added smarter fight-commit logic so bots stay aggressive when they can finish a target, but avoid doomed pushes when pressure is too high.",
+                    "Improved bullet dodging with time-to-impact checks instead of only reacting to nearby projectiles.",
+                    "Added dynamic combat range so wounded bots kite wider while still fighting instead of instantly fleeing.",
                 ],
             },
         ],

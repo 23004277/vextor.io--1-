@@ -33,8 +33,9 @@ const BEATS_PER_BAR = 4;
 const FADE_IN_MS = 1500;
 const FADE_OUT_MS = 1250;
 const LOOP_RESET_FADE_MS = 220;
-const REFRESH_BREAK_MS = 3000;
-const REFRESH_BREAK_AFTER_LOOPS = 3;
+const ENTRY_BREAK_MS = 3750;
+const REFRESH_BREAK_MS = 5000;
+const REFRESH_BREAK_AFTER_LOOPS = 1;
 
 const SECTION_TIMELINE: Array<{ start: number; end: number; key: BackgroundMusicSection; label: string; energy: number }> = [
   { start: 0, end: 22, key: 'warmup', label: 'Signal Warmup', energy: 0.42 },
@@ -59,6 +60,7 @@ export class BackgroundMusic {
   private refreshBreakEndsAt = 0;
   private completedLoops = 0;
   private trackBoundaryPending = false;
+  private entryBreakTaken = false;
 
   init(): void {
     if (this.audio) return;
@@ -90,6 +92,27 @@ export class BackgroundMusic {
     this.refreshBreakEndsAt = 0;
     this.clearRefreshBreak();
     this.cancelFade();
+
+    if (!this.entryBreakTaken && audio.currentTime < 0.01) {
+      this.entryBreakTaken = true;
+      this.inRefreshBreak = true;
+      this.refreshBreakEndsAt = performance.now() + ENTRY_BREAK_MS;
+      this.state = 'paused';
+      this.refreshBreakTimeoutId = window.setTimeout(() => {
+        this.refreshBreakTimeoutId = null;
+        this.inRefreshBreak = false;
+        this.refreshBreakEndsAt = 0;
+        if (!this.wantsPlayback || !this.audio) return;
+        void this.resume();
+      }, ENTRY_BREAK_MS);
+      this.ensureMonitorLoop();
+      return;
+    }
+
+    if (this.inRefreshBreak) {
+      this.ensureMonitorLoop();
+      return;
+    }
 
     if (audio.currentTime >= TRACK_DURATION_SECONDS || audio.ended) {
       audio.currentTime = 0;
@@ -136,12 +159,32 @@ export class BackgroundMusic {
     });
   }
 
+  pauseImmediately(): void {
+    this.wantsPlayback = false;
+    this.inRefreshBreak = false;
+    this.refreshBreakEndsAt = 0;
+    this.trackBoundaryPending = false;
+    this.clearRefreshBreak();
+    this.cancelFade();
+
+    if (!this.audio) {
+      this.state = 'paused';
+      return;
+    }
+
+    this.audio.volume = 0;
+    this.audio.pause();
+    this.stopMonitorLoop();
+    this.state = 'paused';
+  }
+
   stop(): void {
     this.wantsPlayback = false;
     this.inRefreshBreak = false;
     this.refreshBreakEndsAt = 0;
     this.completedLoops = 0;
     this.trackBoundaryPending = false;
+    this.entryBreakTaken = false;
     this.cancelFade();
     this.stopMonitorLoop();
     this.clearRefreshBreak();

@@ -105,6 +105,8 @@ const App: React.FC = () => {
   const [showAlmanac, setShowAlmanac] = useState(false);
   const [showUpdateHistory, setShowUpdateHistory] = useState(false);
   const [selectedUpdateId, setSelectedUpdateId] = useState<string>(UPDATE_LOG[0]?.id ?? '');
+  const [updateSearch, setUpdateSearch] = useState('');
+  const [expandedUpdate, setExpandedUpdate] = useState<string | null>(null);
   const [ownerToolsEnabled, setOwnerToolsEnabled] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(OWNER_TOOLS_KEY) === '1';
@@ -122,6 +124,7 @@ const App: React.FC = () => {
   const [showAchievementPopup, setShowAchievementPopup] = useState(false);
   const [lastDeathReport, setLastDeathReport] = useState<{ moneyEarned: number; unlockedAchievements: number; unlockedQuests: number } | null>(null);
   const [creditToast, setCreditToast] = useState<{ id: number; amount: number; total: number } | null>(null);
+  const [creditCopiedId, setCreditCopiedId] = useState<number | null>(null);
   
   const [gameMode, setGameMode] = useState<GameMode>(GameMode.FFA);
   const [selectedTeam, setSelectedTeam] = useState<Team>(Team.BLUE);
@@ -174,7 +177,6 @@ const App: React.FC = () => {
 
   const selectedUpdateClipboardText = useMemo(() => {
     if (!selectedUpdate) return '';
-
     const tagBlock = selectedUpdate.tags?.length ? `Tags: ${selectedUpdate.tags.join(' | ')}` : '';
     const sectionBlock = (selectedUpdate.sections ?? [])
       .map((section) => {
@@ -223,46 +225,18 @@ const App: React.FC = () => {
         .join('\n');
     }).join('\n\n----------------------------------------\n\n');
   }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (ownerToolsEnabled) {
-      window.localStorage.setItem(OWNER_TOOLS_KEY, '1');
-    } else {
-      window.localStorage.removeItem(OWNER_TOOLS_KEY);
-    }
-  }, [ownerToolsEnabled]);
-
-  useEffect(() => {
-    const handleOwnerToolsToggle = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'o') {
-        event.preventDefault();
-        setOwnerToolsEnabled((prev) => !prev);
-        setOwnerCopyStatus('');
-      }
-    };
-
-    window.addEventListener('keydown', handleOwnerToolsToggle);
-    return () => window.removeEventListener('keydown', handleOwnerToolsToggle);
-  }, []);
-
-  useEffect(() => {
-    if (!showUpdateHistory) return;
-    if (!selectedUpdate || !UPDATE_LOG.some((entry) => entry.id === selectedUpdate.id)) {
-      setSelectedUpdateId(UPDATE_LOG[0]?.id ?? '');
-    }
-  }, [showUpdateHistory, selectedUpdate]);
-
   const playHover = useCallback(() => {
     if (!engine) return;
     engine.sound.enable();
     engine.sound.playUIHover();
   }, [engine]);
+
   const playClick = useCallback(() => {
     if (!engine) return;
     engine.sound.enable();
     engine.sound.playUIClick();
   }, [engine]);
+
   const playSelect = useCallback(() => {
     if (!engine) return;
     engine.sound.enable();
@@ -322,7 +296,7 @@ const App: React.FC = () => {
     if (!music) return;
 
     if (isPlaying) {
-      music.pause();
+      music.pauseImmediately();
       return;
     }
 
@@ -401,6 +375,20 @@ const App: React.FC = () => {
     }, 2400);
     return () => window.clearTimeout(timer);
   }, [creditToast]);
+
+  useEffect(() => {
+    if (!creditToast) setCreditCopiedId(null);
+  }, [creditToast]);
+
+  const handleCreditToastClick = async (t: { id: number; amount: number; total: number }) => {
+    try {
+      await navigator.clipboard.writeText(String(t.total));
+      setCreditCopiedId(t.id);
+      setTimeout(() => setCreditCopiedId((cur) => (cur === t.id ? null : cur)), 1400);
+    } catch {
+      // ignore clipboard failures silently
+    }
+  };
 
   useEffect(() => {
     if (!engine || !user) return;
@@ -613,7 +601,7 @@ const App: React.FC = () => {
             engine.addNotification("TEAM UNBALANCED - CHOOSE OTHER SIDE", "#ff4444");
             return;
         }
-        menuMusicRef.current?.pause();
+        menuMusicRef.current?.pauseImmediately();
         engine.sound.enable();
         engine.sound.playUIClick();
         engine.setPlayerName(playerName || 'GUEST_PILOT');
@@ -719,17 +707,47 @@ const App: React.FC = () => {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -18, scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 260, damping: 22 }}
-            className="pointer-events-none absolute top-5 left-1/2 z-[320] -translate-x-1/2"
+            className="absolute top-5 left-1/2 z-[320] -translate-x-1/2"
           >
-            <div className="min-w-[240px] rounded-2xl border border-amber-300/35 bg-[linear-gradient(135deg,rgba(24,18,6,0.96),rgba(54,40,10,0.94))] px-5 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/70">Credit Uplink</div>
-                  <div className="mt-1 text-2xl font-black tracking-tight text-amber-300">+{creditToast.amount.toLocaleString()} Credits</div>
-                </div>
-                <div className="rounded-xl border border-amber-200/20 bg-black/25 px-3 py-2 text-right">
-                  <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">Balance</div>
-                  <div className="mt-1 text-sm font-black text-white">{creditToast.total.toLocaleString()}</div>
+            <div
+              role="status"
+              aria-live="polite"
+              onClick={() => handleCreditToastClick(creditToast)}
+              className="min-w-[260px] cursor-pointer rounded-2xl border border-amber-300/35 bg-[linear-gradient(135deg,rgba(24,18,6,0.96),rgba(54,40,10,0.94))] px-4 py-3 shadow-[0_20px_60px_rgba(255,140,0,0.06)] hover:scale-[1.01] transition-transform duration-160 pointer-events-auto flex items-center gap-3"
+            >
+              <div className="flex-shrink-0 scale-95">
+                <svg className="h-10 w-10 text-amber-400 drop-shadow-[0_6px_18px_rgba(255,160,50,0.12)]" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                  <circle cx="12" cy="12" r="9" fill="url(#g)" />
+                  <defs>
+                    <linearGradient id="g" x1="0" x2="1">
+                      <stop offset="0" stopColor="#FFC857" />
+                      <stop offset="1" stopColor="#FF9F1C" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M12 8.5v7M9.25 11.25h5.5" stroke="#4b2e00" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200/70">Credit Uplink</div>
+                <motion.div className="mt-1 flex items-baseline gap-3" initial={{ scale: 0.96 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }}>
+                  <div className="text-2xl font-black tracking-tight text-amber-300">+{creditToast.amount.toLocaleString()} Credits</div>
+                  <div className="text-sm font-black text-white/60">•</div>
+                  <div className="text-sm font-black text-white/80">{creditToast.total.toLocaleString()}</div>
+                </motion.div>
+              </div>
+
+              <div className="flex-shrink-0 text-right">
+                <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">Balance</div>
+                <div className="mt-1 text-sm font-black text-white flex items-center justify-end gap-2">
+                  {creditCopiedId === creditToast.id ? (
+                    <span className="text-xs font-bold text-emerald-300">Copied</span>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <rect x="9" y="9" width="11" height="11" rx="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  )}
                 </div>
               </div>
             </div>
