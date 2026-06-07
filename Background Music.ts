@@ -33,7 +33,7 @@ const BEATS_PER_BAR = 4;
 const FADE_IN_MS = 1500;
 const FADE_OUT_MS = 1250;
 const LOOP_RESET_FADE_MS = 220;
-const REFRESH_BREAK_MS = 8000;
+const REFRESH_BREAK_MS = 3000;
 const REFRESH_BREAK_AFTER_LOOPS = 3;
 
 const SECTION_TIMELINE: Array<{ start: number; end: number; key: BackgroundMusicSection; label: string; energy: number }> = [

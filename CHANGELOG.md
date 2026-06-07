@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.8.2 - Audio Reactor Alignment
+Date: 07/06/26
+
+### Summary
+- Focused on tightening the main menu hero stage, making the soundtrack reactor fill its panel properly, and improving how release posts read when they land in Discord.
+
+### Hero Stage Fit
+- Expanded the main menu soundtrack reactor so the visualizer fills the center hero stage more completely instead of leaving a dead lower slab of blue space.
+- Retuned visualizer overlays and lower-stage blending so the bars, glow, and telemetry feel integrated with the full container rather than cut off in the upper half.
+- Kept the tank preview and beat-reactive stage synchronized so the menu centerpiece feels like one coherent live display.
+
+### Release Relay
+- Replaced the bland deploy-style Discord relay phrasing with a more informative tactical update broadcast built from the actual release title, date, summary, and highlights.
+- Improved the update-delivery wording so Discord posts read like real patch notes instead of generic branch and commit noise.
+- Prepared the relay pipeline to surface the newest menu and soundtrack improvements more clearly in future channel updates.
+
 ## v1.8.1 - Command Interface Sync
 Date: 07/06/26
 

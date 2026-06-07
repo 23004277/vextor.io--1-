@@ -26,16 +26,16 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
               : `radial-gradient(circle at 50% 68%, rgba(255,215,92,${snapshot.downbeatPulse * 0.12}), transparent 28%)`,
           }}
         />
-        <div className="absolute inset-x-0 bottom-0 top-0 opacity-[0.14]">
-          <div className="flex h-full items-end gap-2 px-6 pb-5">
+        <div className="absolute inset-x-4 inset-y-3 opacity-[0.24]">
+          <div className="flex h-full items-end gap-2">
             {snapshot.bars.map((bar, index) => (
               <div key={`hero-music-bar-${index}`} className="flex h-full flex-1 items-end">
                 <div
-                  className="w-full rounded-t-[18px] transition-[height,opacity,transform] duration-100"
+                  className="w-full rounded-t-[18px] transition-[height,opacity,transform] duration-75"
                   style={{
-                    height: `${Math.max(10, Math.min(94, 10 + bar * 76 + (index % 4 === 0 ? snapshot.downbeatPulse * 12 : snapshot.beatPulse * 4)))}%`,
-                    opacity: snapshot.breakActive ? 0.16 : 0.24 + Math.min(0.48, bar * 0.28 + (index % 4 === 0 ? snapshot.downbeatPulse * 0.14 : snapshot.beatPulse * 0.06)),
-                    transform: `scaleY(${snapshot.breakActive ? 0.35 : 1 + snapshot.beatPulse * 0.045}) translateY(${snapshot.breakActive ? 18 : 0}px)`,
+                    height: `${Math.max(28, Math.min(100, 28 + bar * 84 + (index % 4 === 0 ? snapshot.downbeatPulse * 16 : snapshot.beatPulse * 6)))}%`,
+                    opacity: snapshot.breakActive ? 0.14 : 0.28 + Math.min(0.52, bar * 0.32 + (index % 4 === 0 ? snapshot.downbeatPulse * 0.16 : snapshot.beatPulse * 0.08)),
+                    transform: `scaleY(${snapshot.breakActive ? 0.35 : 1 + snapshot.beatPulse * 0.06 + snapshot.downbeatPulse * 0.04}) translateY(${snapshot.breakActive ? 18 : 0}px)`,
                     background: index % 4 === 0
                       ? 'linear-gradient(180deg, rgba(255,223,94,0.92), rgba(33,230,255,0.4))'
                       : index % 2 === 0
@@ -52,9 +52,10 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
             ))}
           </div>
         </div>
+        <div className="absolute inset-x-0 bottom-0 h-[18%] bg-gradient-to-t from-[#04101d]/62 via-[#04101d]/22 to-transparent" />
 
-        <div className="absolute inset-x-6 bottom-5">
-          <div className="rounded-2xl border border-cyan-300/10 bg-slate-950/34 px-4 py-3 backdrop-blur-[3px]">
+        <div className="absolute inset-x-5 bottom-4">
+          <div className="rounded-2xl border border-cyan-300/10 bg-slate-950/46 px-4 py-3 backdrop-blur-[4px]">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-300/78">Mainframe Audio</div>

@@ -119,11 +119,18 @@ function buildDiscordPayload(entry: UpdateLogEntry, request: Request, env: Env) 
   const shareImageUrl = `${siteUrl}/imgasset/vextor-preview-v2-share.png`;
   const tags = entry.tags.join(' | ');
   const totalHighlights = (entry.sections ?? []).reduce((sum, section) => sum + section.items.length, 0);
+  const leadSection = entry.sections?.[0];
+  const leadLine = leadSection?.items?.[0] ?? entry.content;
 
   return {
     username: 'Vextor Update Relay',
     allowed_mentions: { parse: [] as string[] },
-    content: `Patch uplink transmitted: **${entry.id} // ${entry.title}**\nLaunch: ${siteUrl}`,
+    content: [
+      `Vextor update relay // **${entry.id} ${entry.title}**`,
+      `${entry.date} • ${entry.theme} release`,
+      truncateText(leadLine, 220),
+      `Launch grid: ${siteUrl}`,
+    ].join('\n'),
     embeds: [
       {
         title: truncateText(`${entry.id} // ${entry.title}`, 256),

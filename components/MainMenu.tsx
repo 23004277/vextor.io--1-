@@ -749,12 +749,12 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                           <span className="rounded-full border border-cyan-300/16 bg-cyan-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/82">{modeMeta.code}</span>
                           <span className="rounded-full border border-violet-300/16 bg-violet-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.15em] text-violet-200/72">{latestUpdate?.id ?? 'Live Build'}</span>
                         </div>
-                        <div className="relative mt-2 inline-block max-w-full">
+                        <div className="relative mt-2 inline-block max-w-full overflow-visible pr-5 md:pr-7">
                           <h1
                             className="vextor-title"
                             style={{
                               fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                              fontSize: compactHeight ? 'clamp(42px, 5.7vw, 76px)' : 'clamp(52px, 6.7vw, 102px)',
+                              fontSize: compactHeight ? 'clamp(40px, 5.5vw, 74px)' : 'clamp(48px, 6.2vw, 96px)',
                               fontWeight: 900,
                               fontStyle: 'italic',
                               letterSpacing: '-0.048em',
@@ -776,7 +776,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                               className={klass}
                               style={{
                                 fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                                fontSize: compactHeight ? 'clamp(42px, 5.7vw, 76px)' : 'clamp(52px, 6.7vw, 102px)',
+                                fontSize: compactHeight ? 'clamp(40px, 5.5vw, 74px)' : 'clamp(48px, 6.2vw, 96px)',
                                 fontWeight: 900,
                                 fontStyle: 'italic',
                                 letterSpacing: '-0.048em',
@@ -823,7 +823,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       <div className="absolute inset-x-10 top-1/2 h-px bg-gradient-to-r from-transparent via-cyan-300/20 to-transparent" />
                       <div className="absolute inset-y-8 left-1/2 w-px bg-gradient-to-b from-transparent via-teal-300/14 to-transparent" />
                       <div className="relative z-10">
-                        <InteractiveTankPreview tankColor={tankColor} isTeamsMode={isTeamsMode} parallax={parallax} compact={compactHeight} />
+                        <InteractiveTankPreview tankColor={tankColor} isTeamsMode={isTeamsMode} parallax={parallax} compact={compactHeight} musicSnapshot={musicSnapshot} />
                       </div>
                     </div>
                   </Panel>
@@ -1079,12 +1079,14 @@ interface InteractiveTankPreviewProps {
   isTeamsMode: boolean;
   parallax: { x: number; y: number };
   compact?: boolean;
+  musicSnapshot: BackgroundMusicVisualizerFrame | null;
 }
 
-const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankColor, isTeamsMode, parallax, compact = false }) => {
+const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankColor, isTeamsMode, parallax, compact = false, musicSnapshot }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const targetAngle = useRef(0);
+  const beatSwingRef = useRef(0);
   const [turretRotation, setTurretRotation] = useState(0);
   const [chassisRotation, setChassisRotation] = useState(0);
   const [pulse, setPulse] = useState(0);
@@ -1092,13 +1094,19 @@ const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankCol
   useEffect(() => {
     const tick = (time: number) => {
       setTurretRotation((prev) => {
-        let delta = targetAngle.current - prev;
+        const beatPhase = musicSnapshot?.beatPhase ?? 0;
+        const beatPulse = musicSnapshot?.beatPulse ?? 0;
+        const downbeatPulse = musicSnapshot?.downbeatPulse ?? 0;
+        const swingDirection = Math.sin((time / 1000) * Math.PI * 2 * (0.65 + beatPhase * 0.35));
+        beatSwingRef.current = swingDirection * (6 + beatPulse * 7 + downbeatPulse * 9);
+        const desiredAngle = targetAngle.current + beatSwingRef.current;
+        let delta = desiredAngle - prev;
         while (delta < -180) delta += 360;
         while (delta > 180) delta -= 360;
-        return prev + delta * 0.12;
+        return prev + delta * (0.1 + downbeatPulse * 0.05);
       });
-      setChassisRotation(Math.sin(time / 1800) * 6);
-      setPulse(Math.sin(time / 800) * 0.5 + 0.5);
+      setChassisRotation(Math.sin(time / 1800) * (4 + (musicSnapshot?.beatPulse ?? 0) * 2) + (musicSnapshot?.downbeatPulse ?? 0) * 2.5);
+      setPulse(Math.min(1, Math.sin(time / 800) * 0.28 + 0.42 + (musicSnapshot?.beatPulse ?? 0) * 0.38 + (musicSnapshot?.downbeatPulse ?? 0) * 0.18));
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -1117,7 +1125,7 @@ const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankCol
       cancelAnimationFrame(rafRef.current);
       window.removeEventListener('mousemove', onMove);
     };
-  }, []);
+  }, [musicSnapshot]);
 
   const previewSize = compact ? (isTeamsMode ? 106 : 130) : isTeamsMode ? 132 : 164;
   const frameSize = compact ? 188 : 234;
