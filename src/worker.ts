@@ -121,24 +121,40 @@ function buildDiscordPayload(entry: UpdateLogEntry, request: Request, env: Env) 
   const totalHighlights = (entry.sections ?? []).reduce((sum, section) => sum + section.items.length, 0);
   const leadSection = entry.sections?.[0];
   const leadLine = leadSection?.items?.[0] ?? entry.content;
+  const shortHighlights = (entry.sections ?? [])
+    .flatMap((section) => section.items)
+    .slice(0, 3)
+    .map((item) => `- ${truncateText(item, 120)}`)
+    .join('\n');
 
   return {
-    username: 'Vextor Update Relay',
+    username: 'VEXTOR',
+    avatar_url: shareImageUrl,
     allowed_mentions: { parse: [] as string[] },
-    content: [
-      `Vextor update relay // **${entry.id} ${entry.title}**`,
-      `${entry.date} • ${entry.theme} release`,
-      truncateText(leadLine, 220),
-      `Launch grid: ${siteUrl}`,
-    ].join('\n'),
     embeds: [
       {
-        title: truncateText(`${entry.id} // ${entry.title}`, 256),
+        title: truncateText('🧬 The arena evolved', 256),
         url: siteUrl,
-        description: truncateText(entry.content, 4096),
+        description: truncateText(
+          [
+            `**A new VEXTOR update is now live.**`,
+            '',
+            `**${entry.id} // ${entry.title}**`,
+            `${entry.date} • ${entry.theme} release`,
+            '',
+            truncateText(leadLine, 220),
+            '',
+            shortHighlights ? `**Hot Changes**\n${shortHighlights}` : '',
+            '',
+            `Load in, test the changes, and see what broke before the bots do.`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          4096
+        ),
         color: DISCORD_THEME_COLORS[entry.theme] ?? 0x22d3ee,
         author: {
-          name: 'Vextor Tactical Update Archive',
+          name: 'VEXTOR Origin',
           url: siteUrl,
           icon_url: shareImageUrl,
         },
@@ -161,14 +177,14 @@ function buildDiscordPayload(entry: UpdateLogEntry, request: Request, env: Env) 
             value: truncateText(tags || 'Live service update', 1024),
             inline: false,
           },
-          ...(entry.sections ?? []).slice(0, 5).map((section) => ({
+          ...(entry.sections ?? []).map((section) => ({
             name: truncateText(`${SECTION_ICONS[section.label] ?? 'Update'} | ${section.label}`, 256),
             value: formatSectionItems(section.items),
             inline: false,
           })),
         ],
         footer: {
-          text: truncateText(`Posted from the Vextor update relay | ${entry.id}`, 2048),
+          text: truncateText(`VEXTOR Origin | ${entry.id}`, 2048),
         },
         image: {
           url: shareImageUrl,

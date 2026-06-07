@@ -23,6 +23,15 @@ type UpdateLogEntry = typeof UPDATE_LOG[number];
 
 const UPDATE_RELAY_URL_KEY = 'vextor_update_relay_url';
 const UPDATE_RELAY_TOKEN_KEY = 'vextor_update_relay_token';
+const UPDATE_RELAY_META_KEY = 'vextor_update_relay_meta';
+
+type RelayMeta = {
+  updateId: string;
+  title: string;
+  timestamp: string;
+  mode: 'preview' | 'posted' | 'duplicate' | 'error';
+  detail: string;
+};
 
 const getDefaultRelayUrl = () =>
   typeof window !== 'undefined'
@@ -123,6 +132,16 @@ const App: React.FC = () => {
   const [relayBusy, setRelayBusy] = useState(false);
   const [relayForcePost, setRelayForcePost] = useState(false);
   const [relayStatus, setRelayStatus] = useState<string>('');
+  const [relayMeta, setRelayMeta] = useState<RelayMeta | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem(UPDATE_RELAY_META_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as RelayMeta;
+    } catch {
+      return null;
+    }
+  });
   const [showSupport, setShowSupport] = useState(false);
   const [supportTxnBusy, setSupportTxnBusy] = useState(false);
   const [supportTxnMsg, setSupportTxnMsg] = useState<string>('');
@@ -186,6 +205,15 @@ const App: React.FC = () => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(UPDATE_RELAY_URL_KEY, relayUrl);
   }, [relayUrl]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!relayMeta) {
+      window.localStorage.removeItem(UPDATE_RELAY_META_KEY);
+      return;
+    }
+    window.localStorage.setItem(UPDATE_RELAY_META_KEY, JSON.stringify(relayMeta));
+  }, [relayMeta]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -639,21 +667,56 @@ const App: React.FC = () => {
 
       if (response.status === 409 && payload?.duplicate) {
         setRelayStatus(`Skipped ${payload.skipped}: already posted. Enable force repost to relay it again.`);
+        setRelayMeta({
+          updateId: payload?.skipped || selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
+          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
+          timestamp: new Date().toISOString(),
+          mode: 'duplicate',
+          detail: 'Duplicate guard blocked repost.',
+        });
         return;
       }
 
       if (!response.ok) {
         setRelayStatus(payload?.error || `Relay failed with status ${response.status}.`);
+        setRelayMeta({
+          updateId: selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
+          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
+          timestamp: new Date().toISOString(),
+          mode: 'error',
+          detail: payload?.error || `Relay failed with status ${response.status}.`,
+        });
         return;
       }
 
       if (dryRun) {
         setRelayStatus(`Preview ready for ${payload?.updateId || selectedUpdate?.id || UPDATE_LOG[0]?.id}. Duplicate guard: ${payload?.duplicateWouldTrigger ? 'already posted' : 'clear'}.`);
+        setRelayMeta({
+          updateId: payload?.updateId || selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
+          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
+          timestamp: new Date().toISOString(),
+          mode: 'preview',
+          detail: payload?.duplicateWouldTrigger ? 'Preview generated. Duplicate guard would trigger.' : 'Preview generated. Relay path is clear.',
+        });
       } else {
         setRelayStatus(`Discord relay sent for ${payload?.posted || selectedUpdate?.id || UPDATE_LOG[0]?.id}.`);
+        setRelayMeta({
+          updateId: payload?.posted || selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
+          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
+          timestamp: new Date().toISOString(),
+          mode: 'posted',
+          detail: payload?.mockRelay ? 'Mock relay completed.' : 'Posted to Discord relay successfully.',
+        });
       }
     } catch (error) {
       setRelayStatus(error instanceof Error ? error.message : 'Relay request failed.');
+      setRelayMeta({
+        updateId: selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
+        title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
+        timestamp: new Date().toISOString(),
+        mode: 'error',
+        detail: error instanceof Error ? error.message : 'Relay request failed.',
+      });
     } finally {
       setRelayBusy(false);
     }
@@ -981,13 +1044,13 @@ const App: React.FC = () => {
 
                                       {showRelayAdmin && (
                                         <div className="mt-5 rounded-[1.25rem] border border-amber-300/18 bg-[linear-gradient(135deg,rgba(38,26,8,0.55),rgba(15,11,5,0.72))] px-4 py-4 md:px-5">
-                                          <div className="flex flex-col gap-4">
-                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                              <div>
-                                                <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/80">Admin Relay</div>
-                                                <div className="mt-1 text-xs text-white/55">Owner-only Discord post controls for the selected update log entry.</div>
-                                              </div>
-                                              <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/70">
+                                            <div className="flex flex-col gap-4">
+                                              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                                <div>
+                                                  <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/80">Admin Relay</div>
+                                                  <div className="mt-1 text-xs text-white/55">Owner-only Discord post controls for the selected update log entry.</div>
+                                                </div>
+                                                <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/70">
                                                 <input
                                                   type="checkbox"
                                                   checked={relayForcePost}
@@ -996,6 +1059,37 @@ const App: React.FC = () => {
                                                 />
                                                 Force Repost
                                               </label>
+                                            </div>
+
+                                            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                                              <div className="rounded-xl border border-cyan-300/14 bg-cyan-400/[0.05] px-3 py-2.5">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Relay Source Audit</div>
+                                                <div className="mt-1 text-xs leading-5 text-white/66">
+                                                  Active repo path: GitHub workflow `post-discord-update-log.yml` {'->'} Worker endpoint `/api/discord/update-log/latest` {'->'} Discord webhook.
+                                                </div>
+                                              </div>
+                                              {relayMeta && (
+                                                <div className={`rounded-xl border px-3 py-2.5 ${
+                                                  relayMeta.mode === 'posted'
+                                                    ? 'border-emerald-300/22 bg-emerald-400/[0.08]'
+                                                    : relayMeta.mode === 'preview'
+                                                      ? 'border-cyan-300/22 bg-cyan-400/[0.08]'
+                                                      : relayMeta.mode === 'duplicate'
+                                                        ? 'border-amber-300/22 bg-amber-400/[0.08]'
+                                                        : 'border-rose-300/22 bg-rose-400/[0.08]'
+                                                }`}>
+                                                  <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">Latest Transmitted</div>
+                                                  <div className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white">
+                                                    {relayMeta.updateId} {relayMeta.mode === 'posted' ? 'posted' : relayMeta.mode}
+                                                  </div>
+                                                  <div className="mt-1 text-[10px] font-bold leading-5 text-white/68">
+                                                    {relayMeta.title}
+                                                  </div>
+                                                  <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/40">
+                                                    {new Date(relayMeta.timestamp).toLocaleString()}
+                                                  </div>
+                                                </div>
+                                              )}
                                             </div>
 
                                             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
@@ -1049,6 +1143,11 @@ const App: React.FC = () => {
                                               <div className="mt-1 text-xs leading-5 text-white/72">
                                                 {relayStatus || 'Idle. Enter your admin token for this browser session, then preview or post the release entry.'}
                                               </div>
+                                              {relayMeta && (
+                                                <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[10px] leading-5 text-white/62">
+                                                  {relayMeta.detail}
+                                                </div>
+                                              )}
                                             </div>
                                           </div>
                                         </div>
