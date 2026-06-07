@@ -21,22 +21,7 @@ import { BackgroundMusic, BackgroundMusicVisualizerFrame } from './Background Mu
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
 
-const UPDATE_RELAY_URL_KEY = 'vextor_update_relay_url';
-const UPDATE_RELAY_TOKEN_KEY = 'vextor_update_relay_token';
-const UPDATE_RELAY_META_KEY = 'vextor_update_relay_meta';
-
-type RelayMeta = {
-  updateId: string;
-  title: string;
-  timestamp: string;
-  mode: 'preview' | 'posted' | 'duplicate' | 'error';
-  detail: string;
-};
-
-const getDefaultRelayUrl = () =>
-  typeof window !== 'undefined'
-    ? `${window.location.origin}/api/discord/update-log/latest`
-    : '/api/discord/update-log/latest';
+const OWNER_TOOLS_KEY = 'vextor_owner_tools';
 
 const SUPPORT_RANK_META: Record<User['supporterRank'], { label: string; accent: string; glow: string; tone: string }> = {
   standard: { label: 'Standard', accent: '#67e8f9', glow: 'rgba(103,232,249,0.16)', tone: 'Field access' },
@@ -120,28 +105,13 @@ const App: React.FC = () => {
   const [showAlmanac, setShowAlmanac] = useState(false);
   const [showUpdateHistory, setShowUpdateHistory] = useState(false);
   const [selectedUpdateId, setSelectedUpdateId] = useState<string>(UPDATE_LOG[0]?.id ?? '');
-  const [showRelayAdmin, setShowRelayAdmin] = useState(false);
-  const [relayUrl, setRelayUrl] = useState<string>(() => {
-    if (typeof window === 'undefined') return '/api/discord/update-log/latest';
-    return window.localStorage.getItem(UPDATE_RELAY_URL_KEY) || getDefaultRelayUrl();
+  const [ownerToolsEnabled, setOwnerToolsEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(OWNER_TOOLS_KEY) === '1';
   });
-  const [relayToken, setRelayToken] = useState<string>(() => {
-    if (typeof window === 'undefined') return '';
-    return window.sessionStorage.getItem(UPDATE_RELAY_TOKEN_KEY) || '';
-  });
-  const [relayBusy, setRelayBusy] = useState(false);
-  const [relayForcePost, setRelayForcePost] = useState(false);
-  const [relayStatus, setRelayStatus] = useState<string>('');
-  const [relayMeta, setRelayMeta] = useState<RelayMeta | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const raw = window.localStorage.getItem(UPDATE_RELAY_META_KEY);
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw) as RelayMeta;
-    } catch {
-      return null;
-    }
-  });
+  const [ownerCopyStatus, setOwnerCopyStatus] = useState<string>('');
+  const selectedReleaseExportRef = useRef<HTMLTextAreaElement | null>(null);
+  const fullArchiveExportRef = useRef<HTMLTextAreaElement | null>(null);
   const [showSupport, setShowSupport] = useState(false);
   const [supportTxnBusy, setSupportTxnBusy] = useState(false);
   const [supportTxnMsg, setSupportTxnMsg] = useState<string>('');
@@ -201,28 +171,79 @@ const App: React.FC = () => {
     return `Live supporter standing: ${supportRankMeta.label}. Top 3 backing totals receive active skin resonance.`;
   }, [supportRankMeta.label, supportTxnBusy, supportTxnMsg, user]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(UPDATE_RELAY_URL_KEY, relayUrl);
-  }, [relayUrl]);
+  const selectedUpdateClipboardText = useMemo(() => {
+    if (!selectedUpdate) return '';
+
+    const tagBlock = selectedUpdate.tags?.length ? `Tags: ${selectedUpdate.tags.join(' | ')}` : '';
+    const sectionBlock = (selectedUpdate.sections ?? [])
+      .map((section) => {
+        const items = section.items.map((item) => `- ${item}`).join('\n');
+        return `${section.label}\n${items}`;
+      })
+      .join('\n\n');
+
+    return [
+      `${selectedUpdate.id} - ${selectedUpdate.title}`,
+      `Date: ${selectedUpdate.date}`,
+      selectedUpdate.theme ? `Theme: ${selectedUpdate.theme}` : '',
+      '',
+      'Summary',
+      selectedUpdate.content,
+      tagBlock,
+      '',
+      sectionBlock,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }, [selectedUpdate]);
+
+  const fullArchiveClipboardText = useMemo(() => {
+    return UPDATE_LOG.map((entry) => {
+      const tagBlock = entry.tags?.length ? `Tags: ${entry.tags.join(' | ')}` : '';
+      const sectionBlock = (entry.sections ?? [])
+        .map((section) => {
+          const items = section.items.map((item) => `- ${item}`).join('\n');
+          return `${section.label}\n${items}`;
+        })
+        .join('\n\n');
+
+      return [
+        `${entry.id} - ${entry.title}`,
+        `Date: ${entry.date}`,
+        entry.theme ? `Theme: ${entry.theme}` : '',
+        '',
+        'Summary',
+        entry.content,
+        tagBlock,
+        '',
+        sectionBlock,
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }).join('\n\n----------------------------------------\n\n');
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!relayMeta) {
-      window.localStorage.removeItem(UPDATE_RELAY_META_KEY);
-      return;
-    }
-    window.localStorage.setItem(UPDATE_RELAY_META_KEY, JSON.stringify(relayMeta));
-  }, [relayMeta]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (relayToken.trim()) {
-      window.sessionStorage.setItem(UPDATE_RELAY_TOKEN_KEY, relayToken);
+    if (ownerToolsEnabled) {
+      window.localStorage.setItem(OWNER_TOOLS_KEY, '1');
     } else {
-      window.sessionStorage.removeItem(UPDATE_RELAY_TOKEN_KEY);
+      window.localStorage.removeItem(OWNER_TOOLS_KEY);
     }
-  }, [relayToken]);
+  }, [ownerToolsEnabled]);
+
+  useEffect(() => {
+    const handleOwnerToolsToggle = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        setOwnerToolsEnabled((prev) => !prev);
+        setOwnerCopyStatus('');
+      }
+    };
+
+    window.addEventListener('keydown', handleOwnerToolsToggle);
+    return () => window.removeEventListener('keydown', handleOwnerToolsToggle);
+  }, []);
 
   useEffect(() => {
     if (!showUpdateHistory) return;
@@ -623,104 +644,36 @@ const App: React.FC = () => {
     setSupportTxnBusy(false);
   }, [user, supportTxnBusy]);
 
-  const handleRelayPost = useCallback(async (mode: 'selected' | 'latest', dryRun = false) => {
-    const endpoint = relayUrl.trim() || getDefaultRelayUrl();
-    const token = relayToken.trim();
-
-    if (!endpoint) {
-      setRelayStatus('Relay endpoint is missing.');
+  const handleCopyUpdateLog = useCallback(async (text: string, label: string, exportRef?: React.RefObject<HTMLTextAreaElement | null>) => {
+    if (!text.trim()) {
+      setOwnerCopyStatus('Nothing to copy yet.');
       return;
     }
-
-    if (!token) {
-      setRelayStatus('Enter the relay admin token before posting to Discord.');
-      return;
-    }
-
-    setRelayBusy(true);
-    setRelayStatus(dryRun ? 'Generating Discord payload preview...' : 'Relaying update log to Discord...');
 
     try {
-      const requestUrl = new URL(endpoint);
-      if (dryRun) requestUrl.searchParams.set('dryRun', '1');
-      if (relayForcePost) requestUrl.searchParams.set('force', '1');
+      await navigator.clipboard.writeText(text);
+      setOwnerCopyStatus(`${label} copied. Paste it straight into Discord.`);
+      return;
+    } catch {
+      const target = exportRef?.current;
+      if (target) {
+        target.focus();
+        target.select();
+        target.setSelectionRange(0, target.value.length);
+      }
 
-      const response = await fetch(requestUrl.toString(), {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          updateId: mode === 'selected' ? selectedUpdate?.id : undefined,
-          dryRun,
-          force: relayForcePost,
-        }),
-      });
-
-      let payload: any = null;
       try {
-        payload = await response.json();
+        const copied = document.execCommand('copy');
+        if (copied) {
+          setOwnerCopyStatus(`${label} copied using compatibility mode. Paste it straight into Discord.`);
+        } else {
+          setOwnerCopyStatus(`${label} selected below. Press Ctrl+C, then paste it into Discord.`);
+        }
       } catch {
-        payload = null;
+        setOwnerCopyStatus(`${label} selected below. Press Ctrl+C, then paste it into Discord.`);
       }
-
-      if (response.status === 409 && payload?.duplicate) {
-        setRelayStatus(`Skipped ${payload.skipped}: already posted. Enable force repost to relay it again.`);
-        setRelayMeta({
-          updateId: payload?.skipped || selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
-          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
-          timestamp: new Date().toISOString(),
-          mode: 'duplicate',
-          detail: 'Duplicate guard blocked repost.',
-        });
-        return;
-      }
-
-      if (!response.ok) {
-        setRelayStatus(payload?.error || `Relay failed with status ${response.status}.`);
-        setRelayMeta({
-          updateId: selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
-          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
-          timestamp: new Date().toISOString(),
-          mode: 'error',
-          detail: payload?.error || `Relay failed with status ${response.status}.`,
-        });
-        return;
-      }
-
-      if (dryRun) {
-        setRelayStatus(`Preview ready for ${payload?.updateId || selectedUpdate?.id || UPDATE_LOG[0]?.id}. Duplicate guard: ${payload?.duplicateWouldTrigger ? 'already posted' : 'clear'}.`);
-        setRelayMeta({
-          updateId: payload?.updateId || selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
-          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
-          timestamp: new Date().toISOString(),
-          mode: 'preview',
-          detail: payload?.duplicateWouldTrigger ? 'Preview generated. Duplicate guard would trigger.' : 'Preview generated. Relay path is clear.',
-        });
-      } else {
-        setRelayStatus(`Discord relay sent for ${payload?.posted || selectedUpdate?.id || UPDATE_LOG[0]?.id}.`);
-        setRelayMeta({
-          updateId: payload?.posted || selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
-          title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
-          timestamp: new Date().toISOString(),
-          mode: 'posted',
-          detail: payload?.mockRelay ? 'Mock relay completed.' : 'Posted to Discord relay successfully.',
-        });
-      }
-    } catch (error) {
-      setRelayStatus(error instanceof Error ? error.message : 'Relay request failed.');
-      setRelayMeta({
-        updateId: selectedUpdate?.id || UPDATE_LOG[0]?.id || 'unknown',
-        title: selectedUpdate?.title || UPDATE_LOG[0]?.title || 'Unknown update',
-        timestamp: new Date().toISOString(),
-        mode: 'error',
-        detail: error instanceof Error ? error.message : 'Relay request failed.',
-      });
-    } finally {
-      setRelayBusy(false);
     }
-  }, [relayForcePost, relayToken, relayUrl, selectedUpdate]);
+  }, []);
 
   const handleSpectate = () => {
     if (engine) {
@@ -994,162 +947,126 @@ const App: React.FC = () => {
                                         <span className="text-[10px] font-black text-cyan-300 uppercase tracking-[0.3em]">Release Briefing</span>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                      <button
-                                        onClick={() => setShowRelayAdmin((prev) => !prev)}
-                                        className={`rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] transition ${
-                                          showRelayAdmin
-                                            ? 'border-amber-300/35 bg-amber-400/12 text-amber-200'
-                                            : 'border-white/10 bg-white/[0.03] text-white/55 hover:text-white/80 hover:bg-white/[0.06]'
-                                        }`}
-                                      >
-                                        {showRelayAdmin ? 'Hide Relay' : 'Discord Relay'}
-                                      </button>
+                                      {ownerToolsEnabled && (
+                                        <span className="rounded-full border border-amber-300/28 bg-amber-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-amber-200">
+                                          Owner Tools Enabled
+                                        </span>
+                                      )}
                                       <span className="text-[10px] text-white/35 font-bold uppercase tracking-[0.2em]">{UPDATE_LOG.length} entries indexed</span>
                                     </div>
                                 </div>
 
                                 {selectedUpdate && (
-                                  <div className="rounded-[1.6rem] border border-cyan-400/18 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.08),transparent_42%),rgba(255,255,255,0.02)] px-5 py-5 md:px-6 md:py-6">
-                                      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                  <div className="rounded-[1.45rem] border border-cyan-400/16 bg-[linear-gradient(180deg,rgba(7,14,24,0.96),rgba(5,10,18,0.9))] px-5 py-5 md:px-6 md:py-6">
+                                      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                                           <div className="max-w-3xl">
                                               <div className="flex flex-wrap items-center gap-2">
                                                   <span className="rounded-full border border-cyan-400/25 bg-cyan-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300">{selectedUpdate.id}</span>
-                                                  <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">{selectedUpdate.theme ?? 'Update'}</span>
-                                                  <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">{selectedUpdate.date}</span>
+                                                  <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-white/72">{selectedUpdate.theme ?? 'Update'}</span>
+                                                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/38">{selectedUpdate.date}</span>
                                               </div>
-                                              <h3 className="mt-4 text-2xl md:text-3xl font-black text-white uppercase tracking-tight">{selectedUpdate.title}</h3>
-                                              <p className="mt-3 max-w-3xl text-sm md:text-[15px] leading-7 text-white/68">{selectedUpdate.content}</p>
+                                              <h3 className="mt-4 text-2xl md:text-[2rem] font-black text-white uppercase tracking-tight">{selectedUpdate.title}</h3>
+                                              <p className="mt-3 max-w-3xl text-sm leading-7 text-white/70 md:text-[15px]">{selectedUpdate.content}</p>
                                           </div>
-                                          <div className="grid grid-cols-2 gap-2 md:min-w-[220px]">
-                                              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3">
-                                                  <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Sections</div>
-                                                  <div className="mt-1 text-xl font-black text-white">{selectedUpdate.sections?.length ?? 0}</div>
-                                              </div>
-                                              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3">
-                                                  <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Highlights</div>
-                                                  <div className="mt-1 text-xl font-black text-cyan-300">
-                                                    {(selectedUpdate.sections ?? []).reduce((sum, section) => sum + section.items.length, 0)}
+                                          <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4 lg:min-w-[260px]">
+                                              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300/70">Release Snapshot</div>
+                                              <div className="mt-3 grid grid-cols-3 gap-3">
+                                                  <div>
+                                                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/34">Sections</div>
+                                                      <div className="mt-1 text-lg font-black text-white">{selectedUpdate.sections?.length ?? 0}</div>
                                                   </div>
+                                                  <div>
+                                                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/34">Notes</div>
+                                                      <div className="mt-1 text-lg font-black text-cyan-300">
+                                                        {(selectedUpdate.sections ?? []).reduce((sum, section) => sum + section.items.length, 0)}
+                                                      </div>
+                                                  </div>
+                                                  <div>
+                                                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/34">Tags</div>
+                                                      <div className="mt-1 text-lg font-black text-white">{selectedUpdate.tags?.length ?? 0}</div>
+                                                  </div>
+                                              </div>
+                                              <div className="mt-3 text-[11px] leading-5 text-white/52">
+                                                Every section below is grouped for quick reading and clean manual posting.
                                               </div>
                                           </div>
                                       </div>
 
                                       <div className="mt-4 flex flex-wrap gap-2">
                                           {(selectedUpdate.tags ?? []).map((tag) => (
-                                            <span key={`${selectedUpdate.id}-tag-${tag}`} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-white/72">
+                                            <span key={`${selectedUpdate.id}-tag-${tag}`} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-white/68">
                                               {tag}
                                             </span>
                                           ))}
                                       </div>
 
-                                      {showRelayAdmin && (
-                                        <div className="mt-5 rounded-[1.25rem] border border-amber-300/18 bg-[linear-gradient(135deg,rgba(38,26,8,0.55),rgba(15,11,5,0.72))] px-4 py-4 md:px-5">
+                                      {ownerToolsEnabled && (
+                                        <div className="mt-5 rounded-[1.35rem] border border-amber-300/18 bg-[linear-gradient(135deg,rgba(38,26,8,0.55),rgba(15,11,5,0.72))] px-4 py-4 md:px-5">
                                             <div className="flex flex-col gap-4">
                                               <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                                                 <div>
-                                                  <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/80">Admin Relay</div>
-                                                  <div className="mt-1 text-xs text-white/55">Owner-only Discord post controls for the selected update log entry.</div>
+                                                  <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/80">Owner Copy Tools</div>
+                                                  <div className="mt-1 text-xs leading-5 text-white/58">Hidden local export tools for manual Discord posting. This replaces the old relay token flow entirely.</div>
                                                 </div>
-                                                <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/70">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={relayForcePost}
-                                                  onChange={(event) => setRelayForcePost(event.target.checked)}
-                                                  className="h-3.5 w-3.5 accent-amber-300"
-                                                />
-                                                Force Repost
-                                              </label>
-                                            </div>
-
-                                            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                                              <div className="rounded-xl border border-cyan-300/14 bg-cyan-400/[0.05] px-3 py-2.5">
-                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Relay Source Audit</div>
-                                                <div className="mt-1 text-xs leading-5 text-white/66">
-                                                  Active repo path: GitHub workflow `post-discord-update-log.yml` {'->'} Worker endpoint `/api/discord/update-log/latest` {'->'} Discord webhook.
+                                                <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/70">
+                                                  Ctrl+Shift+O toggles this
                                                 </div>
                                               </div>
-                                              {relayMeta && (
-                                                <div className={`rounded-xl border px-3 py-2.5 ${
-                                                  relayMeta.mode === 'posted'
-                                                    ? 'border-emerald-300/22 bg-emerald-400/[0.08]'
-                                                    : relayMeta.mode === 'preview'
-                                                      ? 'border-cyan-300/22 bg-cyan-400/[0.08]'
-                                                      : relayMeta.mode === 'duplicate'
-                                                        ? 'border-amber-300/22 bg-amber-400/[0.08]'
-                                                        : 'border-rose-300/22 bg-rose-400/[0.08]'
-                                                }`}>
-                                                  <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">Latest Transmitted</div>
-                                                  <div className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white">
-                                                    {relayMeta.updateId} {relayMeta.mode === 'posted' ? 'posted' : relayMeta.mode}
-                                                  </div>
-                                                  <div className="mt-1 text-[10px] font-bold leading-5 text-white/68">
-                                                    {relayMeta.title}
-                                                  </div>
-                                                  <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/40">
-                                                    {new Date(relayMeta.timestamp).toLocaleString()}
-                                                  </div>
+
+                                              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                                                <div className="rounded-xl border border-cyan-300/14 bg-cyan-400/[0.05] px-4 py-3">
+                                                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Selected Release Export</div>
+                                                  <div className="mt-1 text-xs leading-5 text-white/66">Copies the currently selected release with summary, tags, and every section item.</div>
                                                 </div>
-                                              )}
-                                            </div>
-
-                                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-                                              <label className="flex flex-col gap-1">
-                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Relay Endpoint</span>
-                                                <input
-                                                  value={relayUrl}
-                                                  onChange={(event) => setRelayUrl(event.target.value)}
-                                                  placeholder={getDefaultRelayUrl()}
-                                                  className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-xs font-bold text-white outline-none transition focus:border-cyan-400/45"
-                                                />
-                                              </label>
-                                              <label className="flex flex-col gap-1">
-                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Admin Token</span>
-                                                <input
-                                                  type="password"
-                                                  value={relayToken}
-                                                  onChange={(event) => setRelayToken(event.target.value)}
-                                                  placeholder="Bearer token"
-                                                  className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-xs font-bold text-white outline-none transition focus:border-cyan-400/45"
-                                                />
-                                              </label>
-                                            </div>
-
-                                            <div className="flex flex-wrap gap-2">
-                                              <button
-                                                onClick={() => handleRelayPost('selected', true)}
-                                                disabled={relayBusy}
-                                                className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-white/80 transition hover:bg-white/[0.09] disabled:opacity-50"
-                                              >
-                                                Preview Selected
-                                              </button>
-                                              <button
-                                                onClick={() => handleRelayPost('selected', false)}
-                                                disabled={relayBusy}
-                                                className="rounded-xl border border-amber-300/28 bg-amber-400/14 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-400/20 disabled:opacity-50"
-                                              >
-                                                Post Selected
-                                              </button>
-                                              <button
-                                                onClick={() => handleRelayPost('latest', false)}
-                                                disabled={relayBusy}
-                                                className="rounded-xl border border-cyan-300/24 bg-cyan-400/12 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18 disabled:opacity-50"
-                                              >
-                                                Post Latest
-                                              </button>
-                                            </div>
-
-                                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Relay Status</div>
-                                              <div className="mt-1 text-xs leading-5 text-white/72">
-                                                {relayStatus || 'Idle. Enter your admin token for this browser session, then preview or post the release entry.'}
+                                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                                                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Export</div>
+                                                  <div className="mt-1 text-xs leading-5 text-white/66">Copies the full update archive if you want to post or archive everything manually.</div>
+                                                </div>
                                               </div>
-                                              {relayMeta && (
-                                                <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[10px] leading-5 text-white/62">
-                                                  {relayMeta.detail}
+
+                                              <div className="flex flex-wrap gap-2">
+                                                <button
+                                                  onClick={() => handleCopyUpdateLog(selectedUpdateClipboardText, 'Selected release', selectedReleaseExportRef)}
+                                                  className="rounded-xl border border-amber-300/28 bg-amber-400/14 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-400/20"
+                                                >
+                                                  Copy Selected Release
+                                                </button>
+                                                <button
+                                                  onClick={() => handleCopyUpdateLog(fullArchiveClipboardText, 'Full archive', fullArchiveExportRef)}
+                                                  className="rounded-xl border border-cyan-300/24 bg-cyan-400/12 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18"
+                                                >
+                                                  Copy Full Archive
+                                                </button>
+                                              </div>
+
+                                              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                                                <label className="flex flex-col gap-1">
+                                                  <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Selected Release Preview</span>
+                                                  <textarea
+                                                    ref={selectedReleaseExportRef}
+                                                    readOnly
+                                                    value={selectedUpdateClipboardText}
+                                                    className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
+                                                  />
+                                                </label>
+                                                <label className="flex flex-col gap-1">
+                                                  <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Preview</span>
+                                                  <textarea
+                                                    ref={fullArchiveExportRef}
+                                                    readOnly
+                                                    value={fullArchiveClipboardText}
+                                                    className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
+                                                  />
+                                                </label>
+                                              </div>
+
+                                              <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Copy Status</div>
+                                                <div className="mt-1 text-xs leading-5 text-white/72">
+                                                  {ownerCopyStatus || 'Ready. Copy the selected release or the entire archive, then paste it into Discord manually.'}
                                                 </div>
-                                              )}
+                                              </div>
                                             </div>
-                                          </div>
                                         </div>
                                       )}
                                   </div>
@@ -1158,26 +1075,26 @@ const App: React.FC = () => {
 
                             <div className="flex-1 overflow-y-auto p-5 md:p-8 custom-scrollbar">
                                 {selectedUpdate ? (
-                                  <div className="space-y-5">
+                                  <div className="space-y-4">
                                       {(selectedUpdate.sections ?? []).map((section, index) => (
                                         <article
                                           key={`${selectedUpdate.id}-${section.label}`}
-                                          className="rounded-[1.5rem] border border-white/10 bg-white/[0.025] overflow-hidden"
+                                          className="overflow-hidden rounded-[1.35rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.01))]"
                                         >
-                                            <div className="px-5 md:px-6 py-4 border-b border-white/8 bg-white/[0.02] flex items-center justify-between gap-3">
+                                            <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-white/[0.02] px-5 py-4 md:px-6">
                                                 <div className="flex items-center gap-3">
-                                                    <span className="w-7 h-7 rounded-full border border-cyan-400/25 bg-cyan-400/10 flex items-center justify-center text-[10px] font-black text-cyan-300">
+                                                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-cyan-400/25 bg-cyan-400/10 text-[10px] font-black text-cyan-300">
                                                       {index + 1}
                                                     </span>
                                                     <h4 className="text-sm md:text-base font-black uppercase tracking-[0.08em] text-white">{section.label}</h4>
                                                 </div>
                                                 <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/32">{section.items.length} notes</span>
                                             </div>
-                                            <div className="px-5 md:px-6 py-5">
-                                                <ul className="space-y-3">
+                                            <div className="px-5 py-5 md:px-6">
+                                                <ul className="space-y-2.5">
                                                     {section.items.map((line) => (
-                                                      <li key={line} className="flex items-start gap-3 text-sm md:text-[15px] leading-6 text-white/70">
-                                                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300" />
+                                                      <li key={line} className="flex items-start gap-3 rounded-xl border border-white/8 bg-black/18 px-4 py-3 text-sm leading-6 text-white/72 md:text-[15px]">
+                                                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_12px_rgba(103,232,249,0.45)]" />
                                                           <span>{line}</span>
                                                       </li>
                                                     ))}
