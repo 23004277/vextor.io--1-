@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, Variants } from 'motion/react';
-import { BookOpen, ChevronRight, Eye, Pencil, Radar, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
+import { BookOpen, ChevronRight, Eye, HeartHandshake, Pencil, Radar, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
 
 import { BackgroundMusicVisualizerFrame } from '../Background Music';
 import { COLORS } from '../constants';
@@ -62,20 +62,20 @@ type TeamMeta = {
 };
 
 const UI = {
-  ink: '#dffbff',
-  soft: '#9bd6e2',
-  dim: 'rgba(155, 214, 226, 0.42)',
-  faint: 'rgba(155, 214, 226, 0.24)',
+  ink: '#ecfeff',
+  soft: '#a7e8f2',
+  dim: 'rgba(167, 232, 242, 0.48)',
+  faint: 'rgba(167, 232, 242, 0.26)',
   cyan: '#20e6ff',
   teal: '#2cffc7',
-  violet: '#a98cff',
+  violet: '#9f7cff',
   amber: '#ffd15c',
-  rose: '#ff6b8a',
-  panel: 'linear-gradient(180deg, rgba(4, 18, 34, 0.90), rgba(3, 8, 22, 0.96))',
-  panelDeep: 'linear-gradient(180deg, rgba(5, 28, 48, 0.72), rgba(2, 8, 20, 0.96))',
-  panelTint: 'linear-gradient(135deg, rgba(6, 78, 98, 0.25), rgba(15, 23, 42, 0.76))',
-  border: 'rgba(32, 230, 255, 0.16)',
-  borderStrong: 'rgba(44, 255, 199, 0.34)',
+  rose: '#ff5f86',
+  panel: 'linear-gradient(180deg, rgba(5, 25, 44, 0.92), rgba(2, 8, 22, 0.97))',
+  panelDeep: 'linear-gradient(180deg, rgba(7, 35, 58, 0.76), rgba(2, 7, 20, 0.98))',
+  panelTint: 'linear-gradient(135deg, rgba(8, 145, 178, 0.18), rgba(15, 23, 42, 0.84))',
+  border: 'rgba(56, 189, 248, 0.18)',
+  borderStrong: 'rgba(45, 255, 199, 0.38)',
 };
 
 const MODE_META: Record<GameMode, ModeMeta> = {
@@ -226,19 +226,19 @@ const Panel: React.FC<{
   children: React.ReactNode;
 }> = ({ title, subtitle, className = '', bodyClassName = '', children }) => (
   <section
-    className={`relative min-w-0 rounded-[1.25rem] border shadow-[0_16px_46px_rgba(0,0,0,0.34)] backdrop-blur-md ${className}`}
+    className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.15rem] border shadow-[0_18px_54px_rgba(0,0,0,0.34)] backdrop-blur-xl ${className}`}
     style={{ background: UI.panel, borderColor: UI.border }}
   >
     {(title || subtitle) && (
-      <header className="flex min-w-0 items-start justify-between gap-3 border-b border-cyan-300/10 px-4 py-3">
+      <header className="flex shrink-0 min-w-0 items-start justify-between gap-3 border-b border-cyan-300/10 px-4 py-3">
         <div className="min-w-0">
-          {title && <div className="break-words text-[9px] font-black uppercase leading-relaxed tracking-[0.24em] text-cyan-100/84">{title}</div>}
-          {subtitle && <div className="mt-0.5 break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.12em] text-sky-100/34">{subtitle}</div>}
+          {title && <div className="menu-copy text-[9px] font-black uppercase leading-[1.35] tracking-[0.20em] text-cyan-100/86">{title}</div>}
+          {subtitle && <div className="menu-copy mt-0.5 text-[8px] font-bold uppercase leading-[1.45] tracking-[0.10em] text-sky-100/38">{subtitle}</div>}
         </div>
         <div className="mt-1 h-1.5 w-1.5 shrink-0 rotate-45 bg-cyan-300/75 shadow-[0_0_14px_rgba(32,230,255,0.75)]" />
       </header>
     )}
-    <div className={`${title || subtitle ? 'p-4' : ''} ${bodyClassName}`}>{children}</div>
+    <div className={`min-h-0 min-w-0 flex-1 ${title || subtitle ? 'p-3.5' : ''} ${bodyClassName}`}>{children}</div>
   </section>
 );
 
@@ -255,7 +255,7 @@ const MiniStat: React.FC<{ label: string; value: number | string; accent?: strin
     >
       {typeof value === 'number' ? value.toLocaleString() : value}
     </div>
-    <div className="mt-1.5 break-words text-[7px] font-black uppercase leading-relaxed tracking-[0.16em] text-sky-100/36">{label}</div>
+    <div className="menu-copy mt-1.5 text-[7px] font-black uppercase leading-[1.35] tracking-[0.12em] text-sky-100/40">{label}</div>
   </div>
 );
 
@@ -273,14 +273,15 @@ const NavButton: React.FC<{
     onClick={onClick}
     onMouseEnter={onHover}
     onMouseLeave={onLeave}
-    className="group flex min-w-0 items-center gap-3 rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-cyan-300/30 hover:bg-cyan-400/[0.07]"
+    className="group relative flex min-h-[54px] min-w-0 items-center gap-3 overflow-hidden rounded-xl border border-cyan-300/10 bg-slate-950/35 px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-cyan-300/32 hover:bg-cyan-400/[0.075]"
   >
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/10 bg-slate-950/55" style={{ color: accent }}>
+    <div className="pointer-events-none absolute inset-y-0 left-0 w-1 opacity-70" style={{ background: accent }} />
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/10 bg-slate-950/60" style={{ color: accent }}>
       <Icon className="h-4 w-4" />
     </div>
     <div className="min-w-0 flex-1">
-      <div className="break-words text-[9px] font-black uppercase leading-relaxed tracking-[0.16em] text-cyan-50/86">{label}</div>
-      <div className="mt-0.5 break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.09em] text-sky-100/32">{sub}</div>
+      <div className="menu-copy text-[9px] font-black uppercase leading-[1.35] tracking-[0.13em] text-cyan-50/90">{label}</div>
+      <div className="menu-copy mt-0.5 text-[7.5px] font-bold uppercase leading-[1.4] tracking-[0.065em] text-sky-100/38">{sub}</div>
     </div>
     <ChevronRight className="h-4 w-4 shrink-0 text-cyan-200/28 transition group-hover:translate-x-0.5 group-hover:text-cyan-200/76" />
   </button>
@@ -301,26 +302,25 @@ const ModeButton: React.FC<{
       onClick={onSelect}
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
-      className="relative rounded-xl p-3 text-left transition hover:-translate-y-0.5"
+      className="relative flex min-h-[98px] min-w-0 flex-col overflow-hidden rounded-xl p-3 text-left transition hover:-translate-y-0.5"
       style={{
-        minHeight: 92,
-        background: active ? meta.fill : 'rgba(2, 10, 25, 0.70)',
-        border: `1px solid ${active ? meta.border : 'rgba(32, 230, 255, 0.10)'}`,
-        boxShadow: active ? `0 0 22px ${meta.glow}, inset 0 0 26px rgba(255,255,255,0.025)` : 'none',
+        background: active ? meta.fill : 'rgba(2, 10, 25, 0.72)',
+        border: `1px solid ${active ? meta.border : 'rgba(32, 230, 255, 0.11)'}`,
+        boxShadow: active ? `0 0 24px ${meta.glow}, inset 0 0 26px rgba(255,255,255,0.025)` : 'none',
       }}
     >
       <div
-        className="pointer-events-none absolute inset-0 rounded-xl opacity-70"
-        style={{ background: active ? `radial-gradient(circle at 18% 0%, ${meta.glow}, transparent 56%)` : 'transparent' }}
+        className="pointer-events-none absolute inset-0 rounded-xl opacity-80"
+        style={{ background: active ? `radial-gradient(circle at 18% 0%, ${meta.glow}, transparent 60%)` : 'transparent' }}
       />
       <div className="relative flex items-center justify-between gap-3">
-        <span className="break-words text-[8px] font-black uppercase tracking-[0.18em]" style={{ color: active ? meta.color : UI.dim }}>
+        <span className="menu-copy text-[8px] font-black uppercase leading-[1.2] tracking-[0.15em]" style={{ color: active ? meta.color : UI.dim }}>
           {meta.code}
         </span>
         <span className="h-2 w-2 shrink-0 rotate-45" style={{ background: active ? meta.color : 'rgba(155,214,226,0.22)' }} />
       </div>
-      <div className="relative mt-2 break-words text-[11px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/90">{meta.title}</div>
-      <div className="relative mt-1 break-words text-[8.5px] font-bold uppercase leading-relaxed tracking-[0.06em] text-sky-100/38">{meta.desc}</div>
+      <div className="menu-copy relative mt-2 text-[11px] font-black uppercase leading-[1.25] tracking-[0.045em] text-cyan-50/92">{meta.title}</div>
+      <div className="menu-copy relative mt-1 text-[8px] font-bold uppercase leading-[1.45] tracking-[0.035em] text-sky-100/42">{meta.desc}</div>
     </button>
   );
 };
@@ -341,8 +341,8 @@ const TeamButton: React.FC<{
       onClick={onSelect}
       className="rounded-xl px-3 py-2.5 text-left transition hover:-translate-y-0.5 disabled:hover:translate-y-0"
       style={{
-        background: active ? meta.bg : 'rgba(2, 10, 25, 0.70)',
-        border: `1px solid ${active ? meta.border : 'rgba(32, 230, 255, 0.10)'}`,
+        background: active ? meta.bg : 'rgba(2, 10, 25, 0.72)',
+        border: `1px solid ${active ? meta.border : 'rgba(32, 230, 255, 0.11)'}`,
         boxShadow: active ? `0 0 18px ${meta.border}` : 'none',
         opacity: !canJoin ? 0.45 : 1,
         cursor: !canJoin ? 'not-allowed' : 'pointer',
@@ -352,18 +352,18 @@ const TeamButton: React.FC<{
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 shrink-0 rotate-45" style={{ background: active ? meta.color : 'rgba(155,214,226,0.22)' }} />
-            <span className="break-words text-[8px] font-black uppercase tracking-[0.15em]" style={{ color: active ? meta.color : UI.dim }}>
+            <span className="menu-copy text-[8px] font-black uppercase leading-[1.2] tracking-[0.13em]" style={{ color: active ? meta.color : UI.dim }}>
               {meta.short}
             </span>
           </div>
-          <div className="mt-1.5 break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/86">{meta.label}</div>
+          <div className="menu-copy mt-1.5 text-[9.5px] font-black uppercase leading-[1.28] tracking-[0.045em] text-cyan-50/88">{meta.label}</div>
         </div>
         <div className="shrink-0 text-right">
-          <div className="text-[7px] font-black uppercase tracking-[0.12em] text-sky-100/28">Units</div>
-          <div className="mt-0.5 text-xs font-black text-cyan-50/82">{Math.max(0, count)}</div>
+          <div className="text-[7px] font-black uppercase tracking-[0.10em] text-sky-100/32">Units</div>
+          <div className="mt-0.5 text-xs font-black text-cyan-50/84">{Math.max(0, count)}</div>
         </div>
       </div>
-      {!canJoin && <div className="mt-2 rounded-md border border-rose-300/16 bg-rose-400/8 px-2 py-1 text-center text-[7px] font-black uppercase tracking-[0.14em] text-rose-300/82">Full</div>}
+      {!canJoin && <div className="menu-copy mt-2 rounded-md border border-rose-300/16 bg-rose-400/8 px-2 py-1 text-center text-[7px] font-black uppercase leading-[1.2] tracking-[0.12em] text-rose-300/82">Full</div>}
     </button>
   );
 };
@@ -378,17 +378,17 @@ const LeaderboardRow: React.FC<{ entry: HighScoreEntry; index: number }> = ({ en
       initial={{ opacity: 0, x: 12 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay: 0.08 + index * 0.04, duration: 0.32, ease: SPRING_EASE }}
-      className="flex min-w-0 items-center gap-3 rounded-xl border border-cyan-300/10 bg-[linear-gradient(135deg,rgba(8,23,43,0.9),rgba(5,18,33,0.74))] px-3 py-2.5"
+      className="flex min-w-0 items-center gap-2.5 rounded-xl border border-cyan-300/10 bg-[linear-gradient(135deg,rgba(8,23,43,0.92),rgba(5,18,33,0.78))] px-3 py-2.5"
     >
-      <div className="flex w-11 shrink-0 flex-col items-center justify-center rounded-lg border border-cyan-300/10 bg-slate-950/55 px-2 py-2 text-center">
-        <div className="text-[7px] font-black uppercase tracking-[0.14em] text-sky-100/28">Rank</div>
-        <div className="mt-1 text-[9px] font-black uppercase tracking-[0.12em]" style={{ color }}>{rankLabel}</div>
+      <div className="flex w-10 shrink-0 flex-col items-center justify-center rounded-lg border border-cyan-300/10 bg-slate-950/58 px-2 py-2 text-center">
+        <div className="text-[6.5px] font-black uppercase tracking-[0.10em] text-sky-100/32">Rank</div>
+        <div className="mt-1 text-[8.5px] font-black uppercase tracking-[0.10em]" style={{ color }}>{rankLabel}</div>
       </div>
       <div className="min-w-0 flex-1">
-        <div className="break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/88">{entry.name}</div>
-        <div className="mt-0.5 break-words text-[7px] font-bold uppercase tracking-[0.10em] text-sky-100/32">Arena score uplink</div>
+        <div className="menu-copy text-[9.5px] font-black uppercase leading-[1.3] tracking-[0.045em] text-cyan-50/90">{entry.name || 'Unknown'}</div>
+        <div className="menu-copy mt-0.5 text-[6.8px] font-bold uppercase leading-[1.35] tracking-[0.07em] text-sky-100/35">Arena score uplink</div>
       </div>
-      <div className="shrink-0 rounded-full border border-cyan-300/10 bg-cyan-950/30 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.08em]" style={{ color }}>
+      <div className="shrink-0 rounded-full border border-cyan-300/10 bg-cyan-950/30 px-2.5 py-1.5 text-[8.5px] font-black uppercase tracking-[0.055em]" style={{ color }}>
         {safeNumber(entry.score).toLocaleString()}
       </div>
     </motion.div>
@@ -398,10 +398,10 @@ const LeaderboardRow: React.FC<{ entry: HighScoreEntry; index: number }> = ({ en
 const ControlRow: React.FC<{ label: string; keyLabel: string; desc: string }> = ({ label, keyLabel, desc }) => (
   <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-2.5">
     <div className="min-w-0">
-      <div className="break-words text-[8.5px] font-black uppercase leading-relaxed tracking-[0.12em] text-cyan-50/76">{label}</div>
-      <div className="mt-0.5 break-words text-[7.5px] font-bold uppercase leading-relaxed tracking-[0.07em] text-sky-100/30">{desc}</div>
+      <div className="menu-copy text-[8.5px] font-black uppercase leading-[1.3] tracking-[0.10em] text-cyan-50/78">{label}</div>
+      <div className="menu-copy mt-0.5 text-[7.5px] font-bold uppercase leading-[1.35] tracking-[0.055em] text-sky-100/34">{desc}</div>
     </div>
-    <kbd className="min-w-[48px] shrink-0 rounded-md border border-teal-300/20 bg-teal-400/10 px-2 py-1.5 text-center text-[8px] font-black uppercase tracking-[0.08em] text-teal-200">
+    <kbd className="min-w-[46px] shrink-0 rounded-md border border-teal-300/20 bg-teal-400/10 px-2 py-1.5 text-center text-[8px] font-black uppercase tracking-[0.065em] text-teal-200">
       {keyLabel}
     </kbd>
   </div>
@@ -450,7 +450,7 @@ const PolicyModal: React.FC<{ open: boolean; type: 'privacy' | 'terms'; onClose:
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="absolute inset-0 z-[100] flex items-center justify-center overflow-y-auto p-4"
+          className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto p-4"
           style={{ background: 'rgba(2, 6, 23, 0.78)' }}
           onClick={onClose}
         >
@@ -464,8 +464,8 @@ const PolicyModal: React.FC<{ open: boolean; type: 'privacy' | 'terms'; onClose:
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex flex-col gap-2 border-b border-cyan-300/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
-              <h3 className="break-words text-xl font-black uppercase tracking-[0.08em]" style={{ color: accent }}>{title}</h3>
-              <span className="break-words text-[9px] font-black uppercase tracking-[0.12em]" style={{ color: UI.dim }}>{tag}</span>
+              <h3 className="menu-copy text-xl font-black uppercase leading-tight tracking-[0.06em]" style={{ color: accent }}>{title}</h3>
+              <span className="menu-copy text-[9px] font-black uppercase leading-[1.35] tracking-[0.10em]" style={{ color: UI.dim }}>{tag}</span>
             </div>
 
             <div className="mt-4 grid gap-3">
@@ -562,9 +562,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const safeTeam = isTeamsMode && TEAM_META[selectedTeam] ? selectedTeam : Team.NONE;
   const teamMeta = TEAM_META[safeTeam];
   const modeMeta = MODE_META[gameMode];
-  const tankColor = isTeamsMode ? teamMeta.color : activeColor;
-  const latestUpdate = useMemo(() => updateLog[0], [updateLog]);
-  const topScores = useMemo(() => [...highScores].sort((a, b) => safeNumber(b.score) - safeNumber(a.score)).slice(0, 5), [highScores]);
+  const tankColor = isTeamsMode ? teamMeta.color : activeColor || UI.cyan;
+  const latestUpdate = useMemo(() => updateLog?.[0], [updateLog]);
+  const topScores = useMemo(() => [...(highScores ?? [])].sort((a, b) => safeNumber(b.score) - safeNumber(a.score)).slice(0, 5), [highScores]);
   const countKills = useCountUp(totalKills, 850);
   const countScore = useCountUp(totalScore, 1000);
   const deploymentReady = !isTeamsMode || (safeTeam !== Team.NONE && (allowedTeams.includes(safeTeam) || canJoinTeam(safeTeam)));
@@ -575,7 +575,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       { label: 'Almanac', sub: 'Tank intel and archive', icon: BookOpen, action: () => setShowAlmanac(true), accent: '#34d399' },
       { label: 'Records', sub: 'Achievements and medals', icon: Trophy, action: () => setShowAchievements(true), accent: UI.amber },
       { label: 'Updates', sub: 'Patch notes and changelog', icon: ScrollText, action: () => setShowUpdateHistory(true), accent: UI.violet },
-      { label: 'Support', sub: 'Back the command grid', icon: ChevronRight, action: () => setShowSupport(true), accent: UI.rose },
+      { label: 'Support', sub: 'Back the command grid', icon: HeartHandshake, action: () => setShowSupport(true), accent: UI.rose },
       { label: 'Settings', sub: 'Controls and display', icon: SlidersHorizontal, action: () => setShowSettings(true), accent: UI.teal },
     ],
     [setShowAchievements, setShowAlmanac, setShowShop, setShowSupport, setShowSettings, setShowUpdateHistory],
@@ -654,13 +654,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 50%, transparent 34%, rgba(2,6,23,0.88) 100%)' }} />
           </div>
 
-          <div className="vextor-menu relative z-10 mx-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-[1760px] flex-col gap-3 overflow-hidden px-3 py-3 lg:px-4">
-            <header className="grid shrink-0 grid-cols-1 gap-2 rounded-2xl border border-cyan-300/12 bg-slate-950/54 px-4 py-3 shadow-[0_12px_42px_rgba(0,0,0,0.22)] backdrop-blur-md md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+          <div className="vextor-menu relative z-10 mx-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-[1800px] flex-col gap-2.5 overflow-hidden px-3 py-3 lg:px-4">
+            <header className="grid shrink-0 grid-cols-1 gap-2 rounded-2xl border border-cyan-300/12 bg-slate-950/58 px-4 py-2.5 shadow-[0_12px_42px_rgba(0,0,0,0.24)] backdrop-blur-xl md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-teal-300 shadow-[0_0_14px_rgba(44,255,199,0.9)]" />
                 <div className="min-w-0">
-                  <div className="break-words text-[9px] font-black uppercase leading-relaxed tracking-[0.26em] text-teal-100/84">VEXTOR Command Interface</div>
-                  <div className="mt-0.5 break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.12em] text-sky-100/34">Clean cockpit layout / no clipped labels / no dead space</div>
+                  <div className="menu-copy text-[9px] font-black uppercase leading-[1.35] tracking-[0.22em] text-teal-100/86">VEXTOR Command Interface</div>
+                  <div className="menu-copy mt-0.5 text-[8px] font-bold uppercase leading-[1.4] tracking-[0.10em] text-sky-100/38">Clean cockpit layout / no clipped labels / no dead space</div>
                 </div>
               </div>
 
@@ -676,20 +676,20 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               </div>
             </header>
 
-            <div className="grid min-h-0 flex-1 gap-2.5 overflow-hidden lg:grid-cols-[250px_minmax(0,1fr)_320px] xl:grid-cols-[270px_minmax(0,1fr)_350px]">
-              <motion.aside variants={slideLeft} className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden">
+            <div className="grid min-h-0 flex-1 gap-2.5 overflow-hidden lg:grid-cols-[245px_minmax(0,1fr)_315px] xl:grid-cols-[265px_minmax(0,1fr)_345px] 2xl:grid-cols-[285px_minmax(0,1fr)_365px]">
+              <motion.aside variants={slideLeft} className="menu-scrollbar grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2.5 overflow-y-auto pr-1">
                 <Panel title="Pilot" subtitle={user ? 'Cloud profile' : 'Guest profile'}>
                   <div className="relative rounded-xl border border-cyan-300/12 p-3" style={{ background: UI.panelDeep }}>
                     <div className="absolute right-[-24px] top-[-24px] h-24 w-24 rounded-full bg-cyan-400/10 blur-2xl" />
-                    <div className="relative break-words text-lg font-black uppercase leading-tight tracking-[0.05em] text-cyan-50/92">{playerName || user?.username || 'Guest Pilot'}</div>
+                    <div className="menu-copy relative text-lg font-black uppercase leading-tight tracking-[0.04em] text-cyan-50/94">{playerName || user?.username || 'Guest Pilot'}</div>
                     <div className="relative mt-3 grid grid-cols-3 gap-2">
                       <MiniStat label="Level" value={maxLevel} accent={UI.cyan} />
                       <MiniStat label="K/D" value={kd} accent={UI.amber} />
                       <MiniStat label="Kills" value={countKills} accent={UI.teal} />
                     </div>
                     <div className="relative mt-3 rounded-xl border border-amber-300/12 bg-amber-400/[0.07] px-3 py-2.5">
-                      <div className="break-words text-[8px] font-black uppercase tracking-[0.16em] text-amber-200/58">Lifetime Score</div>
-                      <div className="mt-1 break-words text-xl font-black tracking-tight text-amber-300">{countScore.toLocaleString()}</div>
+                      <div className="menu-copy text-[8px] font-black uppercase leading-[1.3] tracking-[0.12em] text-amber-200/60">Lifetime Score</div>
+                      <div className="menu-copy mt-1 text-xl font-black tracking-tight text-amber-300">{countScore.toLocaleString()}</div>
                     </div>
 
                     {user ? (
@@ -741,9 +741,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               </motion.aside>
 
               <motion.main variants={panelVar} className="min-h-0 min-w-0">
-                <form onSubmit={submitHandler} className="grid h-full min-h-0 min-w-0 gap-2.5 overflow-hidden lg:grid-rows-[auto_minmax(220px,1fr)_auto]">
+                <form onSubmit={submitHandler} className="grid h-full min-h-0 min-w-0 gap-2.5 overflow-hidden lg:grid-rows-[auto_minmax(210px,1fr)_auto]">
                   <Panel bodyClassName="p-0" className="shrink-0">
-                    <div className="grid min-w-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] xl:items-center">
+                    <div className="grid min-w-0 gap-3 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(260px,360px)] xl:items-center">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-cyan-300/16 bg-cyan-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/82">{modeMeta.code}</span>
@@ -754,10 +754,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             className="vextor-title"
                             style={{
                               fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                              fontSize: compactHeight ? 'clamp(40px, 5.5vw, 74px)' : 'clamp(48px, 6.2vw, 96px)',
+                              fontSize: compactHeight ? 'clamp(38px, 5.2vw, 70px)' : 'clamp(46px, 6vw, 92px)',
                               fontWeight: 900,
                               fontStyle: 'italic',
-                              letterSpacing: '-0.048em',
+                              letterSpacing: '-0.04em',
                               lineHeight: 0.9,
                               textTransform: 'uppercase',
                               background: 'linear-gradient(90deg, #20e6ff 0%, #2cffc7 42%, #a98cff 100%)',
@@ -776,10 +776,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                               className={klass}
                               style={{
                                 fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                                fontSize: compactHeight ? 'clamp(40px, 5.5vw, 74px)' : 'clamp(48px, 6.2vw, 96px)',
+                                fontSize: compactHeight ? 'clamp(38px, 5.2vw, 70px)' : 'clamp(46px, 6vw, 92px)',
                                 fontWeight: 900,
                                 fontStyle: 'italic',
-                                letterSpacing: '-0.048em',
+                                letterSpacing: '-0.04em',
                                 lineHeight: 0.9,
                                 textTransform: 'uppercase',
                                 color: klass.endsWith('r') ? UI.rose : UI.cyan,
@@ -794,7 +794,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             </h1>
                           ))}
                         </div>
-                        <p className="mt-3 max-w-[820px] break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.14em] text-sky-100/46 md:text-[11px] xl:text-[12px]">
+                        <p className="menu-copy mt-3 max-w-[820px] text-[10px] font-black uppercase leading-[1.6] tracking-[0.09em] text-sky-100/48 md:text-[11px] xl:text-[12px]">
                           Evolve fast. Control the grid. Leave the arena looking traumatised.
                         </p>
                       </div>
@@ -807,18 +807,18 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             setShowUpdateHistory(true);
                           }}
                           onMouseEnter={playHover}
-                          className="min-w-0 rounded-2xl border border-violet-300/18 bg-[linear-gradient(135deg,rgba(36,24,66,0.62),rgba(18,22,42,0.92))] px-4 py-3.5 text-left transition hover:-translate-y-0.5 hover:border-violet-300/32"
+                          className="min-w-0 rounded-2xl border border-violet-300/18 bg-[linear-gradient(135deg,rgba(36,24,66,0.62),rgba(18,22,42,0.92))] px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-violet-300/32"
                         >
-                          <div className="break-words text-[8px] font-black uppercase tracking-[0.15em] text-violet-200/62">Latest Update</div>
-                          <div className="mt-1 break-words text-[11px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/88">{latestUpdate.title}</div>
-                          <div className="mt-2 break-words text-[8px] font-bold uppercase tracking-[0.10em] text-sky-100/36">{latestUpdate.date}</div>
+                          <div className="menu-copy text-[8px] font-black uppercase leading-[1.3] tracking-[0.12em] text-violet-200/64">Latest Update</div>
+                          <div className="menu-copy mt-1 text-[11px] font-black uppercase leading-[1.35] tracking-[0.045em] text-cyan-50/90">{latestUpdate.title}</div>
+                          <div className="menu-copy mt-2 text-[8px] font-bold uppercase leading-[1.3] tracking-[0.08em] text-sky-100/40">{latestUpdate.date}</div>
                         </button>
                       )}
                     </div>
                   </Panel>
 
                   <Panel bodyClassName="p-0" className="min-h-0 overflow-hidden">
-                    <div className="relative flex h-full min-h-[240px] items-center justify-center overflow-hidden p-3" style={{ background: 'radial-gradient(circle at center, rgba(32,230,255,0.1), transparent 58%)' }}>
+                    <div className="relative flex h-full min-h-[220px] items-center justify-center overflow-hidden p-3" style={{ background: 'radial-gradient(circle at center, rgba(32,230,255,0.1), transparent 58%)' }}>
                       <MenuMusicVisualizer snapshot={musicSnapshot} variant="hero" />
                       <div className="absolute inset-x-10 top-1/2 h-px bg-gradient-to-r from-transparent via-cyan-300/20 to-transparent" />
                       <div className="absolute inset-y-8 left-1/2 w-px bg-gradient-to-b from-transparent via-teal-300/14 to-transparent" />
@@ -829,7 +829,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   </Panel>
 
                   <Panel bodyClassName="p-0" className="shrink-0">
-                    <div className="grid gap-2.5 p-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(250px,320px)_minmax(230px,300px)]">
+                    <div className="grid gap-2.5 p-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(235px,300px)_minmax(220px,285px)]">
                       <div className="min-w-0 rounded-xl border border-cyan-300/10 bg-sky-950/20 p-3">
                         <div className="flex min-w-0 items-center gap-2.5">
                           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/18 bg-cyan-400/[0.08]"><Pencil className="h-4 w-4 text-cyan-300" /></div>
@@ -923,7 +923,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 </form>
               </motion.main>
 
-              <motion.aside variants={slideRight} className="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-2.5 overflow-hidden">
+              <motion.aside variants={slideRight} className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2.5 overflow-hidden">
                 <Panel title="Arena Setup" subtitle="Mode and team grouped">
                   <div className="grid gap-3">
                     <div className="grid grid-cols-2 gap-2">
@@ -969,8 +969,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   </div>
                 </Panel>
 
-                <Panel title="Top Agents" subtitle="Leaderboard uplink" bodyClassName="h-full p-2.5">
-                  <div className="grid h-full content-start gap-1.5">
+                <Panel title="Top Agents" subtitle="Leaderboard uplink" className="min-h-0" bodyClassName="min-h-0 p-2.5">
+                  <div className="menu-scrollbar grid h-full content-start gap-1.5 overflow-y-auto pr-1">
                     {topScores.length === 0 ? (
                       <div className="flex items-center justify-center rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-5 text-center text-[9px] font-black uppercase tracking-[0.12em] text-sky-100/25">No data stream</div>
                     ) : (
@@ -989,8 +989,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               </motion.aside>
             </div>
 
-            <footer className="flex shrink-0 flex-col gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/40 px-3 py-2 backdrop-blur-md sm:flex-row sm:items-center sm:justify-between">
-              <div className="break-words text-[8px] font-black uppercase leading-relaxed tracking-[0.16em] text-sky-100/34">Secure Protocol / Build 4.2.8 Origin</div>
+            <footer className="flex shrink-0 flex-col gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/42 px-3 py-2 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between">
+              <div className="menu-copy text-[8px] font-black uppercase leading-[1.35] tracking-[0.12em] text-sky-100/38">Secure Protocol / Build 4.2.8 Origin</div>
               <div className="flex shrink-0 items-center gap-3">
                 <button type="button" onClick={() => { playClick(); setShowPrivacy(true); }} className="text-[9px] font-black uppercase tracking-[0.12em] text-cyan-300/82 transition hover:text-cyan-200">Privacy</button>
                 <span className="text-cyan-200/18">/</span>
@@ -1010,6 +1010,28 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             .vextor-menu section,
             .vextor-menu div {
               min-width: 0;
+            }
+
+
+            .menu-copy {
+              overflow-wrap: anywhere;
+              word-break: normal;
+              hyphens: auto;
+              text-wrap: pretty;
+            }
+
+            .vextor-menu button,
+            .vextor-menu input {
+              -webkit-tap-highlight-color: transparent;
+            }
+
+            .vextor-menu button {
+              max-width: 100%;
+            }
+
+            .vextor-title {
+              max-width: 100%;
+              overflow: visible;
             }
 
             @keyframes glitchR {
@@ -1055,6 +1077,12 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
             @media (max-width: 1023px) {
               .vextor-menu { overflow-y: auto; }
+              .vextor-menu .grid { min-height: auto; }
+            }
+
+            @media (max-height: 840px) and (min-width: 1024px) {
+              .vextor-menu header { padding-top: 0.55rem; padding-bottom: 0.55rem; }
+              .vextor-menu section header { padding-top: 0.65rem; padding-bottom: 0.65rem; }
             }
 
             @media (max-height: 760px) and (min-width: 1024px) {
@@ -1087,16 +1115,23 @@ const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankCol
   const rafRef = useRef<number>(0);
   const targetAngle = useRef(0);
   const beatSwingRef = useRef(0);
+  const snapshotRef = useRef<BackgroundMusicVisualizerFrame | null>(musicSnapshot);
   const [turretRotation, setTurretRotation] = useState(0);
   const [chassisRotation, setChassisRotation] = useState(0);
   const [pulse, setPulse] = useState(0);
 
   useEffect(() => {
+    snapshotRef.current = musicSnapshot;
+  }, [musicSnapshot]);
+
+  useEffect(() => {
     const tick = (time: number) => {
+      const snapshot = snapshotRef.current;
+      const beatPhase = snapshot?.beatPhase ?? 0;
+      const beatPulse = snapshot?.beatPulse ?? 0;
+      const downbeatPulse = snapshot?.downbeatPulse ?? 0;
+
       setTurretRotation((prev) => {
-        const beatPhase = musicSnapshot?.beatPhase ?? 0;
-        const beatPulse = musicSnapshot?.beatPulse ?? 0;
-        const downbeatPulse = musicSnapshot?.downbeatPulse ?? 0;
         const swingDirection = Math.sin((time / 1000) * Math.PI * 2 * (0.65 + beatPhase * 0.35));
         beatSwingRef.current = swingDirection * (6 + beatPulse * 7 + downbeatPulse * 9);
         const desiredAngle = targetAngle.current + beatSwingRef.current;
@@ -1105,8 +1140,8 @@ const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankCol
         while (delta > 180) delta -= 360;
         return prev + delta * (0.1 + downbeatPulse * 0.05);
       });
-      setChassisRotation(Math.sin(time / 1800) * (4 + (musicSnapshot?.beatPulse ?? 0) * 2) + (musicSnapshot?.downbeatPulse ?? 0) * 2.5);
-      setPulse(Math.min(1, Math.sin(time / 800) * 0.28 + 0.42 + (musicSnapshot?.beatPulse ?? 0) * 0.38 + (musicSnapshot?.downbeatPulse ?? 0) * 0.18));
+      setChassisRotation(Math.sin(time / 1800) * (4 + beatPulse * 2) + downbeatPulse * 2.5);
+      setPulse(Math.min(1, Math.sin(time / 800) * 0.28 + 0.42 + beatPulse * 0.38 + downbeatPulse * 0.18));
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -1125,10 +1160,10 @@ const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankCol
       cancelAnimationFrame(rafRef.current);
       window.removeEventListener('mousemove', onMove);
     };
-  }, [musicSnapshot]);
+  }, []);
 
-  const previewSize = compact ? (isTeamsMode ? 106 : 130) : isTeamsMode ? 132 : 164;
-  const frameSize = compact ? 188 : 234;
+  const previewSize = compact ? (isTeamsMode ? 102 : 124) : isTeamsMode ? 126 : 156;
+  const frameSize = compact ? 176 : 220;
 
   return (
     <div

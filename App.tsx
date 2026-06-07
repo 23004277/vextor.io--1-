@@ -110,6 +110,7 @@ const App: React.FC = () => {
     return window.localStorage.getItem(OWNER_TOOLS_KEY) === '1';
   });
   const [ownerCopyStatus, setOwnerCopyStatus] = useState<string>('');
+  const archiveCopyFallbackRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedReleaseExportRef = useRef<HTMLTextAreaElement | null>(null);
   const fullArchiveExportRef = useRef<HTMLTextAreaElement | null>(null);
   const [showSupport, setShowSupport] = useState(false);
@@ -947,6 +948,12 @@ const App: React.FC = () => {
                                         <span className="text-[10px] font-black text-cyan-300 uppercase tracking-[0.3em]">Release Briefing</span>
                                     </div>
                                     <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => handleCopyUpdateLog(fullArchiveClipboardText, 'Full update log', archiveCopyFallbackRef)}
+                                        className="rounded-full border border-cyan-300/24 bg-cyan-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18"
+                                      >
+                                        Copy Full Log
+                                      </button>
                                       {ownerToolsEnabled && (
                                         <span className="rounded-full border border-amber-300/28 bg-amber-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-amber-200">
                                           Owner Tools Enabled
@@ -1000,80 +1007,88 @@ const App: React.FC = () => {
                                           ))}
                                       </div>
 
-                                      {ownerToolsEnabled && (
-                                        <div className="mt-5 rounded-[1.35rem] border border-amber-300/18 bg-[linear-gradient(135deg,rgba(38,26,8,0.55),rgba(15,11,5,0.72))] px-4 py-4 md:px-5">
-                                            <div className="flex flex-col gap-4">
-                                              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                                <div>
-                                                  <div className="text-[10px] font-black uppercase tracking-[0.28em] text-amber-200/80">Owner Copy Tools</div>
-                                                  <div className="mt-1 text-xs leading-5 text-white/58">Hidden local export tools for manual Discord posting. This replaces the old relay token flow entirely.</div>
-                                                </div>
-                                                <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/70">
-                                                  Ctrl+Shift+O toggles this
-                                                </div>
+                                      <div className="mt-5 rounded-[1.35rem] border border-cyan-300/16 bg-[linear-gradient(180deg,rgba(8,18,30,0.88),rgba(6,12,22,0.76))] px-4 py-4 md:px-5">
+                                          <div className="flex flex-col gap-4">
+                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                              <div>
+                                                <div className="text-[10px] font-black uppercase tracking-[0.26em] text-cyan-200/78">Archive Export</div>
+                                                <div className="mt-1 text-xs leading-5 text-white/58">Full-context copy tools for manual posting, backup, or patch-note sharing. Nothing gets trimmed here.</div>
                                               </div>
-
-                                              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                                                <div className="rounded-xl border border-cyan-300/14 bg-cyan-400/[0.05] px-4 py-3">
-                                                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Selected Release Export</div>
-                                                  <div className="mt-1 text-xs leading-5 text-white/66">Copies the currently selected release with summary, tags, and every section item.</div>
+                                              {ownerToolsEnabled && (
+                                                <div className="rounded-full border border-amber-300/18 bg-amber-400/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
+                                                  Owner mode unlocked
                                                 </div>
-                                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-                                                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Export</div>
-                                                  <div className="mt-1 text-xs leading-5 text-white/66">Copies the full update archive if you want to post or archive everything manually.</div>
-                                                </div>
-                                              </div>
+                                              )}
+                                            </div>
 
-                                              <div className="flex flex-wrap gap-2">
-                                                <button
-                                                  onClick={() => handleCopyUpdateLog(selectedUpdateClipboardText, 'Selected release', selectedReleaseExportRef)}
-                                                  className="rounded-xl border border-amber-300/28 bg-amber-400/14 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-400/20"
-                                                >
-                                                  Copy Selected Release
-                                                </button>
-                                                <button
-                                                  onClick={() => handleCopyUpdateLog(fullArchiveClipboardText, 'Full archive', fullArchiveExportRef)}
-                                                  className="rounded-xl border border-cyan-300/24 bg-cyan-400/12 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18"
-                                                >
-                                                  Copy Full Archive
-                                                </button>
+                                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                                              <div className="rounded-xl border border-cyan-300/14 bg-cyan-400/[0.05] px-4 py-3">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Selected Release Export</div>
+                                                <div className="mt-1 text-xs leading-5 text-white/66">Copies the active release with its summary, tags, and every section note intact.</div>
                                               </div>
-
-                                              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                                                <label className="flex flex-col gap-1">
-                                                  <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Selected Release Preview</span>
-                                                  <textarea
-                                                    ref={selectedReleaseExportRef}
-                                                    readOnly
-                                                    value={selectedUpdateClipboardText}
-                                                    className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
-                                                  />
-                                                </label>
-                                                <label className="flex flex-col gap-1">
-                                                  <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Preview</span>
-                                                  <textarea
-                                                    ref={fullArchiveExportRef}
-                                                    readOnly
-                                                    value={fullArchiveClipboardText}
-                                                    className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
-                                                  />
-                                                </label>
-                                              </div>
-
-                                              <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Copy Status</div>
-                                                <div className="mt-1 text-xs leading-5 text-white/72">
-                                                  {ownerCopyStatus || 'Ready. Copy the selected release or the entire archive, then paste it into Discord manually.'}
-                                                </div>
+                                              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Export</div>
+                                                <div className="mt-1 text-xs leading-5 text-white/66">Copies the entire release archive with every entry preserved, ready for paste anywhere you need it.</div>
                                               </div>
                                             </div>
-                                        </div>
-                                      )}
+
+                                            <div className="flex flex-wrap gap-2">
+                                              <button
+                                                onClick={() => handleCopyUpdateLog(selectedUpdateClipboardText, 'Selected release', selectedReleaseExportRef)}
+                                                className="rounded-xl border border-amber-300/28 bg-amber-400/14 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-400/20"
+                                              >
+                                                Copy Selected Release
+                                              </button>
+                                              <button
+                                                onClick={() => handleCopyUpdateLog(fullArchiveClipboardText, 'Full archive', fullArchiveExportRef)}
+                                                className="rounded-xl border border-cyan-300/24 bg-cyan-400/12 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18"
+                                              >
+                                                Copy Full Archive
+                                              </button>
+                                            </div>
+
+                                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                                              <label className="flex flex-col gap-1">
+                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Selected Release Preview</span>
+                                                <textarea
+                                                  ref={selectedReleaseExportRef}
+                                                  readOnly
+                                                  value={selectedUpdateClipboardText}
+                                                  className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
+                                                />
+                                              </label>
+                                              <label className="flex flex-col gap-1">
+                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Preview</span>
+                                                <textarea
+                                                  ref={fullArchiveExportRef}
+                                                  readOnly
+                                                  value={fullArchiveClipboardText}
+                                                  className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
+                                                />
+                                              </label>
+                                            </div>
+
+                                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Copy Status</div>
+                                              <div className="mt-1 text-xs leading-5 text-white/72">
+                                                {ownerCopyStatus || 'Ready. Copy the selected release or the full archive and paste it wherever you need the complete update context.'}
+                                              </div>
+                                            </div>
+                                          </div>
+                                      </div>
                                   </div>
                                 )}
                             </div>
 
                             <div className="flex-1 overflow-y-auto p-5 md:p-8 custom-scrollbar">
+                                <textarea
+                                  ref={archiveCopyFallbackRef}
+                                  readOnly
+                                  value={fullArchiveClipboardText}
+                                  aria-hidden="true"
+                                  tabIndex={-1}
+                                  className="pointer-events-none absolute left-[-9999px] top-0 h-px w-px opacity-0"
+                                />
                                 {selectedUpdate ? (
                                   <div className="space-y-4">
                                       {(selectedUpdate.sections ?? []).map((section, index) => (
