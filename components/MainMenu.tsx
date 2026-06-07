@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence, Variants } from 'motion/react';
-import { GameMode, HighScoreEntry, TankClass, User, Team } from '../types';
+import { AnimatePresence, motion, Variants } from 'motion/react';
+import { BookOpen, ChevronRight, Eye, Pencil, Radar, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
+
 import { BackgroundMusicVisualizerFrame } from '../Background Music';
-import { TankPreview } from './TankPreview';
-import { MenuMusicVisualizer } from './MenuMusicVisualizer';
 import { COLORS } from '../constants';
 import { BackendService } from '../services/BackendService';
-import { BookOpen, ChevronRight, Eye, Pencil, Radar, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
+import { GameMode, HighScoreEntry, TankClass, Team, User } from '../types';
+import { MenuMusicVisualizer } from './MenuMusicVisualizer';
+import { TankPreview } from './TankPreview';
 
 interface MainMenuProps {
   isPlaying: boolean;
@@ -35,106 +36,466 @@ interface MainMenuProps {
   setShowUpdateHistory: (show: boolean) => void;
   setShowAchievements: (show: boolean) => void;
   setShowSupport: (show: boolean) => void;
-  updateLog: { id: string; title: string; date: string; content: string; }[];
+  updateLog: { id: string; title: string; date: string; content: string }[];
   parallax: { x: number; y: number };
   activeColor: string;
   teamCounts: Record<Team, number>;
   canJoinTeam: (team: Team) => boolean;
 }
 
-const modeMeta: Record<GameMode, { title: string; code: string; desc: string; color: string; border: string; glow: string }> = {
+type ModeMeta = {
+  title: string;
+  code: string;
+  desc: string;
+  color: string;
+  border: string;
+  glow: string;
+  fill: string;
+};
+
+type TeamMeta = {
+  label: string;
+  short: string;
+  color: string;
+  bg: string;
+  border: string;
+};
+
+const UI = {
+  ink: '#dffbff',
+  soft: '#9bd6e2',
+  dim: 'rgba(155, 214, 226, 0.42)',
+  faint: 'rgba(155, 214, 226, 0.24)',
+  cyan: '#20e6ff',
+  teal: '#2cffc7',
+  violet: '#a98cff',
+  amber: '#ffd15c',
+  rose: '#ff6b8a',
+  panel: 'linear-gradient(180deg, rgba(4, 18, 34, 0.90), rgba(3, 8, 22, 0.96))',
+  panelDeep: 'linear-gradient(180deg, rgba(5, 28, 48, 0.72), rgba(2, 8, 20, 0.96))',
+  panelTint: 'linear-gradient(135deg, rgba(6, 78, 98, 0.25), rgba(15, 23, 42, 0.76))',
+  border: 'rgba(32, 230, 255, 0.16)',
+  borderStrong: 'rgba(44, 255, 199, 0.34)',
+};
+
+const MODE_META: Record<GameMode, ModeMeta> = {
   [GameMode.FFA]: {
     title: 'Free For All',
     code: 'FFA',
-    desc: 'Pure survival. No teammates. No excuses.',
-    color: 'rgba(0,210,255,0.9)',
-    border: 'rgba(0,210,255,0.35)',
-    glow: 'rgba(0,180,255,0.25)',
+    desc: 'Solo survival. No teammates. No excuses.',
+    color: UI.cyan,
+    border: 'rgba(32, 230, 255, 0.44)',
+    glow: 'rgba(32, 230, 255, 0.22)',
+    fill: 'rgba(8, 145, 178, 0.15)',
   },
   [GameMode.TEAMS]: {
     title: 'Team Warfare',
     code: 'TWF',
-    desc: 'Pick a side and push with the squad.',
-    color: 'rgba(80,160,255,0.9)',
-    border: 'rgba(80,140,255,0.35)',
-    glow: 'rgba(60,120,255,0.25)',
+    desc: 'Pick a side and push the arena with your squad.',
+    color: '#6aa9ff',
+    border: 'rgba(96, 165, 250, 0.44)',
+    glow: 'rgba(96, 165, 250, 0.22)',
+    fill: 'rgba(37, 99, 235, 0.15)',
   },
   [GameMode.DOMINION]: {
     title: 'Dominion',
     code: 'DOM',
-    desc: 'Capture dominion tanks, hold the field, and score for your empire.',
-    color: 'rgba(250,204,21,0.92)',
-    border: 'rgba(250,204,21,0.38)',
-    glow: 'rgba(234,179,8,0.22)',
+    desc: 'Capture dominion tanks, hold zones, and drain enemy control.',
+    color: UI.amber,
+    border: 'rgba(255, 209, 92, 0.44)',
+    glow: 'rgba(255, 209, 92, 0.22)',
+    fill: 'rgba(180, 83, 9, 0.16)',
   },
   [GameMode.SANDBOX]: {
     title: 'Sandbox',
     code: 'SBX',
-    desc: 'Experiment freely. No rules.',
-    color: 'rgba(200,100,255,0.9)',
-    border: 'rgba(180,80,255,0.35)',
-    glow: 'rgba(160,60,255,0.25)',
+    desc: 'Test builds freely with no pressure and no clean-up crew.',
+    color: UI.violet,
+    border: 'rgba(169, 140, 255, 0.46)',
+    glow: 'rgba(169, 140, 255, 0.23)',
+    fill: 'rgba(126, 34, 206, 0.16)',
   },
 };
 
-const TEAM_META: Record<Team, { label: string; color: string; bg: string; border: string }> = {
-  [Team.NONE]: { label: 'Neutral', color: '#ffffff', bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.12)' },
-  [Team.BLUE]: { label: 'Blue Squad', color: COLORS.player, bg: 'rgba(0,40,120,0.4)', border: 'rgba(80,140,255,0.4)' },
-  [Team.RED]: { label: 'Red Squad', color: COLORS.enemy, bg: 'rgba(120,0,40,0.4)', border: 'rgba(255,80,80,0.4)' },
-  [Team.GREEN]: { label: 'Green Wing', color: COLORS.allyGreen, bg: 'rgba(0,90,50,0.38)', border: 'rgba(52,211,153,0.42)' },
-  [Team.PURPLE]: { label: 'Purple Wing', color: COLORS.allyPurple, bg: 'rgba(65,25,120,0.4)', border: 'rgba(167,139,250,0.42)' },
+const TEAM_META: Record<Team, TeamMeta> = {
+  [Team.NONE]: {
+    label: 'Neutral',
+    short: 'NTR',
+    color: UI.cyan,
+    bg: 'rgba(8, 145, 178, 0.12)',
+    border: 'rgba(103, 232, 249, 0.20)',
+  },
+  [Team.BLUE]: {
+    label: 'Blue Squad',
+    short: 'BLU',
+    color: COLORS.player,
+    bg: 'rgba(37, 99, 235, 0.20)',
+    border: 'rgba(96, 165, 250, 0.42)',
+  },
+  [Team.RED]: {
+    label: 'Red Squad',
+    short: 'RED',
+    color: COLORS.enemy,
+    bg: 'rgba(190, 18, 60, 0.20)',
+    border: 'rgba(251, 113, 133, 0.44)',
+  },
+  [Team.GREEN]: {
+    label: 'Green Wing',
+    short: 'GRN',
+    color: COLORS.allyGreen,
+    bg: 'rgba(5, 150, 105, 0.18)',
+    border: 'rgba(52, 211, 153, 0.42)',
+  },
+  [Team.PURPLE]: {
+    label: 'Purple Wing',
+    short: 'PUR',
+    color: COLORS.allyPurple,
+    bg: 'rgba(109, 40, 217, 0.20)',
+    border: 'rgba(167, 139, 250, 0.42)',
+  },
 };
 
-const useCountUp = (target: number, duration = 1200) => {
-  const [val, setVal] = useState(0);
+const MODE_CHOICES = [GameMode.FFA, GameMode.TEAMS, GameMode.DOMINION, GameMode.SANDBOX] as const;
+const SPRING_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
+
+const safeNumber = (value: unknown, fallback = 0) => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+
+const useCountUp = (target: number, duration = 850) => {
+  const cleanTarget = Math.max(0, safeNumber(target));
+  const [value, setValue] = useState(cleanTarget);
+
   useEffect(() => {
-    let start = 0;
-    const step = target / (duration / 16);
-    const id = setInterval(() => {
-      start += step;
-      if (start >= target) {
-        setVal(target);
-        clearInterval(id);
-      } else {
-        setVal(Math.floor(start));
-      }
-    }, 16);
-    return () => clearInterval(id);
-  }, [target, duration]);
-  return val;
+    if (cleanTarget <= 0) {
+      setValue(0);
+      return;
+    }
+
+    let raf = 0;
+    const startedAt = performance.now();
+
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setValue(Math.floor(cleanTarget * eased));
+      if (progress < 1) raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [cleanTarget, duration]);
+
+  return value;
 };
 
-const StatPill: React.FC<{ label: string; value: number | string; accent?: string }> = ({ label, value, accent = '#00d2ff' }) => (
-  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 18, fontWeight: 900, color: accent, lineHeight: 1, textShadow: `0 0 12px ${accent}` }}>
-      {typeof value === 'number' ? value.toLocaleString() : value}
-    </span>
-    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase' }}>
-      {label}
-    </span>
-  </div>
-);
+const useMediaQuery = (query: string) => {
+  const [matches, setMatches] = useState(false);
 
-const Corner: React.FC<{ pos: 'tl' | 'tr' | 'bl' | 'br'; color?: string; size?: number }> = ({ pos, color = 'rgba(0,210,255,0.25)', size = 16 }) => {
-  const styles: React.CSSProperties = {
-    position: 'absolute',
-    width: size,
-    height: size,
-    pointerEvents: 'none',
-    ...(pos === 'tl' ? { top: 0, left: 0, borderTop: `1.5px solid ${color}`, borderLeft: `1.5px solid ${color}` } : {}),
-    ...(pos === 'tr' ? { top: 0, right: 0, borderTop: `1.5px solid ${color}`, borderRight: `1.5px solid ${color}` } : {}),
-    ...(pos === 'bl' ? { bottom: 0, left: 0, borderBottom: `1.5px solid ${color}`, borderLeft: `1.5px solid ${color}` } : {}),
-    ...(pos === 'br' ? { bottom: 0, right: 0, borderBottom: `1.5px solid ${color}`, borderRight: `1.5px solid ${color}` } : {}),
-  };
-  return <div style={styles} />;
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, [query]);
+
+  return matches;
 };
 
 const Scanlines: React.FC = () => (
-  <div className="absolute inset-0 pointer-events-none z-[1]" style={{
-    backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 4px)',
-    backgroundSize: '100% 4px',
-  }} />
+  <div
+    className="pointer-events-none absolute inset-0 z-[1]"
+    style={{
+      backgroundImage:
+        'repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.12) 3px, rgba(0,0,0,0.12) 4px)',
+      backgroundSize: '100% 4px',
+    }}
+  />
 );
+
+const Panel: React.FC<{
+  title?: string;
+  subtitle?: string;
+  className?: string;
+  bodyClassName?: string;
+  children: React.ReactNode;
+}> = ({ title, subtitle, className = '', bodyClassName = '', children }) => (
+  <section
+    className={`relative min-w-0 rounded-[1.25rem] border shadow-[0_16px_46px_rgba(0,0,0,0.34)] backdrop-blur-md ${className}`}
+    style={{ background: UI.panel, borderColor: UI.border }}
+  >
+    {(title || subtitle) && (
+      <header className="flex min-w-0 items-start justify-between gap-3 border-b border-cyan-300/10 px-4 py-3">
+        <div className="min-w-0">
+          {title && <div className="break-words text-[9px] font-black uppercase leading-relaxed tracking-[0.24em] text-cyan-100/84">{title}</div>}
+          {subtitle && <div className="mt-0.5 break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.12em] text-sky-100/34">{subtitle}</div>}
+        </div>
+        <div className="mt-1 h-1.5 w-1.5 shrink-0 rotate-45 bg-cyan-300/75 shadow-[0_0_14px_rgba(32,230,255,0.75)]" />
+      </header>
+    )}
+    <div className={`${title || subtitle ? 'p-4' : ''} ${bodyClassName}`}>{children}</div>
+  </section>
+);
+
+const MiniStat: React.FC<{ label: string; value: number | string; accent?: string }> = ({ label, value, accent = UI.cyan }) => (
+  <div className="min-w-0 rounded-xl border border-cyan-300/10 bg-cyan-950/20 px-3 py-2.5 text-center">
+    <div
+      className="break-words font-black leading-none"
+      style={{
+        fontFamily: '"Courier New", monospace',
+        fontSize: 15,
+        color: accent,
+        textShadow: `0 0 12px ${accent}`,
+      }}
+    >
+      {typeof value === 'number' ? value.toLocaleString() : value}
+    </div>
+    <div className="mt-1.5 break-words text-[7px] font-black uppercase leading-relaxed tracking-[0.16em] text-sky-100/36">{label}</div>
+  </div>
+);
+
+const NavButton: React.FC<{
+  label: string;
+  sub: string;
+  accent: string;
+  icon: React.ElementType;
+  onClick: () => void;
+  onHover: () => void;
+  onLeave: () => void;
+}> = ({ label, sub, accent, icon: Icon, onClick, onHover, onLeave }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    onMouseEnter={onHover}
+    onMouseLeave={onLeave}
+    className="group flex min-w-0 items-center gap-3 rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-cyan-300/30 hover:bg-cyan-400/[0.07]"
+  >
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/10 bg-slate-950/55" style={{ color: accent }}>
+      <Icon className="h-4 w-4" />
+    </div>
+    <div className="min-w-0 flex-1">
+      <div className="break-words text-[9px] font-black uppercase leading-relaxed tracking-[0.16em] text-cyan-50/86">{label}</div>
+      <div className="mt-0.5 break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.09em] text-sky-100/32">{sub}</div>
+    </div>
+    <ChevronRight className="h-4 w-4 shrink-0 text-cyan-200/28 transition group-hover:translate-x-0.5 group-hover:text-cyan-200/76" />
+  </button>
+);
+
+const ModeButton: React.FC<{
+  mode: GameMode;
+  active: boolean;
+  onSelect: () => void;
+  onHover: () => void;
+  onLeave: () => void;
+}> = ({ mode, active, onSelect, onHover, onLeave }) => {
+  const meta = MODE_META[mode];
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      onMouseEnter={onHover}
+      onMouseLeave={onLeave}
+      className="relative rounded-xl p-3 text-left transition hover:-translate-y-0.5"
+      style={{
+        minHeight: 92,
+        background: active ? meta.fill : 'rgba(2, 10, 25, 0.70)',
+        border: `1px solid ${active ? meta.border : 'rgba(32, 230, 255, 0.10)'}`,
+        boxShadow: active ? `0 0 22px ${meta.glow}, inset 0 0 26px rgba(255,255,255,0.025)` : 'none',
+      }}
+    >
+      <div
+        className="pointer-events-none absolute inset-0 rounded-xl opacity-70"
+        style={{ background: active ? `radial-gradient(circle at 18% 0%, ${meta.glow}, transparent 56%)` : 'transparent' }}
+      />
+      <div className="relative flex items-center justify-between gap-3">
+        <span className="break-words text-[8px] font-black uppercase tracking-[0.18em]" style={{ color: active ? meta.color : UI.dim }}>
+          {meta.code}
+        </span>
+        <span className="h-2 w-2 shrink-0 rotate-45" style={{ background: active ? meta.color : 'rgba(155,214,226,0.22)' }} />
+      </div>
+      <div className="relative mt-2 break-words text-[11px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/90">{meta.title}</div>
+      <div className="relative mt-1 break-words text-[8.5px] font-bold uppercase leading-relaxed tracking-[0.06em] text-sky-100/38">{meta.desc}</div>
+    </button>
+  );
+};
+
+const TeamButton: React.FC<{
+  team: Team;
+  active: boolean;
+  count: number;
+  canJoin: boolean;
+  onSelect: () => void;
+}> = ({ team, active, count, canJoin, onSelect }) => {
+  const meta = TEAM_META[team];
+
+  return (
+    <button
+      type="button"
+      disabled={!canJoin}
+      onClick={onSelect}
+      className="rounded-xl px-3 py-2.5 text-left transition hover:-translate-y-0.5 disabled:hover:translate-y-0"
+      style={{
+        background: active ? meta.bg : 'rgba(2, 10, 25, 0.70)',
+        border: `1px solid ${active ? meta.border : 'rgba(32, 230, 255, 0.10)'}`,
+        boxShadow: active ? `0 0 18px ${meta.border}` : 'none',
+        opacity: !canJoin ? 0.45 : 1,
+        cursor: !canJoin ? 'not-allowed' : 'pointer',
+      }}
+    >
+      <div className="flex min-w-0 items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 shrink-0 rotate-45" style={{ background: active ? meta.color : 'rgba(155,214,226,0.22)' }} />
+            <span className="break-words text-[8px] font-black uppercase tracking-[0.15em]" style={{ color: active ? meta.color : UI.dim }}>
+              {meta.short}
+            </span>
+          </div>
+          <div className="mt-1.5 break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/86">{meta.label}</div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-[7px] font-black uppercase tracking-[0.12em] text-sky-100/28">Units</div>
+          <div className="mt-0.5 text-xs font-black text-cyan-50/82">{Math.max(0, count)}</div>
+        </div>
+      </div>
+      {!canJoin && <div className="mt-2 rounded-md border border-rose-300/16 bg-rose-400/8 px-2 py-1 text-center text-[7px] font-black uppercase tracking-[0.14em] text-rose-300/82">Full</div>}
+    </button>
+  );
+};
+
+const LeaderboardRow: React.FC<{ entry: HighScoreEntry; index: number }> = ({ entry, index }) => {
+  const colors = [UI.amber, UI.cyan, '#fb923c', '#94a3b8', '#64748b'];
+  const color = colors[index] ?? '#64748b';
+  const rankLabel = index === 0 ? 'ACE' : `0${index + 1}`;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 12 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: 0.08 + index * 0.04, duration: 0.32, ease: SPRING_EASE }}
+      className="flex min-w-0 items-center gap-3 rounded-xl border border-cyan-300/10 bg-[linear-gradient(135deg,rgba(8,23,43,0.9),rgba(5,18,33,0.74))] px-3 py-2.5"
+    >
+      <div className="flex w-11 shrink-0 flex-col items-center justify-center rounded-lg border border-cyan-300/10 bg-slate-950/55 px-2 py-2 text-center">
+        <div className="text-[7px] font-black uppercase tracking-[0.14em] text-sky-100/28">Rank</div>
+        <div className="mt-1 text-[9px] font-black uppercase tracking-[0.12em]" style={{ color }}>{rankLabel}</div>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/88">{entry.name}</div>
+        <div className="mt-0.5 break-words text-[7px] font-bold uppercase tracking-[0.10em] text-sky-100/32">Arena score uplink</div>
+      </div>
+      <div className="shrink-0 rounded-full border border-cyan-300/10 bg-cyan-950/30 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.08em]" style={{ color }}>
+        {safeNumber(entry.score).toLocaleString()}
+      </div>
+    </motion.div>
+  );
+};
+
+const ControlRow: React.FC<{ label: string; keyLabel: string; desc: string }> = ({ label, keyLabel, desc }) => (
+  <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-2.5">
+    <div className="min-w-0">
+      <div className="break-words text-[8.5px] font-black uppercase leading-relaxed tracking-[0.12em] text-cyan-50/76">{label}</div>
+      <div className="mt-0.5 break-words text-[7.5px] font-bold uppercase leading-relaxed tracking-[0.07em] text-sky-100/30">{desc}</div>
+    </div>
+    <kbd className="min-w-[48px] shrink-0 rounded-md border border-teal-300/20 bg-teal-400/10 px-2 py-1.5 text-center text-[8px] font-black uppercase tracking-[0.08em] text-teal-200">
+      {keyLabel}
+    </kbd>
+  </div>
+);
+
+const PolicyModal: React.FC<{ open: boolean; type: 'privacy' | 'terms'; onClose: () => void }> = ({ open, type, onClose }) => {
+  const privacy = type === 'privacy';
+  const accent = privacy ? UI.cyan : UI.rose;
+  const title = privacy ? 'Privacy Policy' : 'Terms Of Service';
+  const tag = privacy ? 'Effective: May 29, 2026' : 'Fair Play Required';
+
+  const sections = privacy
+    ? [
+        {
+          title: 'What We Collect',
+          items: ['Account/profile identifiers for login.', 'Gameplay progress, match stats, and leaderboard records.', 'Security telemetry for exploit and abuse detection.'],
+        },
+        {
+          title: 'How Data Is Used',
+          items: ['Operating progression and matchmaking.', 'Keeping systems secure and fair.', 'Supporting account requests and moderation.'],
+        },
+        {
+          title: 'Important Notes',
+          items: ['We do not sell personal information.', 'Third-party auth/storage providers may process data.', 'Policy updates may happen for security or feature changes.'],
+        },
+      ]
+    : [
+        {
+          title: 'Prohibited Behavior',
+          items: ['Cheats, bots, macros, packet manipulation, or service disruption.', 'Harassment, impersonation, hate content, or abusive names.', 'Bypassing or reverse-engineering live systems.'],
+        },
+        {
+          title: 'Enforcement',
+          items: ['Violations can cause warnings, suspensions, resets, or bans.', 'Leaderboard actions may be rolled back.', 'Accounts are responsible for their own activity.'],
+        },
+        {
+          title: 'Service Changes',
+          items: ['Balance and progression may change.', 'Continuing to play means accepting these rules.'],
+        },
+      ];
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 z-[100] flex items-center justify-center overflow-y-auto p-4"
+          style={{ background: 'rgba(2, 6, 23, 0.78)' }}
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 14, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.98 }}
+            transition={{ duration: 0.2 }}
+            className="menu-scrollbar w-full max-w-2xl overflow-y-auto rounded-2xl border p-5 shadow-[0_28px_80px_rgba(0,0,0,0.62)]"
+            style={{ maxHeight: 'min(86vh, 720px)', background: UI.panel, borderColor: privacy ? 'rgba(32,230,255,0.28)' : 'rgba(255,107,138,0.28)' }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-col gap-2 border-b border-cyan-300/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="break-words text-xl font-black uppercase tracking-[0.08em]" style={{ color: accent }}>{title}</h3>
+              <span className="break-words text-[9px] font-black uppercase tracking-[0.12em]" style={{ color: UI.dim }}>{tag}</span>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              {sections.map((section, index) => (
+                <div key={section.title} className="rounded-xl border p-3" style={{ borderColor: index === 0 ? `${accent}55` : UI.border, background: index === 0 ? `${accent}14` : 'rgba(15, 23, 42, 0.62)' }}>
+                  <p className="mb-2 break-words text-[10px] font-black uppercase tracking-[0.12em]" style={{ color: accent }}>{section.title}</p>
+                  <ul className="list-disc space-y-1 pl-5 text-[11px] leading-relaxed text-cyan-50/76">
+                    {section.items.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span className="break-words text-[9px] font-bold uppercase tracking-[0.09em] text-sky-100/42">{privacy ? 'Questions: contact in-game support.' : 'Keep matches fair and clean.'}</span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border px-4 py-2 text-[10px] font-black uppercase tracking-[0.12em] transition hover:-translate-y-0.5"
+                style={{ color: accent, borderColor: `${accent}55`, background: `${accent}14` }}
+              >
+                {privacy ? 'Got It' : 'Understood'}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
 
 export const MainMenu: React.FC<MainMenuProps> = ({
   isPlaying,
@@ -144,9 +505,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   setUser,
   highScores,
   gameMode,
-  setSelectedTeam,
-  selectedTeam,
   setGameMode,
+  selectedTeam,
+  setSelectedTeam,
   handleStartGame,
   handleSpectate,
   spectateAvailable,
@@ -163,45 +524,102 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   setShowUpdateHistory,
   setShowAchievements,
   setShowSupport,
+  updateLog,
   parallax,
   activeColor,
+  teamCounts,
   canJoinTeam,
 }) => {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTos, setShowTos] = useState(false);
+  const compactHeight = useMediaQuery('(max-height: 820px)');
+
   const stats = user?.stats ?? { maxLevel: 1, totalKills: 0, totalDeaths: 0, totalScore: 0 };
-  const tankColor = (gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION)
-    ? (TEAM_META[selectedTeam]?.color ?? COLORS.player)
-    : activeColor;
+  const totalKills = safeNumber(stats.totalKills);
+  const totalDeaths = safeNumber(stats.totalDeaths);
+  const totalScore = safeNumber(stats.totalScore);
+  const maxLevel = Math.max(1, safeNumber(stats.maxLevel, 1));
+  const kd = (totalKills / Math.max(1, totalDeaths)).toFixed(2);
+
   const isTeamsMode = gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION;
-  const kd = (stats.totalKills / (stats.totalDeaths || 1)).toFixed(2);
+  const allowedTeams = useMemo<Team[]>(
+    () => (gameMode === GameMode.DOMINION ? [Team.BLUE, Team.RED, Team.GREEN, Team.PURPLE] : [Team.BLUE, Team.RED]),
+    [gameMode],
+  );
 
-  const countKills = useCountUp(stats.totalKills, 1400);
-  const countScore = useCountUp(stats.totalScore, 1600);
+  useEffect(() => {
+    if (!isTeamsMode) {
+      if (selectedTeam !== Team.NONE) setSelectedTeam(Team.NONE);
+      return;
+    }
 
-  const topScores = useMemo(() => [...highScores].sort((a, b) => b.score - a.score).slice(0, 5), [highScores]);
+    if (!allowedTeams.includes(selectedTeam)) {
+      const firstJoinable = allowedTeams.find((team) => canJoinTeam(team)) ?? allowedTeams[0];
+      setSelectedTeam(firstJoinable);
+    }
+  }, [allowedTeams, canJoinTeam, isTeamsMode, selectedTeam, setSelectedTeam]);
 
-  const modeChoices = [GameMode.FFA, GameMode.TEAMS, GameMode.DOMINION, GameMode.SANDBOX] as const;
-  const teamChoices = gameMode === GameMode.DOMINION
-    ? [Team.BLUE, Team.RED, Team.GREEN, Team.PURPLE]
-    : [Team.BLUE, Team.RED];
+  const safeTeam = isTeamsMode && TEAM_META[selectedTeam] ? selectedTeam : Team.NONE;
+  const teamMeta = TEAM_META[safeTeam];
+  const modeMeta = MODE_META[gameMode];
+  const tankColor = isTeamsMode ? teamMeta.color : activeColor;
+  const latestUpdate = useMemo(() => updateLog[0], [updateLog]);
+  const topScores = useMemo(() => [...highScores].sort((a, b) => safeNumber(b.score) - safeNumber(a.score)).slice(0, 5), [highScores]);
+  const countKills = useCountUp(totalKills, 850);
+  const countScore = useCountUp(totalScore, 1000);
+  const deploymentReady = !isTeamsMode || (safeTeam !== Team.NONE && (allowedTeams.includes(safeTeam) || canJoinTeam(safeTeam)));
+
+  const navItems = useMemo(
+    () => [
+      { label: 'Hangar', sub: 'Loadout and cosmetics', icon: Warehouse, action: () => setShowShop(true), accent: UI.cyan },
+      { label: 'Almanac', sub: 'Tank intel and archive', icon: BookOpen, action: () => setShowAlmanac(true), accent: '#34d399' },
+      { label: 'Records', sub: 'Achievements and medals', icon: Trophy, action: () => setShowAchievements(true), accent: UI.amber },
+      { label: 'Updates', sub: 'Patch notes and changelog', icon: ScrollText, action: () => setShowUpdateHistory(true), accent: UI.violet },
+      { label: 'Support', sub: 'Back the command grid', icon: ChevronRight, action: () => setShowSupport(true), accent: UI.rose },
+      { label: 'Settings', sub: 'Controls and display', icon: SlidersHorizontal, action: () => setShowSettings(true), accent: UI.teal },
+    ],
+    [setShowAchievements, setShowAlmanac, setShowShop, setShowSupport, setShowSettings, setShowUpdateHistory],
+  );
 
   const containerVar: Variants = {
     hidden: { opacity: 0 },
-    visible: { opacity: 1, transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
-    exit: { opacity: 0, transition: { duration: 0.25 } },
+    visible: { opacity: 1, transition: { staggerChildren: 0.04, delayChildren: 0.03 } },
+    exit: { opacity: 0, transition: { duration: 0.2 } },
   };
+
   const panelVar: Variants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] } },
+    hidden: { opacity: 0, y: 14 },
+    visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: SPRING_EASE } },
   };
+
   const slideLeft: Variants = {
-    hidden: { opacity: 0, x: -30 },
-    visible: { opacity: 1, x: 0, transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] } },
+    hidden: { opacity: 0, x: -18 },
+    visible: { opacity: 1, x: 0, transition: { duration: 0.5, ease: SPRING_EASE } },
   };
+
   const slideRight: Variants = {
-    hidden: { opacity: 0, x: 30 },
-    visible: { opacity: 1, x: 0, transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] } },
+    hidden: { opacity: 0, x: 18 },
+    visible: { opacity: 1, x: 0, transition: { duration: 0.5, ease: SPRING_EASE } },
+  };
+
+  const submitHandler = (event: React.FormEvent) => {
+    if (!deploymentReady) {
+      event.preventDefault();
+      playHover();
+      return;
+    }
+
+    handleStartGame(event);
+  };
+
+  const handleLogout = async () => {
+    playClick();
+    try {
+      await BackendService.logout();
+      setUser(null);
+    } catch (error) {
+      console.error('[MainMenu] Logout failed:', error);
+    }
   };
 
   return (
@@ -212,809 +630,444 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           initial="hidden"
           animate="visible"
           exit="exit"
-          className="absolute inset-0 z-50 flex overflow-hidden select-none"
-          style={{ background: 'linear-gradient(160deg, #020810 0%, #010508 50%, #020c14 100%)' }}
+          className="vextor-menu absolute inset-0 z-50 h-[100dvh] max-h-[100dvh] overflow-hidden select-none"
+          style={{
+            color: UI.ink,
+            background:
+              'radial-gradient(circle at 50% 0%, rgba(14, 116, 144, 0.22), transparent 38%), radial-gradient(circle at 100% 10%, rgba(124, 58, 237, 0.14), transparent 34%), linear-gradient(160deg, #020617 0%, #03111f 48%, #020617 100%)',
+          }}
         >
           <Scanlines />
 
-          <div className="absolute inset-0 pointer-events-none z-0">
-            <div className="absolute inset-0 opacity-[0.025]" style={{
-              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50V18L28 2l28 16v32L28 66zm0 34L0 84V52l28-16 28 16v32L28 100z' fill='none' stroke='%2300d2ff' stroke-width='0.5'/%3E%3C/svg%3E")`,
-              backgroundSize: '56px 100px',
-              transform: `translate3d(${parallax.x * 0.012}px, ${parallax.y * 0.012}px, 0)`,
-            }} />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[600px] rounded-full opacity-40"
-              style={{ background: 'radial-gradient(ellipse, rgba(0,80,140,0.18) 0%, transparent 70%)' }} />
-            <div className="absolute top-0 right-0 w-[600px] h-[600px] rounded-full"
-              style={{ background: 'radial-gradient(circle, rgba(0,60,120,0.12) 0%, transparent 70%)', transform: `translate3d(${parallax.x * 0.02}px, ${parallax.y * 0.02}px,0)` }} />
-            <div className="absolute bottom-0 left-0 w-[500px] h-[500px] rounded-full"
-              style={{ background: 'radial-gradient(circle, rgba(0,40,100,0.1) 0%, transparent 70%)' }} />
-            <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 50%, transparent 40%, rgba(0,0,0,0.8) 100%)' }} />
-            <div className="absolute inset-x-0 top-0 h-px" style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(0,210,255,0.15) 30%, rgba(0,210,255,0.15) 70%, transparent 100%)' }} />
-            <div className="absolute inset-x-0 bottom-0 h-px" style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(0,210,255,0.1) 30%, rgba(0,210,255,0.1) 70%, transparent 100%)' }} />
+          <div className="pointer-events-none absolute inset-0 z-0">
+            <div
+              className="absolute inset-0 opacity-[0.035]"
+              style={{
+                backgroundImage:
+                  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50V18L28 2l28 16v32L28 66zm0 34L0 84V52l28-16 28 16v32L28 100z' fill='none' stroke='%2320e6ff' stroke-width='0.5'/%3E%3C/svg%3E\")",
+                backgroundSize: '56px 100px',
+                transform: `translate3d(${parallax.x * 0.01}px, ${parallax.y * 0.01}px, 0)`,
+              }}
+            />
+            <div className="absolute left-1/2 top-1/2 h-[560px] w-[900px] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-55" style={{ background: 'radial-gradient(ellipse, rgba(8, 145, 178, 0.18), transparent 68%)' }} />
+            <div className="absolute -bottom-24 -left-24 h-[520px] w-[520px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(20, 184, 166, 0.12), transparent 70%)' }} />
+            <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 50%, transparent 34%, rgba(2,6,23,0.88) 100%)' }} />
           </div>
 
-          <div className="relative z-10 flex w-full h-full">
-            <motion.aside
-              variants={slideLeft}
-              className="flex flex-col justify-between py-8 px-6 xl:px-8 w-[280px] xl:w-[320px] shrink-0"
-            >
-              <div className="flex flex-col gap-5">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" style={{ boxShadow: '0 0 8px #34d399' }} />
-                  <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.3em', color: 'rgba(52,211,153,0.7)', textTransform: 'uppercase' }}>
-                    SYS_ONLINE
-                  </span>
-                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(52,211,153,0.2), transparent)' }} />
-                </div>
-
-                <div className="relative p-4 rounded-xl" style={{
-                  background: 'rgba(0,20,40,0.6)',
-                  border: '1px solid rgba(0,180,255,0.12)',
-                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
-                }}>
-                  <Corner pos="tl" />
-                  <Corner pos="br" color="rgba(0,210,255,0.1)" size={10} />
-
-                  <div style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.35em', color: 'rgba(0,210,255,0.45)', textTransform: 'uppercase', marginBottom: 8 }}>
-                    PILOT_STATUS
-                  </div>
-                  <div style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, fontWeight: 900, color: '#fff', letterSpacing: '0.05em', textTransform: 'uppercase', lineHeight: 1.1, marginBottom: 10 }}>
-                    {playerName || user?.username || 'GUEST_PILOT'}
-                  </div>
-
-                  <div className="flex gap-5 mb-4">
-                    <StatPill label="LEVEL" value={stats.maxLevel} />
-                    <div className="w-px h-8 self-center" style={{ background: 'rgba(255,255,255,0.06)' }} />
-                    <StatPill label="K/D" value={kd} accent="rgba(255,200,0,0.9)" />
-                    <div className="w-px h-8 self-center" style={{ background: 'rgba(255,255,255,0.06)' }} />
-                    <StatPill label="KILLS" value={countKills} />
-                  </div>
-
-                  {user ? (
-                    <button
-                      onClick={() => BackendService.logout().then(() => setUser(null))}
-                      className="flex items-center gap-2 transition-all group"
-                      style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'rgba(255,80,80,0.5)' }}
-                      onMouseEnter={e => { playHover(); e.currentTarget.style.color = 'rgba(255,80,80,0.9)'; }}
-                      onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,80,80,0.5)')}
-                    >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                      </svg>
-                      Disconnect Session
-                    </button>
-                  ) : (
-                    <div className="flex flex-col gap-2">
-                      <button
-                        onClick={() => { playClick(); setShowLogin(true); }}
-                        className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all group relative overflow-hidden"
-                        style={{
-                          background: 'rgba(0,140,200,0.12)',
-                          border: '1px solid rgba(0,180,255,0.25)',
-                          boxShadow: '0 0 20px rgba(0,150,220,0.1)',
-                        }}
-                        onMouseEnter={e => {
-                          e.currentTarget.style.background = 'rgba(0,160,220,0.2)';
-                          e.currentTarget.style.boxShadow = '0 0 30px rgba(0,180,255,0.2)';
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = 'rgba(0,140,200,0.12)';
-                          e.currentTarget.style.boxShadow = '0 0 20px rgba(0,150,220,0.1)';
-                        }}
-                      >
-                        <svg className="w-3.5 h-3.5 shrink-0" style={{ color: '#00d2ff' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
-                        </svg>
-                        <span style={{ fontFamily: '"Courier New", monospace', fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#00d2ff', fontWeight: 700 }}>
-                          Commander Login
-                        </span>
-                      </button>
-                      <p style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.1em', color: 'rgba(0,180,255,0.35)', lineHeight: 1.5 }}>
-                        Save progress · sync stats · unlock cloud rewards
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="relative p-4 rounded-xl" style={{
-                  background: 'rgba(0,10,25,0.5)',
-                  border: '1px solid rgba(255,255,255,0.04)',
-                }}>
-                  <div style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.3em', color: 'rgba(255,200,0,0.4)', textTransform: 'uppercase', marginBottom: 6 }}>
-                    TOTAL_XP_EARNED
-                  </div>
-                  <div style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 28, fontWeight: 900, color: 'rgba(255,200,0,0.9)', letterSpacing: '-0.02em', lineHeight: 1, textShadow: '0 0 20px rgba(255,200,0,0.3)' }}>
-                    {countScore.toLocaleString()}
-                  </div>
+          <div className="vextor-menu relative z-10 mx-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-[1760px] flex-col gap-3 overflow-hidden px-3 py-3 lg:px-4">
+            <header className="grid shrink-0 grid-cols-1 gap-2 rounded-2xl border border-cyan-300/12 bg-slate-950/54 px-4 py-3 shadow-[0_12px_42px_rgba(0,0,0,0.22)] backdrop-blur-md md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-teal-300 shadow-[0_0_14px_rgba(44,255,199,0.9)]" />
+                <div className="min-w-0">
+                  <div className="break-words text-[9px] font-black uppercase leading-relaxed tracking-[0.26em] text-teal-100/84">VEXTOR Command Interface</div>
+                  <div className="mt-0.5 break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.12em] text-sky-100/34">Clean cockpit layout / no clipped labels / no dead space</div>
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <div style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.15)', textTransform: 'uppercase', marginBottom: 8 }}>
-                  NAV_TERMINALS
-                </div>
-                {[
-                  { label: 'Hangar', sub: 'Equip loadout', icon: Warehouse, action: () => setShowShop(true), accent: 'rgba(0,210,255,0.8)' },
-                  { label: 'Almanac', sub: 'Intel archive', icon: BookOpen, action: () => setShowAlmanac(true), accent: 'rgba(34,197,94,0.82)' },
-                  { label: 'Records_DB', sub: 'Achievements', icon: Trophy, action: () => setShowAchievements(true), accent: 'rgba(255,200,0,0.8)' },
-                  { label: 'Data_Logs', sub: 'Update history', icon: ScrollText, action: () => setShowUpdateHistory(true), accent: 'rgba(180,140,255,0.85)' },
-                  { label: 'Support', sub: 'Command backing', icon: ChevronRight, action: () => setShowSupport(true), accent: 'rgba(244,114,182,0.9)' },
-                  { label: 'Settings', sub: 'Configure env', icon: SlidersHorizontal, action: () => setShowSettings(true), accent: 'rgba(52,211,153,0.85)' },
-                ].map(link => (
-                  <button
-                    key={link.label}
-                    onClick={() => { (link.label === 'Records_DB' ? playSelect : playClick)(); link.action(); }}
-                    onMouseEnter={e => {
-                      showTT(link.label, link.sub);
-                      e.currentTarget.style.background = 'rgba(0,180,255,0.05)';
-                      e.currentTarget.style.borderColor = 'rgba(0,180,255,0.1)';
-                    }}
-                    onMouseLeave={e => {
-                      hideTT();
-                      e.currentTarget.style.background = 'rgba(255,255,255,0.01)';
-                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)';
-                    }}
-                    className="flex items-center gap-3 px-3 py-3 rounded-xl transition-all group text-left relative overflow-hidden"
-                    style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)' }}
-                    onFocus={e => {
-                      e.currentTarget.style.background = 'rgba(0,180,255,0.07)';
-                      e.currentTarget.style.borderColor = 'rgba(0,180,255,0.2)';
-                    }}
-                    onBlur={e => {
-                      e.currentTarget.style.background = 'rgba(255,255,255,0.01)';
-                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)';
-                    }}
-                  >
-                    <div className="absolute inset-y-0 left-0 w-0.5 opacity-0 group-hover:opacity-100 transition-all" style={{ background: `linear-gradient(180deg, ${link.accent}, transparent)` }} />
-                    <span
-                      className="w-8 h-8 rounded-lg flex items-center justify-center transition-all shrink-0"
-                      style={{ color: link.accent, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
-                    >
-                      <link.icon className="w-4 h-4" />
-                    </span>
-                    <div className="flex flex-col">
-                      <span style={{ fontFamily: '"Courier New", monospace', fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase', fontWeight: 700, color: 'rgba(255,255,255,0.45)', transition: 'color 0.2s' }}
-                        className="group-hover:!text-[rgba(255,255,255,0.9)]">{link.label}</span>
-                      <span style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.18)' }}>{link.sub}</span>
-                    </div>
-                    <span className="ml-auto opacity-45 group-hover:opacity-100 transition-all" style={{ color: link.accent }}>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </motion.aside>
-
-            <motion.main
-              variants={panelVar}
-              className="flex-1 flex flex-col items-center justify-between py-8 relative overflow-hidden"
-            >
-              <div className="flex items-center gap-3 w-full max-w-lg">
-                <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, transparent, rgba(0,210,255,0.15))' }} />
-                <span style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.4em', color: 'rgba(0,210,255,0.3)', textTransform: 'uppercase' }}>
-                  TACTICAL_EVOLUTION_PLATFORM
+              <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">
+                <span className="rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.16em]" style={{ color: modeMeta.color, borderColor: modeMeta.border, background: modeMeta.fill }}>
+                  {modeMeta.title}
                 </span>
-                <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(0,210,255,0.15), transparent)' }} />
+                {isTeamsMode && (
+                  <span className="rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.16em]" style={{ color: teamMeta.color, borderColor: teamMeta.border, background: teamMeta.bg }}>
+                    {teamMeta.label}
+                  </span>
+                )}
               </div>
+            </header>
 
-              <div className="relative flex flex-col items-center">
-                <div className="relative">
-                  <h1
-                    className="vextor-title"
-                    style={{
-                      fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                      fontSize: 'clamp(72px, 10vw, 136px)',
-                      fontWeight: 900,
-                      fontStyle: 'italic',
-                      letterSpacing: '-0.03em',
-                      textTransform: 'uppercase',
-                      lineHeight: 1,
-                      color: '#fff',
-                      textShadow: '0 0 80px rgba(0,180,255,0.2), 0 2px 0 rgba(0,0,0,0.5)',
-                      userSelect: 'none',
-                    }}
-                  >
-                    VEXTOR
-                  </h1>
-                  <h1 aria-hidden className="vextor-glitch-r" style={{
-                    fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                    fontSize: 'clamp(72px, 10vw, 136px)',
-                    fontWeight: 900,
-                    fontStyle: 'italic',
-                    letterSpacing: '-0.03em',
-                    textTransform: 'uppercase',
-                    lineHeight: 1,
-                    color: '#ff2244',
-                    position: 'absolute',
-                    top: 0, left: 0,
-                    opacity: 0,
-                    mixBlendMode: 'screen',
-                    userSelect: 'none',
-                  }}>VEXTOR</h1>
-                  <h1 aria-hidden className="vextor-glitch-b" style={{
-                    fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                    fontSize: 'clamp(72px, 10vw, 136px)',
-                    fontWeight: 900,
-                    fontStyle: 'italic',
-                    letterSpacing: '-0.03em',
-                    textTransform: 'uppercase',
-                    lineHeight: 1,
-                    color: '#00d2ff',
-                    position: 'absolute',
-                    top: 0, left: 0,
-                    opacity: 0,
-                    mixBlendMode: 'screen',
-                    userSelect: 'none',
-                  }}>VEXTOR</h1>
+            <div className="grid min-h-0 flex-1 gap-2.5 overflow-hidden lg:grid-cols-[250px_minmax(0,1fr)_320px] xl:grid-cols-[270px_minmax(0,1fr)_350px]">
+              <motion.aside variants={slideLeft} className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden">
+                <Panel title="Pilot" subtitle={user ? 'Cloud profile' : 'Guest profile'}>
+                  <div className="relative rounded-xl border border-cyan-300/12 p-3" style={{ background: UI.panelDeep }}>
+                    <div className="absolute right-[-24px] top-[-24px] h-24 w-24 rounded-full bg-cyan-400/10 blur-2xl" />
+                    <div className="relative break-words text-lg font-black uppercase leading-tight tracking-[0.05em] text-cyan-50/92">{playerName || user?.username || 'Guest Pilot'}</div>
+                    <div className="relative mt-3 grid grid-cols-3 gap-2">
+                      <MiniStat label="Level" value={maxLevel} accent={UI.cyan} />
+                      <MiniStat label="K/D" value={kd} accent={UI.amber} />
+                      <MiniStat label="Kills" value={countKills} accent={UI.teal} />
+                    </div>
+                    <div className="relative mt-3 rounded-xl border border-amber-300/12 bg-amber-400/[0.07] px-3 py-2.5">
+                      <div className="break-words text-[8px] font-black uppercase tracking-[0.16em] text-amber-200/58">Lifetime Score</div>
+                      <div className="mt-1 break-words text-xl font-black tracking-tight text-amber-300">{countScore.toLocaleString()}</div>
+                    </div>
 
-                  <div className="absolute -top-1 -right-16 xl:-right-20 px-2 py-1 rounded"
-                    style={{ background: '#00d2ff', boxShadow: '0 0 20px rgba(0,210,255,0.6)' }}>
-                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 8, fontWeight: 900, letterSpacing: '0.3em', color: '#000', textTransform: 'uppercase' }}>
-                      ORIGIN
-                    </span>
+                    {user ? (
+                      <button type="button" onClick={handleLogout} onMouseEnter={playHover} className="relative mt-3 text-left text-[9px] font-black uppercase leading-relaxed tracking-[0.14em] text-rose-300/78 transition hover:text-rose-200">
+                        Disconnect Session
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          playClick();
+                          setShowLogin(true);
+                        }}
+                        onMouseEnter={playHover}
+                        className="relative mt-3 flex w-full min-w-0 items-center gap-2 rounded-xl border border-cyan-300/22 bg-cyan-400/[0.09] px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:bg-cyan-400/[0.13]"
+                      >
+                        <Radar className="h-4 w-4 shrink-0 text-cyan-300" />
+                        <div className="min-w-0">
+                          <div className="break-words text-[9px] font-black uppercase tracking-[0.15em] text-cyan-100">Commander Login</div>
+                          <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/35">Save progress and sync stats</div>
+                        </div>
+                      </button>
+                    )}
                   </div>
-                </div>
+                </Panel>
 
-                <div className="w-full h-px mt-1" style={{ background: 'linear-gradient(90deg, transparent, rgba(0,210,255,0.4), rgba(0,210,255,0.4), transparent)' }} />
-              </div>
+                <Panel title="Navigation" subtitle="Primary terminals only" bodyClassName="h-full p-2.5">
+                  <div className="grid h-full content-start gap-1.5">
+                    {navItems.map((link) => (
+                      <NavButton
+                        key={link.label}
+                        label={link.label}
+                        sub={link.sub}
+                        icon={link.icon}
+                        accent={link.accent}
+                        onClick={() => {
+                          (link.label === 'Records' ? playSelect : playClick)();
+                          link.action();
+                        }}
+                        onHover={() => {
+                          showTT(link.label, link.sub);
+                          playHover();
+                        }}
+                        onLeave={hideTT}
+                      />
+                    ))}
+                  </div>
+                </Panel>
+              </motion.aside>
 
-              <InteractiveTankPreview tankColor={tankColor} isTeamsMode={isTeamsMode} parallax={parallax} />
-
-              <form onSubmit={handleStartGame} className="flex flex-col items-center gap-5 w-full max-w-[460px]">
-                <div className="w-full relative group">
-                  <div className="absolute inset-0 rounded-xl opacity-0 group-focus-within:opacity-100 transition-opacity duration-300 pointer-events-none"
-                    style={{ boxShadow: '0 0 0 1px rgba(0,200,255,0.35), 0 0 30px rgba(0,180,255,0.1)' }} />
-                  <div className="relative rounded-xl overflow-hidden"
-                    style={{ background: 'rgba(0,15,30,0.7)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                    <div className="absolute inset-x-0 top-0 h-px" style={{ background: 'linear-gradient(90deg, transparent, rgba(0,210,255,0.3), transparent)' }} />
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                        style={{ background: user ? 'rgba(52,211,153,0.1)' : 'rgba(0,180,255,0.1)', border: `1px solid ${user ? 'rgba(52,211,153,0.2)' : 'rgba(0,180,255,0.2)'}` }}>
-                        <Pencil className="w-3.5 h-3.5" style={{ color: user ? 'rgba(52,211,153,0.8)' : 'rgba(0,200,255,0.8)' }} />
+              <motion.main variants={panelVar} className="min-h-0 min-w-0">
+                <form onSubmit={submitHandler} className="grid h-full min-h-0 min-w-0 gap-2.5 overflow-hidden lg:grid-rows-[auto_minmax(220px,1fr)_auto]">
+                  <Panel bodyClassName="p-0" className="shrink-0">
+                    <div className="grid min-w-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] xl:items-center">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full border border-cyan-300/16 bg-cyan-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/82">{modeMeta.code}</span>
+                          <span className="rounded-full border border-violet-300/16 bg-violet-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.15em] text-violet-200/72">{latestUpdate?.id ?? 'Live Build'}</span>
+                        </div>
+                        <div className="relative mt-2 inline-block max-w-full">
+                          <h1
+                            className="vextor-title"
+                            style={{
+                              fontFamily: '"Arial Black", "Arial Bold", sans-serif',
+                              fontSize: compactHeight ? 'clamp(42px, 5.7vw, 76px)' : 'clamp(52px, 6.7vw, 102px)',
+                              fontWeight: 900,
+                              fontStyle: 'italic',
+                              letterSpacing: '-0.048em',
+                              lineHeight: 0.9,
+                              textTransform: 'uppercase',
+                              background: 'linear-gradient(90deg, #20e6ff 0%, #2cffc7 42%, #a98cff 100%)',
+                              WebkitBackgroundClip: 'text',
+                              backgroundClip: 'text',
+                              color: 'transparent',
+                              filter: 'drop-shadow(0 0 34px rgba(32,230,255,0.2))',
+                            }}
+                          >
+                            VEXTOR
+                          </h1>
+                          {['vextor-glitch-r', 'vextor-glitch-b'].map((klass) => (
+                            <h1
+                              key={klass}
+                              aria-hidden
+                              className={klass}
+                              style={{
+                                fontFamily: '"Arial Black", "Arial Bold", sans-serif',
+                                fontSize: compactHeight ? 'clamp(42px, 5.7vw, 76px)' : 'clamp(52px, 6.7vw, 102px)',
+                                fontWeight: 900,
+                                fontStyle: 'italic',
+                                letterSpacing: '-0.048em',
+                                lineHeight: 0.9,
+                                textTransform: 'uppercase',
+                                color: klass.endsWith('r') ? UI.rose : UI.cyan,
+                                position: 'absolute',
+                                inset: 0,
+                                opacity: 0,
+                                mixBlendMode: 'screen',
+                                pointerEvents: 'none',
+                              }}
+                            >
+                              VEXTOR
+                            </h1>
+                          ))}
+                        </div>
+                        <p className="mt-3 max-w-[820px] break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.14em] text-sky-100/46 md:text-[11px] xl:text-[12px]">
+                          Evolve fast. Control the grid. Leave the arena looking traumatised.
+                        </p>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.25em', textTransform: 'uppercase', color: user ? 'rgba(52,211,153,0.5)' : 'rgba(0,200,255,0.5)', marginBottom: 3 }}>
-                          {user ? 'Custom_Callsign' : 'Editable_Callsign'}
+
+                      {latestUpdate && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playClick();
+                            setShowUpdateHistory(true);
+                          }}
+                          onMouseEnter={playHover}
+                          className="min-w-0 rounded-2xl border border-violet-300/18 bg-[linear-gradient(135deg,rgba(36,24,66,0.62),rgba(18,22,42,0.92))] px-4 py-3.5 text-left transition hover:-translate-y-0.5 hover:border-violet-300/32"
+                        >
+                          <div className="break-words text-[8px] font-black uppercase tracking-[0.15em] text-violet-200/62">Latest Update</div>
+                          <div className="mt-1 break-words text-[11px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/88">{latestUpdate.title}</div>
+                          <div className="mt-2 break-words text-[8px] font-bold uppercase tracking-[0.10em] text-sky-100/36">{latestUpdate.date}</div>
+                        </button>
+                      )}
+                    </div>
+                  </Panel>
+
+                  <Panel bodyClassName="p-0" className="min-h-0 overflow-hidden">
+                    <div className="relative flex h-full min-h-[240px] items-center justify-center overflow-hidden p-3" style={{ background: 'radial-gradient(circle at center, rgba(32,230,255,0.1), transparent 58%)' }}>
+                      <MenuMusicVisualizer snapshot={musicSnapshot} variant="hero" />
+                      <div className="absolute inset-x-10 top-1/2 h-px bg-gradient-to-r from-transparent via-cyan-300/20 to-transparent" />
+                      <div className="absolute inset-y-8 left-1/2 w-px bg-gradient-to-b from-transparent via-teal-300/14 to-transparent" />
+                      <div className="relative z-10">
+                        <InteractiveTankPreview tankColor={tankColor} isTeamsMode={isTeamsMode} parallax={parallax} compact={compactHeight} />
+                      </div>
+                    </div>
+                  </Panel>
+
+                  <Panel bodyClassName="p-0" className="shrink-0">
+                    <div className="grid gap-2.5 p-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(250px,320px)_minmax(230px,300px)]">
+                      <div className="min-w-0 rounded-xl border border-cyan-300/10 bg-sky-950/20 p-3">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/18 bg-cyan-400/[0.08]"><Pencil className="h-4 w-4 text-cyan-300" /></div>
+                          <div className="min-w-0">
+                            <div className="break-words text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200/78">Callsign</div>
+                            <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/30">Name shown in the arena</div>
+                          </div>
                         </div>
                         <input
                           type="text"
                           placeholder="Choose your callsign"
                           value={playerName}
-                          onChange={e => setPlayerName(e.target.value)}
+                          onChange={(event) => setPlayerName(event.target.value.slice(0, 15))}
                           maxLength={15}
-                          className="w-full bg-transparent outline-none uppercase"
+                          spellCheck={false}
+                          autoComplete="off"
+                          className="mt-3 w-full min-w-0 rounded-xl border border-cyan-300/12 bg-slate-950/55 px-3 py-3 uppercase outline-none transition placeholder:text-sky-200/18 focus:border-cyan-300/45"
                           style={{
                             fontFamily: '"Arial Black", sans-serif',
-                            fontSize: 15,
+                            fontSize: 14,
                             fontWeight: 900,
-                            letterSpacing: '0.15em',
-                            color: user ? 'rgba(52,211,153,0.8)' : '#fff',
+                            letterSpacing: '0.11em',
+                            color: user ? UI.teal : UI.ink,
                             cursor: 'text',
                           }}
                         />
                       </div>
-                    </div>
-                  </div>
-                </div>
 
-                <div className="flex gap-3 w-full">
-                  {modeChoices.map(mode => {
-                    const meta = modeMeta[mode];
-                    const active = gameMode === mode;
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => { playSelect(); setGameMode(mode); }}
-                        onMouseEnter={() => { playHover(); showTT(meta.title, meta.desc); }}
-                        onMouseLeave={hideTT}
-                        className="flex-1 relative rounded-xl p-3 transition-all duration-200 overflow-hidden"
-                        style={{
-                          background: active ? 'rgba(0,15,30,0.9)' : 'rgba(0,8,18,0.6)',
-                          border: `1px solid ${active ? meta.border : 'rgba(255,255,255,0.05)'}`,
-                          boxShadow: active ? `0 0 20px ${meta.glow}, inset 0 1px 0 rgba(255,255,255,0.05)` : 'none',
-                        }}
-                      >
-                        {active && <div className="absolute inset-x-0 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${meta.color}, transparent)` }} />}
-                        <div style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.25em', textTransform: 'uppercase', color: active ? meta.color : 'rgba(255,255,255,0.2)', marginBottom: 3, fontWeight: 900 }}>
-                          {meta.code}
-                        </div>
-                        <div style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 11, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', color: active ? '#fff' : 'rgba(255,255,255,0.3)', lineHeight: 1.2 }}>
-                          {meta.title}
-                        </div>
-                        {active && (
-                          <motion.div layoutId="modeActive" className="absolute inset-0 rounded-xl pointer-events-none"
-                            style={{ background: `radial-gradient(ellipse at 50% 0%, ${meta.glow} 0%, transparent 70%)` }} />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <AnimatePresence>
-                  {isTeamsMode && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="grid w-full gap-3"
-                      style={{
-                        gridTemplateColumns: gameMode === GameMode.DOMINION ? 'repeat(2, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))',
-                      }}
-                    >
-                      {teamChoices.map(team => {
-                        const active = selectedTeam === team;
-                        const canJoin = canJoinTeam(team);
-                        const meta = TEAM_META[team];
-                        return (
-                          <button
-                            key={team}
-                            type="button"
-                            disabled={!canJoin}
-                            onClick={() => { playSelect(); setSelectedTeam(team); }}
-                            className="relative rounded-xl py-3 px-4 transition-all flex items-center gap-3 overflow-hidden min-w-0 text-left"
-                            style={{
-                              background: active ? meta.bg : 'rgba(0,8,18,0.6)',
-                              border: `1px solid ${active ? meta.border : 'rgba(255,255,255,0.05)'}`,
-                              boxShadow: active ? `0 0 20px ${meta.border}` : 'none',
-                              opacity: !canJoin ? 0.35 : 1,
-                              cursor: !canJoin ? 'not-allowed' : 'pointer',
-                            }}
-                          >
-                            <div className="w-2.5 h-2.5 rotate-45 shrink-0" style={{
-                              background: active ? meta.color : 'rgba(255,255,255,0.1)',
-                              boxShadow: active ? `0 0 10px ${meta.color}` : 'none',
-                            }} />
-                            <div className="min-w-0 flex-1">
-                              <div
-                                style={{
-                                  fontFamily: '"Courier New", monospace',
-                                  fontSize: 8,
-                                  letterSpacing: '0.18em',
-                                  textTransform: 'uppercase',
-                                  fontWeight: 700,
-                                  color: active ? meta.color : 'rgba(255,255,255,0.24)',
-                                  marginBottom: 2,
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                }}
-                              >
-                                Team Select
-                              </div>
-                              <div
-                                style={{
-                                  fontFamily: '"Arial Black", sans-serif',
-                                  fontSize: 11,
-                                  letterSpacing: '0.03em',
-                                  textTransform: 'uppercase',
-                                  fontWeight: 900,
-                                  color: active ? '#fff' : 'rgba(255,255,255,0.72)',
-                                  lineHeight: 1.15,
-                                  whiteSpace: 'normal',
-                                  overflowWrap: 'anywhere',
-                                }}
-                              >
-                                {meta.label}
-                              </div>
-                            </div>
-                            {!canJoin && (
-                              <span className="ml-auto shrink-0" style={{ fontFamily: '"Courier New", monospace', fontSize: 7, letterSpacing: '0.16em', color: 'rgba(255,80,80,0.7)', textTransform: 'uppercase' }}>
-                                FULL
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                <div className="w-full flex flex-col items-center gap-3 mt-2">
-                  <button
-                    type="submit"
-                    className="w-full max-w-sm relative overflow-hidden group"
-                    style={{
-                      height: 64,
-                      background: 'linear-gradient(135deg, rgba(255,255,255,0.95), rgba(220,240,255,0.9))',
-                      borderRadius: 6,
-                      boxShadow: '0 0 40px rgba(200,230,255,0.12), 0 8px 32px rgba(0,0,0,0.4)',
-                      transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.boxShadow = '0 0 60px rgba(0,200,255,0.3), 0 8px 40px rgba(0,0,0,0.5)';
-                      e.currentTarget.style.background = 'linear-gradient(135deg, #00d2ff, #0060cc)';
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.boxShadow = '0 0 40px rgba(200,230,255,0.12), 0 8px 32px rgba(0,0,0,0.4)';
-                      e.currentTarget.style.background = 'linear-gradient(135deg, rgba(255,255,255,0.95), rgba(220,240,255,0.9))';
-                    }}
-                  >
-                    <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[6px]">
-                      <div className="engage-sweep absolute inset-y-0 w-1/3"
-                        style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)' }} />
-                    </div>
-                    <span
-                      className="relative z-10 transition-colors duration-200"
-                      style={{
-                        fontFamily: '"Arial Black", sans-serif',
-                        fontSize: 22,
-                        fontWeight: 900,
-                        fontStyle: 'italic',
-                        letterSpacing: '0.5em',
-                        textTransform: 'uppercase',
-                        color: '#000',
-                      }}
-                    >
-                      {gameMode === GameMode.SANDBOX ? 'INIT' : 'ENGAGE'}
-                    </span>
-                  </button>
-
-                  <motion.button
-                    type="button"
-                    onClick={() => { if (!spectateAvailable) return; playClick(); handleSpectate(); }}
-                    disabled={!spectateAvailable}
-                    whileHover={spectateAvailable ? { scale: 1.015, y: -1 } : undefined}
-                    whileTap={spectateAvailable ? { scale: 0.985 } : undefined}
-                    className={`group relative w-full max-w-sm overflow-hidden rounded-2xl border px-4 py-3 text-left transition-all ${spectateAvailable ? 'cursor-none' : 'opacity-55'}`}
-                    style={{
-                      borderColor: spectateAvailable ? 'rgba(0,210,255,0.24)' : 'rgba(255,255,255,0.08)',
-                      background: spectateAvailable
-                        ? 'linear-gradient(135deg, rgba(2,18,28,0.96), rgba(6,30,44,0.92))'
-                        : 'linear-gradient(135deg, rgba(10,10,10,0.88), rgba(18,18,18,0.8))',
-                      boxShadow: spectateAvailable
-                        ? '0 0 34px rgba(0,210,255,0.08), 0 14px 42px rgba(0,0,0,0.34)'
-                        : '0 10px 26px rgba(0,0,0,0.2)',
-                    }}
-                    onMouseEnter={() => { if (spectateAvailable) playHover(); }}
-                  >
-                    <div className="absolute inset-0 bg-[linear-gradient(115deg,transparent_0%,rgba(255,255,255,0.08)_42%,transparent_84%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
-                    <div className="relative flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="flex h-11 w-11 items-center justify-center rounded-2xl border"
+                      <div className="grid min-w-0 gap-2">
+                        <button
+                          type="submit"
+                          disabled={!deploymentReady}
+                          onMouseEnter={playHover}
+                          className="group relative flex min-w-0 items-center justify-between rounded-xl border px-4 py-3 text-left shadow-[0_16px_36px_rgba(0,0,0,0.28)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
                           style={{
-                            borderColor: spectateAvailable ? 'rgba(0,210,255,0.22)' : 'rgba(255,255,255,0.08)',
-                            background: spectateAvailable ? 'rgba(0,210,255,0.08)' : 'rgba(255,255,255,0.03)',
-                            boxShadow: spectateAvailable ? '0 0 18px rgba(0,210,255,0.15)' : 'none',
+                            background: 'linear-gradient(135deg, rgba(8,145,178,0.95), rgba(20,184,166,0.88) 48%, rgba(124,58,237,0.82))',
+                            borderColor: 'rgba(125, 211, 252, 0.35)',
+                            color: '#ecfeff',
                           }}
                         >
-                          <Radar className={`h-5 w-5 ${spectateAvailable ? 'text-cyan-300' : 'text-white/25'}`} />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[10px] font-black uppercase tracking-[0.28em] ${spectateAvailable ? 'text-cyan-300/80' : 'text-white/28'}`}>Spectate</span>
-                            <Eye className={`h-3.5 w-3.5 ${spectateAvailable ? 'text-cyan-200/70' : 'text-white/20'}`} />
+                          <div className="engage-sweep pointer-events-none absolute inset-y-0 w-16 -skew-x-12 bg-cyan-100/20 opacity-80" />
+                          <div className="relative min-w-0">
+                            <div className="break-words text-[8px] font-black uppercase tracking-[0.20em] text-cyan-50/66">Primary Launch</div>
+                            <div className="mt-0.5 break-words text-xl font-black uppercase tracking-[0.14em] text-cyan-50">{gameMode === GameMode.SANDBOX ? 'Init' : 'Engage'}</div>
                           </div>
-                          <div className={`mt-1 text-sm font-black uppercase tracking-[0.16em] ${spectateAvailable ? 'text-white' : 'text-white/35'}`}>
-                            Observe Bot Combat
+                          <ChevronRight className="relative h-5 w-5 shrink-0 text-cyan-50/84 transition group-hover:translate-x-1" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!spectateAvailable) return;
+                            playClick();
+                            handleSpectate();
+                          }}
+                          disabled={!spectateAvailable}
+                          onMouseEnter={() => {
+                            if (spectateAvailable) playHover();
+                          }}
+                          className="flex min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+                          style={{
+                            cursor: spectateAvailable ? 'pointer' : 'not-allowed',
+                            borderColor: spectateAvailable ? 'rgba(32,230,255,0.24)' : 'rgba(100,116,139,0.14)',
+                            background: spectateAvailable ? 'linear-gradient(135deg, rgba(6, 78, 98, 0.5), rgba(15, 23, 42, 0.82))' : 'rgba(15,23,42,0.72)',
+                          }}
+                        >
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <Eye className={`h-4 w-4 shrink-0 ${spectateAvailable ? 'text-cyan-300' : 'text-slate-500'}`} />
+                            <div className="min-w-0">
+                              <div className="break-words text-[9px] font-black uppercase tracking-[0.16em] text-cyan-100/76">Spectate</div>
+                              <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/34">{spectateAvailable ? 'Observe bot combat' : 'No targets yet'}</div>
+                            </div>
                           </div>
-                          <div className={`mt-1 text-[10px] font-bold uppercase tracking-[0.14em] ${spectateAvailable ? 'text-white/48' : 'text-white/22'}`}>
-                            {spectateAvailable ? 'Live tactical camera with cycle controls' : 'Awaiting bot targets'}
-                          </div>
-                        </div>
+                          <Radar className={`h-4 w-4 shrink-0 ${spectateAvailable ? 'text-teal-300/80' : 'text-slate-600'}`} />
+                        </button>
                       </div>
-                      <ChevronRight className={`h-5 w-5 shrink-0 ${spectateAvailable ? 'text-cyan-200/80' : 'text-white/18'}`} />
-                    </div>
-                  </motion.button>
-                </div>
-              </form>
 
-              <div style={{ fontFamily: '"Courier New", monospace', fontSize: 8, letterSpacing: '0.35em', color: 'rgba(0,210,255,0.2)', textTransform: 'uppercase' }}>
-                SECURE_PROTOCOL_v4.2.8 // ENC_ACTIVE
-              </div>
-              <div className="flex items-center gap-3 mt-2">
-                <button
-                  type="button"
-                  onClick={() => { playClick(); setShowPrivacy(true); }}
-                  style={{
-                    fontFamily: '"Courier New", monospace',
-                    fontSize: 9,
-                    letterSpacing: '0.12em',
-                    textTransform: 'uppercase',
-                    color: 'rgba(147,197,253,0.85)',
-                    borderBottom: '1px solid rgba(147,197,253,0.35)',
-                    paddingBottom: 2,
-                  }}
-                >
-                  Privacy
-                </button>
-                <span style={{ color: 'rgba(255,255,255,0.2)', fontFamily: '"Courier New", monospace', fontSize: 9 }}>/</span>
-                <button
-                  type="button"
-                  onClick={() => { playClick(); setShowTos(true); }}
-                  style={{
-                    fontFamily: '"Courier New", monospace',
-                    fontSize: 9,
-                    letterSpacing: '0.12em',
-                    textTransform: 'uppercase',
-                    color: 'rgba(251,113,133,0.88)',
-                    borderBottom: '1px solid rgba(251,113,133,0.35)',
-                    paddingBottom: 2,
-                  }}
-                >
-                  Terms
-                </button>
-              </div>
-            </motion.main>
-
-            <motion.aside
-              variants={slideRight}
-              className="flex flex-col justify-between py-8 px-6 xl:px-8 w-[280px] xl:w-[320px] shrink-0"
-            >
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, transparent, rgba(255,200,0,0.2))' }} />
-                  <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.3em', color: 'rgba(255,200,0,0.5)', textTransform: 'uppercase' }}>
-                    TOP_AGENTS
-                  </span>
-                  <div className="w-1.5 h-1.5 rotate-45" style={{ background: 'rgba(255,200,0,0.4)' }} />
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  {topScores.length === 0 ? (
-                    <div style={{ fontFamily: '"Courier New", monospace', fontSize: 10, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.15em', textTransform: 'uppercase', textAlign: 'center', padding: '16px 0' }}>
-                      NO_DATA_STREAM
-                    </div>
-                  ) : topScores.map((entry, i) => {
-                    const rankColors = ['rgba(255,200,0,0.9)', 'rgba(200,200,210,0.9)', 'rgba(200,120,50,0.9)', 'rgba(255,255,255,0.4)', 'rgba(255,255,255,0.25)'];
-                    const rankBg = ['rgba(255,200,0,0.08)', 'rgba(200,200,210,0.05)', 'rgba(200,120,50,0.06)', 'transparent', 'transparent'];
-                    return (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.3 + i * 0.07, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg relative overflow-hidden"
-                        style={{ background: rankBg[i] || 'transparent', border: i < 3 ? `1px solid ${rankColors[i].replace('0.9', '0.12')}` : '1px solid transparent' }}
-                      >
-                        {i < 3 && <div className="absolute inset-x-0 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${rankColors[i].replace('0.9', '0.3')}, transparent)` }} />}
-                        <span style={{ fontFamily: '"Courier New", monospace', fontSize: 11, fontWeight: 900, color: rankColors[i], minWidth: 16, textAlign: 'center', textShadow: i === 0 ? '0 0 10px rgba(255,200,0,0.5)' : 'none' }}>
-                          {i === 0 ? '★' : `0${i + 1}`}
-                        </span>
-                        <span className="flex-1 truncate" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: i < 2 ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.5)' }}>
-                          {entry.name}
-                        </span>
-                        <span className="shrink-0 px-2 py-0.5 rounded" style={{
-                          fontFamily: '"Courier New", monospace',
-                          fontSize: 9,
-                          fontWeight: 900,
-                          letterSpacing: '0.1em',
-                          color: rankColors[i],
-                          background: `${rankColors[i].replace('0.9', '0.08')}`,
-                          border: `1px solid ${rankColors[i].replace('0.9', '0.15')}`,
-                        }}>
-                          {entry.score.toLocaleString()}
-                        </span>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="rounded-3xl border border-cyan-400/10 bg-[rgba(1,5,11,0.85)] p-4">
-                <MenuMusicVisualizer snapshot={musicSnapshot} />
-              </div>
-
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-1.5 h-1.5 rotate-45" style={{ background: 'rgba(0,210,255,0.3)' }} />
-                  <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.3em', color: 'rgba(0,210,255,0.4)', textTransform: 'uppercase' }}>
-                    COMBAT_KEYS
-                  </span>
-                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(0,210,255,0.15), transparent)' }} />
-                </div>
-
-                <div className="flex flex-col gap-2.5">
-                  {[
-                    { label: 'Movement', key: 'WASD', desc: 'Navigate grid' },
-                    { label: 'Primary Fire', key: 'LMB', desc: 'Main weapon' },
-                  ].map(ctrl => (
-                    <div key={ctrl.label} className="flex items-center justify-between gap-3">
-                      <div className="flex flex-col">
-                        <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.15em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', fontWeight: 700 }}>
-                          {ctrl.label}
-                        </span>
-                        <span style={{ fontFamily: '"Courier New", monospace', fontSize: 7, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.15)' }}>
-                          {ctrl.desc}
-                        </span>
+                      <div className="rounded-xl border p-3" style={{ borderColor: modeMeta.border, background: modeMeta.fill }}>
+                        <div className="break-words text-[8px] font-black uppercase tracking-[0.16em]" style={{ color: modeMeta.color }}>{modeMeta.code}</div>
+                        <div className="mt-1 break-words text-sm font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/90">{modeMeta.title}</div>
+                        <p className="mt-1.5 break-words text-[9px] font-bold uppercase leading-relaxed tracking-[0.07em] text-sky-100/42">{modeMeta.desc}</p>
+                        {isTeamsMode && (
+                          <div className="mt-2 rounded-lg border px-2.5 py-2" style={{ borderColor: teamMeta.border, background: teamMeta.bg }}>
+                            <div className="break-words text-[8px] font-black uppercase tracking-[0.14em]" style={{ color: teamMeta.color }}>Selected Team</div>
+                            <div className="mt-1 break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/82">{teamMeta.label}</div>
+                          </div>
+                        )}
                       </div>
-                      <kbd style={{
-                        fontFamily: '"Courier New", monospace',
-                        fontSize: 10,
-                        fontWeight: 900,
-                        letterSpacing: '0.1em',
-                        color: 'rgba(0,210,255,0.7)',
-                        background: 'rgba(0,30,60,0.6)',
-                        border: '1px solid rgba(0,180,255,0.2)',
-                        borderBottom: '2px solid rgba(0,180,255,0.3)',
-                        padding: '3px 8px',
-                        borderRadius: 5,
-                        minWidth: 44,
-                        textAlign: 'center' as const,
-                        display: 'inline-block',
-                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
-                      }}>
-                        {ctrl.key}
-                      </kbd>
                     </div>
-                  ))}
-                </div>
+                  </Panel>
+                </form>
+              </motion.main>
 
-                <div className="pt-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
-                  <div className="flex items-center justify-between">
-                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 7, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.12)', textTransform: 'uppercase' }}>
-                      BUILD_4.2.8-ORIGIN
-                    </span>
-                    <div className="flex gap-1">
-                      {[0, 1, 2].map(i => (
-                        <div key={i} className="w-1 h-1 rounded-full" style={{ background: `rgba(0,210,255,${0.1 + i * 0.1})` }} />
+              <motion.aside variants={slideRight} className="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-2.5 overflow-hidden">
+                <Panel title="Arena Setup" subtitle="Mode and team grouped">
+                  <div className="grid gap-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      {MODE_CHOICES.map((mode) => (
+                        <ModeButton
+                          key={mode}
+                          mode={mode}
+                          active={gameMode === mode}
+                          onSelect={() => {
+                            playSelect();
+                            setGameMode(mode);
+                          }}
+                          onHover={() => {
+                            playHover();
+                            showTT(MODE_META[mode].title, MODE_META[mode].desc);
+                          }}
+                          onLeave={hideTT}
+                        />
                       ))}
                     </div>
+
+                    {isTeamsMode && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {allowedTeams.map((team) => {
+                          const active = safeTeam === team;
+                          const canJoin = active || canJoinTeam(team);
+                          return (
+                            <TeamButton
+                              key={team}
+                              team={team}
+                              active={active}
+                              count={safeNumber(teamCounts?.[team])}
+                              canJoin={canJoin}
+                              onSelect={() => {
+                                playSelect();
+                                setSelectedTeam(team);
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                </div>
+                </Panel>
+
+                <Panel title="Top Agents" subtitle="Leaderboard uplink" bodyClassName="h-full p-2.5">
+                  <div className="grid h-full content-start gap-1.5">
+                    {topScores.length === 0 ? (
+                      <div className="flex items-center justify-center rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-5 text-center text-[9px] font-black uppercase tracking-[0.12em] text-sky-100/25">No data stream</div>
+                    ) : (
+                      topScores.map((entry, index) => <LeaderboardRow key={`${entry.name}-${index}`} entry={entry} index={index} />)
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel title="Controls" subtitle="Fast reference">
+                  <div className="grid gap-1.5">
+                    <ControlRow label="Move" keyLabel="WASD" desc="Navigate grid" />
+                    <ControlRow label="Fire" keyLabel="LMB" desc="Primary weapon" />
+                    <ControlRow label="Observe" keyLabel="A / D" desc="Spectate cycle" />
+                  </div>
+                </Panel>
+              </motion.aside>
+            </div>
+
+            <footer className="flex shrink-0 flex-col gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/40 px-3 py-2 backdrop-blur-md sm:flex-row sm:items-center sm:justify-between">
+              <div className="break-words text-[8px] font-black uppercase leading-relaxed tracking-[0.16em] text-sky-100/34">Secure Protocol / Build 4.2.8 Origin</div>
+              <div className="flex shrink-0 items-center gap-3">
+                <button type="button" onClick={() => { playClick(); setShowPrivacy(true); }} className="text-[9px] font-black uppercase tracking-[0.12em] text-cyan-300/82 transition hover:text-cyan-200">Privacy</button>
+                <span className="text-cyan-200/18">/</span>
+                <button type="button" onClick={() => { playClick(); setShowTos(true); }} className="text-[9px] font-black uppercase tracking-[0.12em] text-rose-300/82 transition hover:text-rose-200">Terms</button>
               </div>
-            </motion.aside>
+            </footer>
           </div>
 
           <style>{`
+            .vextor-menu,
+            .vextor-menu * {
+              box-sizing: border-box;
+            }
+
+            .vextor-menu button,
+            .vextor-menu input,
+            .vextor-menu section,
+            .vextor-menu div {
+              min-width: 0;
+            }
+
             @keyframes glitchR {
               0%,89%,100% { opacity:0; transform:translate(0,0); clip-path:none; }
-              90% { opacity:0.7; transform:translate(-3px,1px); clip-path:inset(20% 0 60% 0); }
+              90% { opacity:0.56; transform:translate(-3px,1px); clip-path:inset(20% 0 60% 0); }
               92% { opacity:0; }
-              94% { opacity:0.5; transform:translate(2px,-1px); clip-path:inset(60% 0 10% 0); }
+              94% { opacity:0.42; transform:translate(2px,-1px); clip-path:inset(60% 0 10% 0); }
               96% { opacity:0; }
             }
             @keyframes glitchB {
               0%,90%,100% { opacity:0; transform:translate(0,0); clip-path:none; }
-              91% { opacity:0.6; transform:translate(3px,-1px); clip-path:inset(40% 0 30% 0); }
+              91% { opacity:0.52; transform:translate(3px,-1px); clip-path:inset(40% 0 30% 0); }
               93% { opacity:0; }
-              95% { opacity:0.5; transform:translate(-2px,2px); clip-path:inset(10% 0 70% 0); }
+              95% { opacity:0.44; transform:translate(-2px,2px); clip-path:inset(10% 0 70% 0); }
               97% { opacity:0; }
             }
             .vextor-glitch-r { animation: glitchR 6s infinite; }
             .vextor-glitch-b { animation: glitchB 6s infinite 0.05s; }
+
             @keyframes sweep {
-              0% { transform: translateX(-150%); }
-              100% { transform: translateX(400%); }
+              0% { transform: translateX(-190%) skewX(-12deg); }
+              100% { transform: translateX(760%) skewX(-12deg); }
             }
-            .engage-sweep { animation: sweep 2.8s ease-in-out infinite; }
-            button:focus-visible { outline: 1px solid rgba(0,210,255,0.4); outline-offset: 2px; }
+            .engage-sweep { animation: sweep 2.7s ease-in-out infinite; }
+
+            @keyframes spinCW { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            @keyframes spinCCW { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+
+            .menu-scrollbar {
+              scrollbar-width: thin;
+              scrollbar-color: rgba(32,230,255,0.30) rgba(15,23,42,0.44);
+            }
+            .menu-scrollbar::-webkit-scrollbar { width: 7px; height: 7px; }
+            .menu-scrollbar::-webkit-scrollbar-track { background: rgba(15,23,42,0.44); border-radius: 999px; }
+            .menu-scrollbar::-webkit-scrollbar-thumb { background: rgba(32,230,255,0.30); border-radius: 999px; }
+            .menu-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(32,230,255,0.46); }
+
+            button:focus-visible,
+            input:focus-visible {
+              outline: 1px solid rgba(32,230,255,0.54);
+              outline-offset: 2px;
+            }
+
+            @media (max-width: 1023px) {
+              .vextor-menu { overflow-y: auto; }
+            }
+
+            @media (max-height: 760px) and (min-width: 1024px) {
+              .vextor-title,
+              .vextor-glitch-r,
+              .vextor-glitch-b {
+                letter-spacing: -0.04em !important;
+              }
+            }
           `}</style>
 
-          <AnimatePresence>
-            {showPrivacy && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="absolute inset-0 z-[100] flex items-center justify-center p-4"
-                style={{ background: 'rgba(0,0,0,0.72)' }}
-                onClick={() => setShowPrivacy(false)}
-              >
-                <motion.div
-                  initial={{ opacity: 0, y: 16, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                  transition={{ duration: 0.22 }}
-                  className="w-full max-w-2xl rounded-xl p-5 md:p-6"
-                  style={{ background: 'rgba(6,12,24,0.97)', border: '1px solid rgba(0,180,255,0.26)', boxShadow: '0 22px 60px rgba(0,0,0,0.55)' }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="flex items-center justify-between gap-3 pb-3" style={{ borderBottom: '1px solid rgba(148,163,184,0.2)' }}>
-                    <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#dbeafe' }}>Privacy Policy</h3>
-                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(147,197,253,0.75)' }}>Effective: May 29, 2026</span>
-                  </div>
-
-                  <div className="mt-4 space-y-3" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(219,234,254,0.88)', lineHeight: 1.65 }}>
-                    <div className="rounded-lg p-3" style={{ background: 'rgba(30,64,175,0.14)', border: '1px solid rgba(96,165,250,0.28)' }}>
-                      <p style={{ fontWeight: 700, color: '#bfdbfe', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>What We Collect</p>
-                      <ul className="list-disc pl-5 space-y-1">
-                        <li>Account and profile identifiers needed for login and persistence.</li>
-                        <li>Gameplay progression, match stats, and leaderboard records.</li>
-                        <li>Security telemetry used to detect exploit or abuse activity.</li>
-                      </ul>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: 'rgba(15,23,42,0.62)', border: '1px solid rgba(148,163,184,0.24)' }}>
-                      <p style={{ fontWeight: 700, color: '#bfdbfe', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>How Data Is Used</p>
-                      <ul className="list-disc pl-5 space-y-1">
-                        <li>Operating matchmaking, progression, moderation, and anti-cheat systems.</li>
-                        <li>Maintaining service reliability, security, and fair competitive play.</li>
-                        <li>Supporting account requests such as access, correction, or deletion.</li>
-                      </ul>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: 'rgba(15,23,42,0.62)', border: '1px solid rgba(148,163,184,0.24)' }}>
-                      <p style={{ fontWeight: 700, color: '#bfdbfe', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Important Notes</p>
-                      <ul className="list-disc pl-5 space-y-1">
-                        <li>We do not sell personal information.</li>
-                        <li>Third-party auth/storage providers process some data under their own policies.</li>
-                        <li>Policy updates may occur for legal, security, or feature changes.</li>
-                      </ul>
-                    </div>
-                  </div>
-                  <div className="mt-5 flex justify-between items-center gap-3">
-                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.08em', color: 'rgba(191,219,254,0.65)' }}>
-                      Questions: contact in-game support.
-                    </span>
-                    <button
-                      onClick={() => setShowPrivacy(false)}
-                      className="rounded-lg px-4 py-2"
-                      style={{ background: 'rgba(0,160,255,0.16)', border: '1px solid rgba(0,160,255,0.35)', color: '#dbeafe', fontFamily: '"Courier New", monospace', fontSize: 11, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}
-                    >
-                      Got It
-                    </button>
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {showTos && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="absolute inset-0 z-[100] flex items-center justify-center p-4"
-                style={{ background: 'rgba(0,0,0,0.72)' }}
-                onClick={() => setShowTos(false)}
-              >
-                <motion.div
-                  initial={{ opacity: 0, y: 16, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                  transition={{ duration: 0.22 }}
-                  className="w-full max-w-2xl rounded-xl p-5 md:p-6"
-                  style={{ background: 'rgba(18,8,24,0.97)', border: '1px solid rgba(236,72,153,0.26)', boxShadow: '0 22px 60px rgba(0,0,0,0.55)' }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="flex items-center justify-between gap-3 pb-3" style={{ borderBottom: '1px solid rgba(251,113,133,0.24)' }}>
-                    <h3 style={{ fontFamily: '"Arial Black", sans-serif', fontSize: 20, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#fce7f3' }}>Terms Of Service</h3>
-                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(251,113,133,0.78)' }}>Fair Play Required</span>
-                  </div>
-
-                  <div className="mt-4 space-y-3" style={{ fontFamily: '"Courier New", monospace', fontSize: 11, color: 'rgba(252,231,243,0.88)', lineHeight: 1.65 }}>
-                    <div className="rounded-lg p-3" style={{ background: 'rgba(131,24,67,0.18)', border: '1px solid rgba(244,114,182,0.3)' }}>
-                      <p style={{ fontWeight: 700, color: '#fbcfe8', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Prohibited Behavior</p>
-                      <ul className="list-disc pl-5 space-y-1">
-                        <li>Cheats, bots, macros, packet manipulation, exploit chaining, or service disruption.</li>
-                        <li>Harassment, impersonation, hate content, or abusive profile/chat behavior.</li>
-                        <li>Unauthorized reverse-engineering or bypass attempts against live systems.</li>
-                      </ul>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: 'rgba(30,41,59,0.62)', border: '1px solid rgba(251,113,133,0.24)' }}>
-                      <p style={{ fontWeight: 700, color: '#fbcfe8', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Enforcement</p>
-                      <ul className="list-disc pl-5 space-y-1">
-                        <li>Violations may result in warnings, suspensions, stat resets, or permanent bans.</li>
-                        <li>Leaderboard or progression actions may be rolled back to preserve integrity.</li>
-                        <li>Accounts are responsible for all activity performed under their credentials.</li>
-                      </ul>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: 'rgba(30,41,59,0.62)', border: '1px solid rgba(251,113,133,0.24)' }}>
-                      <p style={{ fontWeight: 700, color: '#fbcfe8', marginBottom: 6, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Service Changes</p>
-                      <ul className="list-disc pl-5 space-y-1">
-                        <li>Balance, progression, and online services may change for operational needs.</li>
-                        <li>By continuing to play, you accept these rules and enforcement decisions.</li>
-                      </ul>
-                    </div>
-                  </div>
-                  <div className="mt-5 flex justify-between items-center gap-3">
-                    <span style={{ fontFamily: '"Courier New", monospace', fontSize: 9, letterSpacing: '0.08em', color: 'rgba(251,207,232,0.66)' }}>
-                      Keep matches fair and respectful.
-                    </span>
-                    <button
-                      onClick={() => setShowTos(false)}
-                      className="rounded-lg px-4 py-2"
-                      style={{ background: 'rgba(236,72,153,0.16)', border: '1px solid rgba(236,72,153,0.35)', color: '#fce7f3', fontFamily: '"Courier New", monospace', fontSize: 11, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}
-                    >
-                      Understood
-                    </button>
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <PolicyModal open={showPrivacy} type="privacy" onClose={() => setShowPrivacy(false)} />
+          <PolicyModal open={showTos} type="terms" onClose={() => setShowTos(false)} />
         </motion.div>
       )}
     </AnimatePresence>
@@ -1025,9 +1078,10 @@ interface InteractiveTankPreviewProps {
   tankColor: string;
   isTeamsMode: boolean;
   parallax: { x: number; y: number };
+  compact?: boolean;
 }
 
-const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankColor, isTeamsMode, parallax }) => {
+const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankColor, isTeamsMode, parallax, compact = false }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const targetAngle = useRef(0);
@@ -1036,91 +1090,103 @@ const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankCol
   const [pulse, setPulse] = useState(0);
 
   useEffect(() => {
-    const tick = (t: number) => {
-      setTurretRotation(prev => {
-        let d = targetAngle.current - prev;
-        while (d < -180) d += 360;
-        while (d > 180) d -= 360;
-        return prev + d * 0.12;
+    const tick = (time: number) => {
+      setTurretRotation((prev) => {
+        let delta = targetAngle.current - prev;
+        while (delta < -180) delta += 360;
+        while (delta > 180) delta -= 360;
+        return prev + delta * 0.12;
       });
-      setChassisRotation(Math.sin(t / 1800) * 6);
-      setPulse(Math.sin(t / 800) * 0.5 + 0.5);
+      setChassisRotation(Math.sin(time / 1800) * 6);
+      setPulse(Math.sin(time / 800) * 0.5 + 0.5);
       rafRef.current = requestAnimationFrame(tick);
     };
-    rafRef.current = requestAnimationFrame(tick);
 
-    const onMove = (e: MouseEvent) => {
+    const onMove = (event: MouseEvent) => {
       if (!frameRef.current) return;
-      const r = frameRef.current.getBoundingClientRect();
-      targetAngle.current = Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * (180 / Math.PI);
+      const bounds = frameRef.current.getBoundingClientRect();
+      targetAngle.current =
+        Math.atan2(event.clientY - (bounds.top + bounds.height / 2), event.clientX - (bounds.left + bounds.width / 2)) *
+        (180 / Math.PI);
     };
-    window.addEventListener('mousemove', onMove);
+
+    rafRef.current = requestAnimationFrame(tick);
+    window.addEventListener('mousemove', onMove, { passive: true });
+
     return () => {
       cancelAnimationFrame(rafRef.current);
       window.removeEventListener('mousemove', onMove);
     };
   }, []);
 
-  const size = isTeamsMode ? 130 : 160;
+  const previewSize = compact ? (isTeamsMode ? 106 : 130) : isTeamsMode ? 132 : 164;
+  const frameSize = compact ? 188 : 234;
 
   return (
     <div
-      className="relative flex items-center justify-center"
+      className="relative flex shrink-0 items-center justify-center"
       style={{
-        width: 220,
-        height: 220,
-        transform: `translate3d(${parallax.x * 0.008}px, ${parallax.y * 0.008}px, 0)`,
+        width: frameSize,
+        height: frameSize,
+        transform: `translate3d(${parallax.x * 0.007}px, ${parallax.y * 0.007}px, 0)`,
       }}
     >
-      {[0, 1, 2].map(i => (
+      {[0, 1, 2].map((index) => (
         <div
-          key={i}
+          key={index}
           className="absolute rounded-full"
           style={{
-            width: 160 + i * 40,
-            height: 160 + i * 40,
-            border: `1px solid rgba(0,210,255,${0.06 - i * 0.015})`,
-            animation: `spin${i % 2 === 0 ? 'CW' : 'CCW'} ${18 + i * 8}s linear infinite`,
-            borderStyle: i === 1 ? 'dashed' : 'solid',
+            width: 148 + index * 38,
+            height: 148 + index * 38,
+            border: `1px solid rgba(32,230,255,${0.07 - index * 0.015})`,
+            animation: `spin${index % 2 === 0 ? 'CW' : 'CCW'} ${18 + index * 8}s linear infinite`,
+            borderStyle: index === 1 ? 'dashed' : 'solid',
           }}
         />
       ))}
 
-      <div className="absolute rounded-full" style={{
-        width: 100 + pulse * 40,
-        height: 100 + pulse * 40,
-        border: `1px solid rgba(0,210,255,${0.15 * (1 - pulse)})`,
-        transition: 'none',
-      }} />
+      <div
+        className="absolute rounded-full"
+        style={{
+          width: 94 + pulse * 42,
+          height: 94 + pulse * 42,
+          border: `1px solid rgba(44,255,199,${0.18 * (1 - pulse)})`,
+        }}
+      />
 
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full"
-        style={{ width: 100, height: 10, background: 'radial-gradient(ellipse, rgba(0,0,0,0.6), transparent)', filter: 'blur(6px)' }} />
+      <div
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full"
+        style={{
+          width: 116,
+          height: 12,
+          background: 'radial-gradient(ellipse, rgba(0,0,0,0.66), transparent)',
+          filter: 'blur(6px)',
+        }}
+      />
 
-      <div ref={frameRef} className="relative z-10" style={{ transition: 'filter 0.3s', filter: 'drop-shadow(0 0 20px rgba(0,180,255,0.15))' }}>
+      <div ref={frameRef} className="relative z-10" style={{ filter: 'drop-shadow(0 0 24px rgba(32,230,255,0.18))' }}>
         <TankPreview
           tankClass={TankClass.BASIC}
           color={tankColor}
-          size={size}
+          size={previewSize}
           turretRotation={turretRotation}
           chassisRotation={chassisRotation}
         />
       </div>
 
-      {[0, 90, 180, 270].map(deg => (
-        <div key={deg} className="absolute w-px h-2.5 origin-bottom"
+      {[0, 90, 180, 270].map((deg) => (
+        <div
+          key={deg}
+          className="absolute h-2.5 w-px origin-bottom"
           style={{
-            background: 'rgba(0,210,255,0.25)',
+            background: 'rgba(44,255,199,0.30)',
             left: '50%',
             bottom: '50%',
             transform: `rotate(${deg}deg) translateX(-50%)`,
-            transformOrigin: '50% 110px',
-          }} />
+            transformOrigin: `50% ${compact ? 94 : 116}px`,
+          }}
+        />
       ))}
-
-      <style>{`
-        @keyframes spinCW  { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes spinCCW { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
-      `}</style>
     </div>
   );
 };

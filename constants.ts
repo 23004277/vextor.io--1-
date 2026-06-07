@@ -881,6 +881,48 @@ export const QUESTS: Quest[] = [
 
 export const UPDATE_LOG = [
     {
+        id: 'v1.8.1',
+        title: "COMMAND INTERFACE SYNC",
+        date: "07/06/26",
+        content: "Focused on main menu presentation, spectate stability, beat-reactive soundtrack visuals, and update-log delivery so the command interface feels cleaner, smarter, and more alive.",
+        theme: "Interface",
+        tags: ["Menu", "Audio", "Spectate", "Update Log", "UX"],
+        sections: [
+            {
+                label: "Main Menu Command Deck",
+                items: [
+                    "Remastered the home screen into a cleaner fixed-height cockpit layout with better panel balance, larger featured leaderboard presence, and less wasted space.",
+                    "Removed the empty scroll slab under the main menu by locking the shell to viewport height and tightening panel spacing, footer sizing, and hero-stage proportions.",
+                    "Improved menu readability by reducing clipped labels, letting key update and mode text wrap properly, and redistributing control/navigation panels into more intentional zones.",
+                ],
+            },
+            {
+                label: "Spectate and Frontend Stability",
+                items: [
+                    "Reworked spectate mode so it can reliably follow live bots instead of drifting into invalid targets or weak observer states.",
+                    "Refined the spectate launch flow and observer presentation so bot-watching feels like a real feature instead of a fallback utility button.",
+                    "Hardened achievement toast cleanup so rewards now dismiss after 1.75 seconds without getting stuck on screen from stale timing state.",
+                ],
+            },
+            {
+                label: "Mainframe Audio Reactor",
+                items: [
+                    "Switched the menu soundtrack over to Final Sector Charge and kept it menu-only with proper fade-in, fade-out, and in-match mute behavior.",
+                    "Expanded the audio visualizer into a full hero-stage reactor that uses beat pulse, downbeat accenting, timeline progress, and loop state instead of a tiny passive meter.",
+                    "Improved visualizer sync so columns, orb pulse, and glow spikes react harder to musical hits and stronger bar transitions.",
+                ],
+            },
+            {
+                label: "Patch Relay and Release Notes",
+                items: [
+                    "Extended the release-note pipeline so the in-game update archive, changelog file, and Discord relay can be sourced from the same more detailed release structure.",
+                    "Added richer patch-note framing for recent feature drops including menu remasters, objective warfare, bot intelligence, and interface polish.",
+                    "Prepared the latest release packaging so Discord update announcements can reflect the current live feature set more accurately.",
+                ],
+            },
+        ],
+    },
+    {
         id: 'v1.8.0',
         title: "DOMINION AND VOID ASCENT",
         date: "05/06/26",

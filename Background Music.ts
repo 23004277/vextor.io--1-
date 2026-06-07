@@ -12,6 +12,8 @@ export type BackgroundMusicSection =
 export type BackgroundMusicVisualizerFrame = {
   bars: number[];
   beatPulse: number;
+  beatPhase: number;
+  downbeatPulse: number;
   currentTime: number;
   duration: number;
   progress: number;
@@ -178,19 +180,27 @@ export class BackgroundMusic {
     const beatProgress = this.getBeatProgress(currentTime);
     const barProgress = this.getBarProgress(currentTime);
     const pulseBase = Math.max(0, Math.cos(beatProgress * Math.PI * 2));
-    const beatPulse = this.clamp(sectionData.energy * 0.45 + pulseBase * 0.55, 0, 1.2);
+    const beatPhase = 1 - Math.min(1, beatProgress);
+    const sharpBeat = Math.pow(Math.max(0, 1 - beatProgress * 1.8), 2.6);
+    const downbeatProgress = Math.min(barProgress, 1 - barProgress) * 2;
+    const downbeatPulse = Math.pow(Math.max(0, 1 - downbeatProgress * 1.35), 3.2);
+    const beatPulse = this.clamp(sectionData.energy * 0.35 + pulseBase * 0.28 + sharpBeat * 0.52 + downbeatPulse * 0.24, 0, 1.35);
     const bars = Array.from({ length: 28 }, (_, index) => {
       const lanePhase = currentTime * (2.2 + (index % 5) * 0.19) + index * 0.53;
-      const groove = Math.sin(lanePhase) * 0.28 + Math.cos(lanePhase * 0.52 + beatProgress * Math.PI * 2) * 0.16;
-      const accent = index % 4 === 0 ? pulseBase * 0.32 : 0;
+      const groove = Math.sin(lanePhase) * 0.22 + Math.cos(lanePhase * 0.52 + beatProgress * Math.PI * 2) * 0.12;
+      const beatLaneOffset = ((index % 4) / 4) * 0.18;
+      const beatAccent = Math.max(0, sharpBeat - beatLaneOffset) * (index % 2 === 0 ? 0.5 : 0.34);
+      const barAccent = index % 4 === 0 ? downbeatPulse * 0.48 : index % 2 === 0 ? downbeatPulse * 0.18 : 0;
       const lift = sectionData.energy * (0.52 + (index % 6) * 0.04);
       const sweep = Math.max(0, Math.sin(barProgress * Math.PI * 2 + index * 0.41)) * 0.18;
-      return this.clamp(0.12 + lift + groove + accent + sweep, 0.08, 1.08);
+      return this.clamp(0.09 + lift + groove + beatAccent + barAccent + sweep, 0.06, 1.12);
     });
 
     return {
       bars,
       beatPulse,
+      beatPhase,
+      downbeatPulse,
       currentTime,
       duration,
       progress,
