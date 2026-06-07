@@ -2,6 +2,29 @@
 
 This file mirrors the in-game update archive so the latest arena changes are easy to read outside the client too.
 
+## v1.8.3 - Enemy AI Combat Brain
+Date: 07/06/26
+Theme: AI
+Tags: Enemy AI, Pathfinding, Targeting, Combat
+
+### Summary
+Enemy tanks got a proper battlefield intelligence pass. They now route around danger, choose cleaner fights, dodge smarter, and hold better combat spacing instead of blindly rushing or wobbling under pressure.
+
+### Enemy Movement
+- Added route-corridor awareness so bots avoid pushing straight through enemy clusters, crashers, bosses, and dangerous shape lanes.
+- Added remembered detour points for stuck recovery, reducing jittery left-right movement when bots get blocked.
+- Added enemy aim-lane avoidance so bots sidestep obvious hostile barrel lines instead of walking into free shots.
+
+### Targeting
+- Improved target scoring with route safety, shot-lane quality, range fit, ally pressure, finisher windows, and enemy isolation.
+- Bots now prioritize enemies attacking them or nearby allies, making team fights feel more responsive.
+- Farming targets now account for route danger so bots are less likely to body-slam through bad PvE paths.
+
+### Combat Discipline
+- Added smarter fight-commit logic so bots stay aggressive when they can finish a target, but avoid doomed pushes when pressure is too high.
+- Improved bullet dodging with time-to-impact checks instead of only reacting to nearby projectiles.
+- Added dynamic combat range so wounded bots kite wider while still fighting instead of instantly fleeing.
+
 ## v1.8.2 - Audio Reactor Alignment
 Date: 07/06/26
 Theme: Interface
