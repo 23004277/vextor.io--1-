@@ -136,8 +136,20 @@ const App: React.FC = () => {
     musicVolume: DEFAULT_SETTINGS.musicVolume,
   });
   const menuMusicRef = useRef<BackgroundMusic | null>(null);
+  const isPlayingRef = useRef(false);
   const previousCurrencyRef = useRef<number | null>(null);
   const currencyHydratedRef = useRef(false);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  const silenceMenuMusic = useCallback(() => {
+    const music = menuMusicRef.current;
+    if (!music) return;
+    music.pauseImmediately();
+    setMenuMusicSnapshot(music.getVisualizerFrame());
+  }, []);
 
   // Tooltip State
   const [tooltip, setTooltip] = useState<{ label: string; desc?: string; visible: boolean }>({
@@ -247,6 +259,10 @@ const App: React.FC = () => {
     if (!engine) return;
 
     const unlockMainMenuAudio = () => {
+      if (isPlayingRef.current) {
+        silenceMenuMusic();
+        return;
+      }
       engine.sound.enable();
       menuMusicRef.current?.resume().catch(() => undefined);
     };
@@ -258,7 +274,7 @@ const App: React.FC = () => {
       window.removeEventListener('pointerdown', unlockMainMenuAudio);
       window.removeEventListener('keydown', unlockMainMenuAudio);
     };
-  }, [engine]);
+  }, [engine, silenceMenuMusic]);
 
   useEffect(() => {
     const music = new BackgroundMusic();
@@ -296,12 +312,12 @@ const App: React.FC = () => {
     if (!music) return;
 
     if (isPlaying) {
-      music.pauseImmediately();
+      silenceMenuMusic();
       return;
     }
 
     music.resume().catch(() => undefined);
-  }, [isPlaying]);
+  }, [isPlaying, silenceMenuMusic]);
 
   useEffect(() => {
     if (playerName) localStorage.setItem('vextor_pilot_name', playerName);
@@ -601,7 +617,7 @@ const App: React.FC = () => {
             engine.addNotification("TEAM UNBALANCED - CHOOSE OTHER SIDE", "#ff4444");
             return;
         }
-        menuMusicRef.current?.pauseImmediately();
+        silenceMenuMusic();
         engine.sound.enable();
         engine.sound.playUIClick();
         engine.setPlayerName(playerName || 'GUEST_PILOT');
@@ -666,6 +682,7 @@ const App: React.FC = () => {
 
   const handleSpectate = () => {
     if (engine) {
+        silenceMenuMusic();
         engine.sound.enable();
         engine.sound.playUIClick();
         engine.setGameMode(gameMode);

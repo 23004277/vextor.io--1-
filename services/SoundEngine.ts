@@ -259,6 +259,7 @@ export class SoundEngine {
   private getSoundProfile(type: TankClass): SoundProfile {
     const profiles: Partial<Record<TankClass, SoundProfile>> = {
       [TankClass.SNIPER]: { baseFreq: 440, sweepDepth: 0.02, duration: 0.45, amplitude: 0.55, waveType: 'sawtooth', attackTime: 0.008, noiseIntensity: 1.0, noiseDecay: 0.15, metalResonance: 1500, addSub: true },
+      [TankClass.TRAPPER]: { baseFreq: 168, sweepDepth: 0.08, duration: 0.32, amplitude: 0.42, waveType: 'triangle', attackTime: 0.01, noiseIntensity: 0.82, noiseDecay: 0.14, metalResonance: 980, addSub: true },
       [TankClass.ASSASSIN]: { baseFreq: 460, sweepDepth: 0.02, duration: 0.4, amplitude: 0.5, waveType: 'sawtooth', attackTime: 0.008, noiseIntensity: 0.9, noiseDecay: 0.12, metalResonance: 1200, addSub: true },
       [TankClass.RANGER]: { baseFreq: 420, sweepDepth: 0.01, duration: 0.5, amplitude: 0.6, waveType: 'sawtooth', attackTime: 0.01, noiseIntensity: 1.1, noiseDecay: 0.2, metalResonance: 1800, addSub: true },
       [TankClass.STALKER]: { baseFreq: 400, sweepDepth: 0.01, duration: 0.5, amplitude: 0.6, waveType: 'sawtooth', attackTime: 0.01, noiseIntensity: 1.1, noiseDecay: 0.2, metalResonance: 1800, addSub: true },

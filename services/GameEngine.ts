@@ -40,6 +40,13 @@ type DominionZoneDef = {
 
 type DominionWeaponProfile = 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE';
 
+const DOMINION_TANK_MAX_HEALTH = 30000;
+const DOMINION_TANK_RADIUS = 62;
+const ELITE_TANK_HEALTH_BASE = 22000;
+const ELITE_TANK_HEALTH_PER_LEVEL = 190;
+const ELITE_TANK_SHIELD_BASE = 320;
+const ELITE_TANK_SPEED_CAP = 0.92;
+
 const SKIN_APPLICATION = {
     clamp: {
         saturation: [22, 98] as [number, number],
@@ -132,7 +139,31 @@ function teamBaseHsl(team: Team): Hsl {
 }
 
 function getTeamProjectileColor(team: Team): string {
-    return team === Team.NONE ? COLORS.barrel : getTeamColor(team);
+    if (team === Team.NONE) return COLORS.barrel;
+    const engine = (window as any).gameEngine as GameEngine | undefined;
+    const playerTeam = engine?.player?.team ?? Team.NONE;
+    if (isPlayableTeam(playerTeam) && isPlayableTeam(team)) {
+        return playerTeam === team ? COLORS.player : COLORS.enemy;
+    }
+    return getTeamColor(team);
+}
+
+function getTeamSummonColor(team: Team): string {
+    if (team === Team.NONE) return COLORS.barrel;
+    const engine = (window as any).gameEngine as GameEngine | undefined;
+    const playerTeam = engine?.player?.team ?? Team.NONE;
+    if (isPlayableTeam(playerTeam) && isPlayableTeam(team)) {
+        return playerTeam === team ? COLORS.player : COLORS.enemy;
+    }
+    return getTeamColor(team);
+}
+
+function formatCombatTargetLabel(label: string): string {
+    return String(label || 'Target')
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase();
 }
 
 function stripInjectedTeamPrefix(name: string): string {
@@ -453,7 +484,7 @@ class Entity {
     
     // Only apply visual squeeze to non-tank entities (like shapes) globally
     // We limit the squeeze to preserve shape integrity during extreme scales (like spawn/death)
-    if (this.type !== EntityType.PLAYER && this.type !== EntityType.ENEMY && this.type !== EntityType.ELITE_TANK) {
+    if (this.type !== EntityType.PLAYER && this.type !== EntityType.ENEMY && this.type !== EntityType.ELITE_TANK && this.type !== EntityType.DOMINION_TANK) {
         const squeeze = Math.max(0.7, Math.min(1.3, 2 - this.visualScale));
         ctx.scale(this.visualScale, squeeze);
     }
@@ -649,7 +680,7 @@ class MiniTank extends Entity {
     combatOrbitDistance: number = 180;
 
     constructor(id: number, x: number, y: number, owner: Tank, variant: 'BASIC' | 'TWIN' = 'BASIC') {
-        super(id, EntityType.MINI_TANK, x, y, 14, owner.color);
+        super(id, EntityType.MINI_TANK, x, y, 14, getTeamSummonColor(owner.team));
         this.owner = owner;
         this.variant = variant;
         this.team = owner.team;
@@ -832,6 +863,7 @@ class MiniTank extends Entity {
     }
 
     override drawBody(ctx: CanvasRenderingContext2D) {
+        this.color = getTeamSummonColor(this.team);
         const isManagerUnit = this.owner.classType === TankClass.MANAGER;
         const bLen = this.radius * 1.8;
         const bWid = this.radius * 0.7;
@@ -900,7 +932,7 @@ class Drone extends Entity {
     orbitDistance: number = 140;
 
     constructor(id: number, x: number, y: number, owner: Tank) {
-        super(id, EntityType.DRONE, x, y, 10, owner.color);
+        super(id, EntityType.DRONE, x, y, 10, getTeamSummonColor(owner.team));
         this.owner = owner;
         this.team = owner.team;
         this.friction = 0.94; 
@@ -926,6 +958,7 @@ class Drone extends Entity {
     }
 
     override update(dt: number) {
+        this.color = getTeamSummonColor(this.team);
         const timeScale = Math.min(dt * 60, 2.0);
         const engine = (window as any).gameEngine;
         const isManagerOwner = this.owner.classType === TankClass.MANAGER;
@@ -1101,7 +1134,7 @@ class BaseDefenseDrone extends Entity {
     chaseTimerMs: number = 0;
 
     constructor(id: number, team: Team, anchor: Vector2, orbitSlot: number, orbitRadius: number) {
-        const color = team === Team.BLUE ? '#42c8ff' : '#ff5f7e';
+        const color = getTeamSummonColor(team);
         super(id, EntityType.BASE_DEFENSE_DRONE, anchor.x, anchor.y, 12, color);
         this.team = team;
         this.anchor = { ...anchor };
@@ -1160,7 +1193,10 @@ class BaseDefenseDrone extends Entity {
             const toTarget = Vector.sub(target.pos, this.pos);
             const dist = Vector.mag(toTarget);
             const dir = dist > 0.001 ? Vector.normalize(toTarget) : { x: 0, y: 0 };
-            this.acc = Vector.mult(dir, 6.9);
+            const desiredSpeed = dist > 220 ? 3.3 : dist > 150 ? 2.75 : dist > 96 ? 2.1 : 1.15;
+            const desiredVel = Vector.mult(dir, desiredSpeed);
+            const steering = Vector.mult(Vector.sub(desiredVel, this.vel), 0.7);
+            this.acc = steering;
             this.chaseTimerMs += dt * 1000;
 
             const maxChaseDist = this.orbitRadius + SAFE_ZONE_WARNING_RADIUS + 420;
@@ -1168,17 +1204,23 @@ class BaseDefenseDrone extends Entity {
             if (distFromAnchor > maxChaseDist || this.chaseTimerMs > 7000) {
                 this.targetId = null;
                 this.aiState = AIState.RETURNING;
-            } else if (dist < 140 && this.attackCooldownMs <= 0 && (target.type === EntityType.PLAYER || target.type === EntityType.ENEMY || target.type === EntityType.ELITE_TANK)) {
+            } else if (dist < 148 && this.attackCooldownMs <= 0 && (target.type === EntityType.PLAYER || target.type === EntityType.ENEMY || target.type === EntityType.ELITE_TANK)) {
                 const victim = target as Tank;
-                const pctCurrent = victim.health * 0.028;
-                const pctMax = victim.maxHealth * 0.02;
-                const dmg = Math.min(victim.maxHealth * 0.04, Math.max(8, pctCurrent + pctMax));
+                const missingRatio = 1 - (victim.health / Math.max(1, victim.maxHealth));
+                const dmg = Math.min(victim.maxHealth * 0.085, Math.max(20, victim.maxHealth * (0.032 + missingRatio * 0.024)));
                 victim.takeDamage(dmg, this.id);
-                this.attackCooldownMs = 200;
-                engine.particles.push(new Particle(victim.pos.x, victim.pos.y, this.team === Team.BLUE ? 'rgba(66,200,255,0.45)' : 'rgba(255,95,126,0.45)', 8, 14, 'RING'));
+                this.attackCooldownMs = 380;
+                engine.particles.push(new Particle(victim.pos.x, victim.pos.y, this.team === Team.BLUE ? 'rgba(66,200,255,0.52)' : 'rgba(255,95,126,0.52)', 9, 14, 'RING'));
             }
-            this.rotation = 0;
+            const desiredRotation = Math.atan2(dir.y, dir.x);
+            const delta = Math.atan2(Math.sin(desiredRotation - this.rotation), Math.cos(desiredRotation - this.rotation));
+            this.rotation += delta * Math.min(1, dt * 8.5);
             super.update(dt);
+            const speed = Vector.mag(this.vel);
+            const speedCap = 3.6;
+            if (speed > speedCap) {
+                this.vel = Vector.mult(Vector.normalize(this.vel), speedCap);
+            }
         } else {
             if (this.scanCooldownMs <= 0) {
                 this.scanCooldownMs = SAFE_ZONE_DRONE_SCAN_INTERVAL_MS + (this.orbitSlot % 3) * 30;
@@ -1193,12 +1235,13 @@ class BaseDefenseDrone extends Entity {
             this.vel.y = 0;
             this.acc.x = 0;
             this.acc.y = 0;
-            this.rotation = 0;
+            this.rotation += dt * 1.2;
             if (this.aiState === AIState.RETURNING && Vector.dist(this.pos, orbitTarget) < 16) this.aiState = AIState.ORBIT_IDLE;
         }
     }
 
     override drawBody(ctx: CanvasRenderingContext2D) {
+        this.color = getTeamSummonColor(this.team);
         const pulse = 0.55 + Math.sin(Date.now() * 0.009 + this.id) * 0.45;
         const glow = this.team === Team.BLUE ? `rgba(66,200,255,${0.22 + pulse * 0.35})` : `rgba(255,95,126,${0.22 + pulse * 0.35})`;
         ctx.save();
@@ -1560,7 +1603,7 @@ class Tank extends Entity {
   rebirthDroneLaunchCooldownMs: number = 0;
   colossalDroneLaunchCooldownMs: number = 0;
 
-  constructor(id: number, x: number, y: number, isPlayer: boolean, team: Team) {
+    constructor(id: number, x: number, y: number, isPlayer: boolean, team: Team) {
     let color = getTeamColor(team === Team.NONE ? Team.RED : team);
     if (isPlayer) color = getTeamColor(team === Team.NONE ? Team.BLUE : team);
     super(id, isPlayer ? EntityType.PLAYER : EntityType.ENEMY, x, y, 20, color);
@@ -3504,19 +3547,19 @@ class Tank extends Entity {
                         if (e.type === EntityType.SHAPE) {
                             const shape = e as Shape;
                             const isAlphaPentagon = shape.shapeType === ShapeType.PENTAGON && shape.rarity === ShapeRarity.LEGENDARY;
-                            return isAlphaPentagon
-                              ? 1.6
-                              : shape.shapeType === ShapeType.OCTAGON
-                                ? 1.45
-                                : shape.shapeType === ShapeType.HEXAGON
-                                  ? 1.6
-                                  : shape.shapeType === ShapeType.HEPTAGON
-                                    ? 1.7
-                                    : shape.shapeType === ShapeType.PENTAGON
-                                      ? 1.8
-                                      : shape.shapeType === ShapeType.DIAMOND
-                                        ? 2.55
-                                        : 3;
+                            if (isAlphaPentagon) return 1.6;
+                            switch (shape.shapeType) {
+                                case ShapeType.DODECAGON: return 1.18;
+                                case ShapeType.DECAGON: return 1.26;
+                                case ShapeType.NONAGON: return 1.34;
+                                case ShapeType.OCTAGON: return 1.45;
+                                case ShapeType.HEXAGON: return 1.6;
+                                case ShapeType.HEPTAGON: return 1.7;
+                                case ShapeType.PENTAGON: return 1.8;
+                                case ShapeType.STAR: return 2.18;
+                                case ShapeType.DIAMOND: return 2.55;
+                                default: return 3;
+                            }
                         }
                         return 3;
                     };
@@ -3835,7 +3878,7 @@ class Tank extends Entity {
     super.takeDamage(adjusted, sourceId, isBodyDamage);
   }
 
-  updateStats() {
+    updateStats() {
     const powerTokenBuff = this.activeBuffs?.find(b => b.type === 'POWER_TOKEN');
     const bossOverrideBuff = this.activeBuffs?.find(b => b.type === 'BOSS_OVERRIDE');
     const statBonus = powerTokenBuff ? 2 : 0;
@@ -3898,6 +3941,21 @@ class Tank extends Entity {
             this.drainAuraDamage = 72 + this.level * 0.9;
             this.drainLifestealEfficiency = 0.38;
         }
+    } else if (this.type === EntityType.ELITE_TANK) {
+        this.team = Team.NONE;
+        this.maxHealth = ELITE_TANK_HEALTH_BASE + (this.level * ELITE_TANK_HEALTH_PER_LEVEL);
+        this.maxShield = ELITE_TANK_SHIELD_BASE + this.level * 4;
+        this.damage = Math.round((BASE_STATS.bodyDamage + 54) * (1.05 + (this.level - 1) * 0.01));
+        this.radius *= 1.42;
+        this.mass = this.radius * 3.2;
+        this.stats[StatType.MOVEMENT_SPEED] = Math.min(this.stats[StatType.MOVEMENT_SPEED], 1);
+        this.stats[StatType.BODY_DAMAGE] = Math.max(this.stats[StatType.BODY_DAMAGE], 4);
+        this.stats[StatType.MAX_HEALTH] = Math.max(this.stats[StatType.MAX_HEALTH], 6);
+        this.stats[StatType.BULLET_DAMAGE] = Math.max(this.stats[StatType.BULLET_DAMAGE], 6);
+        this.stats[StatType.BULLET_PENETRATION] = Math.max(this.stats[StatType.BULLET_PENETRATION], 6);
+        this.stats[StatType.RELOAD] = Math.max(this.stats[StatType.RELOAD], 5);
+        this.stats[StatType.BULLET_SPEED] = Math.max(this.stats[StatType.BULLET_SPEED], 4);
+        this.spread = Math.min(this.spread, 0.05);
     } else if (isPacifist) {
         // Pacifist Scaling Upgraded
         this.maxHealth = BASE_STATS.health + (this.stats[StatType.MAX_HEALTH] + statBonus) * 140 + (this.level - 1) * 10;
@@ -3985,6 +4043,7 @@ class Tank extends Entity {
 
     // Apply Class-Specific FOVs (smaller values zoom out, enlarging the field of view)
     if (this.classType === TankClass.SNIPER) this.fov = 0.85;
+    else if (this.classType === TankClass.TRAPPER) this.fov = 0.88;
     else if (this.classType === TankClass.ASSASSIN) this.fov = 0.76;
     else if (this.classType === TankClass.HUNTER) this.fov = 0.82;
     else if (this.classType === TankClass.X_HUNTER) this.fov = 0.74;
@@ -4253,10 +4312,14 @@ class Tank extends Entity {
                         if (entity.type === EntityType.SHAPE) {
                             const shape = entity as Shape;
                             if (shape.shapeType === ShapeType.PENTAGON && shape.rarity === ShapeRarity.LEGENDARY) return 1;
+                            if (shape.shapeType === ShapeType.DODECAGON) return 0.82;
+                            if (shape.shapeType === ShapeType.DECAGON) return 0.96;
+                            if (shape.shapeType === ShapeType.NONAGON) return 1.12;
                             if (shape.shapeType === ShapeType.OCTAGON) return 1.4;
                             if (shape.shapeType === ShapeType.HEXAGON) return 1.7;
                             if (shape.shapeType === ShapeType.HEPTAGON) return 1.9;
                             if (shape.shapeType === ShapeType.PENTAGON) return 2;
+                            if (shape.shapeType === ShapeType.STAR) return 2.55;
                             if (shape.shapeType === ShapeType.DIAMOND) return 3;
                             return 4;
                         }
@@ -4329,7 +4392,7 @@ class Tank extends Entity {
     }
   }
 
-  override drawBody(ctx: CanvasRenderingContext2D) {
+  override drawBody(ctx: CanvasRenderingContext2D) { 
       this.drawMainShape(ctx);
   }
 }
@@ -4350,12 +4413,13 @@ class EliteTank extends Tank {
     constructor(id: number, x: number, y: number, cls: TankClass) {
         super(id, x, y, false, Team.NONE);
         this.type = EntityType.ELITE_TANK;
+        this.classType = cls;
         this.classTypeOriginal = cls;
         this.name = `Elite ${cls}`;
         this.level = 45; 
-        this.maxHealth = 100000;
-        this.health = 100000;
-        this.displayHealth = 100000;
+        this.maxHealth = ELITE_TANK_HEALTH_BASE + (this.level * ELITE_TANK_HEALTH_PER_LEVEL);
+        this.health = this.maxHealth;
+        this.displayHealth = this.maxHealth;
         this.color = '#1a1a1a';
         this.damage = 60;
         this.mass = 500;
@@ -4427,44 +4491,56 @@ class DominionTank extends Tank {
         this.classType = TankClass.QUAD_TANK;
         this.name = 'Dominion Tank';
         this.level = 55;
-        this.radius = 60;
+        this.radius = DOMINION_TANK_RADIUS;
         this.mass = 999999;
         this.friction = 1;
         this.invulnerableTime = 0;
         this.color = COLORS.dominionNeutral;
-        this.maxHealth = 11800;
+        this.maxHealth = DOMINION_TANK_MAX_HEALTH;
         this.health = this.maxHealth;
         this.displayHealth = this.maxHealth;
         this.damage = 96;
         this.visionRange = this.attackRadius;
         this.spread = 0.035;
+        this.visualScale = 1;
         this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 4, [StatType.BULLET_DAMAGE]: 4, [StatType.BULLET_PENETRATION]: 4, [StatType.RELOAD]: 4 };
         this.applyWeaponProfile();
         this.team = Team.NONE;
+    }
+
+    private getProfileLabel(): string {
+        switch (this.weaponProfile) {
+            case 'DESTROYER': return 'Destroyer Dominion';
+            case 'GUNNER': return 'Gunner Dominion';
+            case 'TRAPPER': return 'Octo Trapper';
+            case 'TRIPLE':
+            default:
+                return 'Triple Dominion';
+        }
     }
 
     private applyWeaponProfile() {
         switch (this.weaponProfile) {
             case 'DESTROYER':
                 this.classType = TankClass.DESTROYER;
-                this.radius = 60;
-                this.maxHealth = 11000;
+                this.radius = DOMINION_TANK_RADIUS;
+                this.maxHealth = DOMINION_TANK_MAX_HEALTH;
                 this.damage = 92;
                 this.spread = 0.018;
                 this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 3, [StatType.BULLET_DAMAGE]: 4, [StatType.BULLET_PENETRATION]: 4, [StatType.RELOAD]: 3 };
                 break;
             case 'GUNNER':
                 this.classType = TankClass.GUNNER;
-                this.radius = 61;
-                this.maxHealth = 11600;
+                this.radius = DOMINION_TANK_RADIUS;
+                this.maxHealth = DOMINION_TANK_MAX_HEALTH;
                 this.damage = 86;
                 this.spread = 0.045;
                 this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 4, [StatType.BULLET_DAMAGE]: 3, [StatType.BULLET_PENETRATION]: 3, [StatType.RELOAD]: 4 };
                 break;
             case 'TRAPPER':
-                this.classType = TankClass.OCTO_TANK;
-                this.radius = 64;
-                this.maxHealth = 12000;
+                this.classType = TankClass.TRAPPER;
+                this.radius = DOMINION_TANK_RADIUS;
+                this.maxHealth = DOMINION_TANK_MAX_HEALTH;
                 this.damage = 72;
                 this.spread = 0.008;
                 this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 2, [StatType.BULLET_DAMAGE]: 2, [StatType.BULLET_PENETRATION]: 5, [StatType.RELOAD]: 3 };
@@ -4472,18 +4548,22 @@ class DominionTank extends Tank {
             case 'TRIPLE':
             default:
                 this.classType = TankClass.TRIPLE_TANK;
-                this.radius = 62;
-                this.maxHealth = 11400;
+                this.radius = DOMINION_TANK_RADIUS;
+                this.maxHealth = DOMINION_TANK_MAX_HEALTH;
                 this.damage = 88;
                 this.spread = 0.028;
                 this.stats = { ...this.stats, [StatType.BULLET_SPEED]: 4, [StatType.BULLET_DAMAGE]: 3, [StatType.BULLET_PENETRATION]: 3, [StatType.RELOAD]: 4 };
                 break;
         }
-        this.barrels = TANK_CONFIGS[this.classType];
+        this.barrels = this.weaponProfile === 'TRAPPER'
+            ? TANK_CONFIGS[TankClass.OCTO_TANK].map((barrel) => [1.26, 0.82, barrel[2], barrel[3], 1.38, barrel[5], 0.14])
+            : TANK_CONFIGS[this.classType];
         this.barrelCooldowns = new Array(this.barrels.length).fill(0);
         this.barrelMaxCooldowns = new Array(this.barrels.length).fill(140);
         this.barrelHeat = new Array(this.barrels.length).fill(0);
         this.barrelRecoilOffsets = new Array(this.barrels.length).fill(0);
+        this.visualScale = 1;
+        this.mass = 999999;
         this.health = this.maxHealth;
         this.displayHealth = this.maxHealth;
     }
@@ -4492,7 +4572,8 @@ class DominionTank extends Tank {
         this.ownerTeam = team;
         this.team = team;
         this.color = team === Team.NONE ? COLORS.dominionNeutral : getTeamColor(team);
-        this.name = team === Team.NONE ? 'Neutral Dominion' : `${team} Dominion`;
+        const profileLabel = this.getProfileLabel();
+        this.name = team === Team.NONE ? `Neutral ${profileLabel}` : `${team} ${profileLabel}`;
     }
 
     resetForStage(team: Team, owned: boolean) {
@@ -4507,14 +4588,20 @@ class DominionTank extends Tank {
         this.pos = { ...this.homePos };
         this.vel = { x: 0, y: 0 };
         this.acc = { x: 0, y: 0 };
+        this.visualScale = 1;
     }
 
     override update(dt: number) {
         const lockedPos = { ...this.homePos };
+        this.radius = DOMINION_TANK_RADIUS;
+        this.maxHealth = DOMINION_TANK_MAX_HEALTH;
+        this.visualScale = 1;
+        this.mass = 999999;
         this.pos = lockedPos;
         this.vel = { x: 0, y: 0 };
         this.acc = { x: 0, y: 0 };
         super.update(dt);
+        this.visualScale = 1;
         this.pos = lockedPos;
         this.vel = { x: 0, y: 0 };
         this.acc = { x: 0, y: 0 };
@@ -4642,6 +4729,12 @@ class Boss extends Entity {
     summonCooldown: number = 0;
     volleyCooldown: number = 0;
     xpValue: number = 500000;
+    playerDamageAccumulator: number = 0;
+    playerDamageRecentTotal: number = 0;
+    playerDamageSampleTimer: number = 0;
+    playerDamageSamples: number[] = Array(20).fill(0);
+    playerDps: number = 0;
+    lastPlayerDamageAt: number = 0;
 
     constructor(id: number, archetype?: 'SINGULARITY' | 'SIEGEBREAKER' | 'SWARMLORD') {
         const resolved = archetype ?? (Math.random() < 0.33 ? 'SIEGEBREAKER' : Math.random() < 0.5 ? 'SWARMLORD' : 'SINGULARITY');
@@ -4665,10 +4758,111 @@ class Boss extends Entity {
     
     override takeDamage(amount: number, sourceId: number | null = null, isBodyDamage: boolean = false) {
         if (sourceId !== null && amount > 0) this.damageDealtBy.set(sourceId, (this.damageDealtBy.get(sourceId) || 0) + amount);
+        if (amount > 0) {
+            const engine = (window as any).gameEngine as GameEngine | undefined;
+            const ownerId = this.resolveOwnerId(sourceId);
+            if (engine?.player && ownerId === engine.player.id) {
+                this.playerDamageAccumulator += amount;
+                this.lastPlayerDamageAt = Date.now();
+            }
+        }
         super.takeDamage(amount, sourceId, isBodyDamage);
+    }
+
+    private resolveOwnerId(sourceId: number | null): number | null {
+        if (sourceId === null) return null;
+        const engine = (window as any).gameEngine as GameEngine | undefined;
+        if (!engine) return sourceId;
+        const source = engine.entities.find((entity: Entity) => entity.id === sourceId);
+        if (!source) return sourceId;
+        if ((source.type === EntityType.BULLET || source.type === EntityType.DRONE || source.type === EntityType.MINI_TANK) && 'ownerId' in source) {
+            return (source as Entity & { ownerId: number }).ownerId;
+        }
+        if (source.type === EntityType.PLAYER || source.type === EntityType.ENEMY || source.type === EntityType.ELITE_TANK) return source.id;
+        return sourceId;
+    }
+
+    private shouldShowCombatReadout(): boolean {
+        if (this.isDead || this.shouldRemove) return false;
+        const engine = (window as any).gameEngine as GameEngine | undefined;
+        const player = engine?.player;
+        if (!player || player.isDead) return false;
+        if (Date.now() - this.lastPlayerDamageAt > 3600) return false;
+        return Vector.dist(player.pos, this.pos) < 1400;
+    }
+
+    private drawCombatReadout(ctx: CanvasRenderingContext2D) {
+        const now = Date.now();
+        const visibleForMs = now - this.lastPlayerDamageAt;
+        const fade = visibleForMs <= 2400 ? 1 : Math.max(0, 1 - ((visibleForMs - 2400) / 1100));
+        if (fade <= 0) return;
+
+        const label = formatCombatTargetLabel(this.name);
+        const panelWidth = Math.max(150, Math.min(220, this.radius * 1.15));
+        const panelHeight = 48;
+        const panelX = this.pos.x - panelWidth / 2;
+        const panelY = this.pos.y + this.radius + 28;
+        const graphX = panelX + 9;
+        const graphY = panelY + 31;
+        const graphWidth = panelWidth - 18;
+        const graphHeight = 9;
+        const hpText = `${Math.max(0, Math.ceil(this.health))} HP`;
+        const dpsText = `${Math.max(0, Math.round(this.playerDps))} DPS`;
+        const maxSample = Math.max(1, ...this.playerDamageSamples);
+
+        ctx.save();
+        ctx.globalAlpha = fade;
+        ctx.fillStyle = 'rgba(2, 6, 12, 0.88)';
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.34)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(panelX, panelY, panelWidth, panelHeight, 10);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(255,255,255,0.52)';
+        ctx.font = '700 8px Ubuntu';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, panelX + 9, panelY + 10);
+
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.font = '700 10px Ubuntu';
+        ctx.fillText(hpText, panelX + 9, panelY + 21);
+
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillText(dpsText, panelX + panelWidth - 9, panelY + 21);
+
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillRect(graphX, graphY, graphWidth, graphHeight);
+
+        const barGap = 1;
+        const barWidth = Math.max(2, (graphWidth - (this.playerDamageSamples.length - 1) * barGap) / this.playerDamageSamples.length);
+        this.playerDamageSamples.forEach((sample, index) => {
+            const normalized = sample <= 0 ? 0 : sample / maxSample;
+            const barHeight = Math.max(1, normalized * graphHeight);
+            const x = graphX + index * (barWidth + barGap);
+            const y = graphY + (graphHeight - barHeight);
+            ctx.fillStyle = sample > 0 ? '#22d3ee' : 'rgba(255,255,255,0.05)';
+            ctx.fillRect(x, y, barWidth, barHeight);
+        });
+        ctx.restore();
     }
     
     override update(dt: number) { 
+        this.playerDamageSampleTimer += dt;
+        const sampleStep = 0.12;
+        while (this.playerDamageSampleTimer >= sampleStep) {
+            this.playerDamageSampleTimer -= sampleStep;
+            const expired = this.playerDamageSamples.shift() ?? 0;
+            this.playerDamageRecentTotal = Math.max(0, this.playerDamageRecentTotal - expired);
+            const sample = this.playerDamageAccumulator;
+            this.playerDamageAccumulator = 0;
+            this.playerDamageSamples.push(sample);
+            this.playerDamageRecentTotal += sample;
+        }
+        this.playerDps = Math.round(this.playerDamageRecentTotal / (this.playerDamageSamples.length * sampleStep));
         this.phaseTimer += dt;
         this.pulseCooldown = Math.max(0, this.pulseCooldown - dt);
         this.summonCooldown = Math.max(0, this.summonCooldown - dt);
@@ -4689,6 +4883,13 @@ class Boss extends Entity {
         const speed = Vector.mag(this.vel);
         if (speed > speedCap) {
             this.vel = Vector.mult(Vector.normalize(this.vel), speedCap);
+        }
+    }
+
+    override draw(ctx: CanvasRenderingContext2D) {
+        super.draw(ctx);
+        if (this.shouldShowCombatReadout()) {
+            this.drawCombatReadout(ctx);
         }
     }
     
@@ -4888,16 +5089,17 @@ class Shape extends Entity {
       const fade = visibleForMs <= 2200 ? 1 : Math.max(0, 1 - ((visibleForMs - 2200) / 1000));
       if (fade <= 0) return;
 
-      const panelWidth = Math.max(88, this.radius * 2.8);
-      const panelHeight = 36;
+      const label = formatCombatTargetLabel(this.name || this.shapeType);
+      const panelWidth = Math.max(110, this.radius * 2.9);
+      const panelHeight = 48;
       const panelX = this.pos.x - panelWidth / 2;
       const panelY = this.pos.y + this.radius + 22;
       const hpText = `${Math.max(0, Math.ceil(this.health))} HP`;
       const dpsText = `${Math.max(0, Math.round(this.playerDps))} DPS`;
-      const graphX = panelX + 7;
-      const graphY = panelY + 22;
-      const graphWidth = panelWidth - 14;
-      const graphHeight = 8;
+      const graphX = panelX + 8;
+      const graphY = panelY + 31;
+      const graphWidth = panelWidth - 16;
+      const graphHeight = 9;
       const maxSample = Math.max(1, ...this.playerDamageSamples);
 
       ctx.save();
@@ -4911,15 +5113,19 @@ class Shape extends Entity {
       ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.font = 'bold 11px Ubuntu';
+      ctx.fillStyle = 'rgba(255,255,255,0.52)';
+      ctx.font = '700 8px Ubuntu';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(hpText, panelX + 7, panelY + 10);
+      ctx.fillText(label, panelX + 8, panelY + 10);
+
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.font = 'bold 10px Ubuntu';
+      ctx.fillText(hpText, panelX + 8, panelY + 21);
 
       ctx.textAlign = 'right';
       ctx.fillStyle = '#22d3ee';
-      ctx.fillText(dpsText, panelX + panelWidth - 7, panelY + 10);
+      ctx.fillText(dpsText, panelX + panelWidth - 8, panelY + 21);
 
       ctx.fillStyle = 'rgba(255,255,255,0.08)';
       ctx.fillRect(graphX, graphY, graphWidth, graphHeight);
@@ -5050,6 +5256,11 @@ class Shape extends Entity {
 
     if (this.shapeType === ShapeType.OCTAGON) {
         this.drawAdvancedOctagon(ctx, fillColor, strokeColor, glowBlur, glowColor);
+        ctx.restore();
+        return;
+    }
+    if (this.shapeType === ShapeType.STAR) {
+        this.drawAdvancedStar(ctx, fillColor, strokeColor, glowBlur, glowColor);
         ctx.restore();
         return;
     }
@@ -5202,6 +5413,52 @@ if (this.rarity !== ShapeRarity.COMMON && this.rarity !== ShapeRarity.UNCOMMON) 
     ctx.lineWidth = 4;
     ctx.setLineDash([10, 15]);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawAdvancedStar(ctx: CanvasRenderingContext2D, fillColor: string, strokeColor: string, glowBlur: number, glowColor: string) {
+    const r = this.radius;
+    const t = Date.now() / 1000;
+    if (glowBlur > 0) {
+        ctx.shadowBlur = glowBlur;
+        ctx.shadowColor = glowColor;
+    }
+
+    ctx.save();
+    ctx.rotate(-Math.PI / 2);
+    const shell = ctx.createRadialGradient(0, 0, r * 0.18, 0, 0, r);
+    shell.addColorStop(0, 'rgba(255,255,255,0.34)');
+    shell.addColorStop(0.38, fillColor);
+    shell.addColorStop(1, this.darkenColor(fillColor, 0.32));
+    this.traceStarShape(ctx, r, r * 0.48);
+    ctx.fillStyle = shell;
+    ctx.fill();
+    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = strokeColor;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.shadowBlur = 0;
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.rotate(t * 0.45);
+    ctx.strokeStyle = glowColor !== 'transparent' ? glowColor : strokeColor;
+    ctx.lineWidth = 2;
+    this.traceStarShape(ctx, r * 1.22, r * 0.58);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 5; i++) {
+        const angle = -Math.PI / 2 + (i * Math.PI * 2) / 5;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(angle) * r * 0.82, Math.sin(angle) * r * 0.82);
+        ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -5416,11 +5673,24 @@ if (this.rarity !== ShapeRarity.COMMON && this.rarity !== ShapeRarity.UNCOMMON) 
 
   private getShapeTraceRotationOffset(): number {
     if (this.shapeType === ShapeType.DIAMOND) return Math.PI * 0.25;
-    if (this.shapeType === ShapeType.TRIANGLE || this.shapeType === ShapeType.HEPTAGON) return -Math.PI / 2;
+    if (this.shapeType === ShapeType.TRIANGLE || this.shapeType === ShapeType.HEPTAGON || this.shapeType === ShapeType.STAR || this.shapeType === ShapeType.NONAGON) return -Math.PI / 2;
     return 0;
   }
 
   traceShape(ctx: CanvasRenderingContext2D, sides: number, radius: number, angleOffset: number = 0) { ctx.beginPath(); for (let i = 0; i < sides; i++) { const angle = angleOffset + (i * 2 * Math.PI) / sides; const x = Math.cos(angle) * radius; const y = Math.sin(angle) * radius; if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.closePath(); }
+
+  traceStarShape(ctx: CanvasRenderingContext2D, outerRadius: number, innerRadius: number) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+        const radius = i % 2 === 0 ? outerRadius : innerRadius;
+        const angle = (i * Math.PI) / 5;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
   
   drawUncommonVisuals(ctx: CanvasRenderingContext2D) {
     const t = Date.now() / 1000;
@@ -5561,12 +5831,17 @@ class Bullet extends Entity {
   barrelIndex: number;
   lifeTime: number = 0;
   maxLifeTime: number = 3000;
-  bulletType: 'NORMAL' | 'HEAL' | 'SIPHON' | 'CALAMITY_ORB' = 'NORMAL';
+  bulletType: 'NORMAL' | 'HEAL' | 'SIPHON' | 'CALAMITY_ORB' | 'TRAP' = 'NORMAL';
   isHighDensityOrb: boolean = false;
   isDespawning: boolean = false;
   despawnStartTime: number = 0;
   despawnDurationMs: number = 240;
   obliteratorHaloEase: number = 0;
+  trapAnchorSpeed: number = 0.3;
+  trapSpinRate: number = 2.8;
+  trapArmDelayMs: number = 180;
+  trapAnchored: boolean = false;
+  trapAccentColor: string = '#facc15';
   
   constructor(id: number, x: number, y: number, velocity: Vector2, owner: Tank, extraDamageMult: number = 1.0, extraLifeMult: number = 1.0, extraSizeMult: number = 1.0, barrelIndex: number = 0) {
     const size = (6 + (owner.stats[StatType.BULLET_DAMAGE] * 0.3)) * extraSizeMult;
@@ -5656,6 +5931,32 @@ class Bullet extends Entity {
     this.health = this.maxHealth;
     this.displayHealth = this.maxHealth;
     this.maxLifeTime *= (extraLifeMult * 0.8) + 0.2; 
+
+  }
+
+  configureAsTrap(config?: {
+    maxLifeTime?: number;
+    friction?: number;
+    anchorSpeed?: number;
+    armDelayMs?: number;
+    damageMultiplier?: number;
+    healthMultiplier?: number;
+    massMultiplier?: number;
+    spinRate?: number;
+    accentColor?: string;
+  }) {
+    this.bulletType = 'TRAP';
+    this.friction = config?.friction ?? 0.88;
+    this.trapAnchorSpeed = config?.anchorSpeed ?? 0.4;
+    this.trapArmDelayMs = config?.armDelayMs ?? 180;
+    this.trapSpinRate = config?.spinRate ?? 2.8;
+    this.trapAccentColor = config?.accentColor ?? this.trapAccentColor;
+    this.maxLifeTime = config?.maxLifeTime ?? this.maxLifeTime;
+    this.damage *= config?.damageMultiplier ?? 0.82;
+    this.maxHealth *= config?.healthMultiplier ?? 2.2;
+    this.health = this.maxHealth;
+    this.displayHealth = this.maxHealth;
+    this.mass *= config?.massMultiplier ?? 1.75;
   }
 
   override update(dt: number) { 
@@ -5681,6 +5982,23 @@ class Bullet extends Entity {
       this.isDead = true;
     }
 
+    if (this.bulletType === 'TRAP') {
+      const speed = Vector.mag(this.vel);
+      if (!this.trapAnchored && this.lifeTime >= this.trapArmDelayMs && speed <= this.trapAnchorSpeed) {
+        this.trapAnchored = true;
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
+        this.visualScale = 1;
+      }
+      if (this.trapAnchored) {
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
+        this.rotation += dt * this.trapSpinRate;
+      } else if (speed > 0.01) {
+        this.rotation = Math.atan2(this.vel.y, this.vel.x);
+      }
+    }
+
     // Fixed-timestep eased halo dynamics for Obliterator circle core visuals.
     if (this.ownerClass === TankClass.OBLITERATOR) {
       const lifeNorm = Math.max(0, 1 - (this.lifeTime / Math.max(1, this.maxLifeTime)));
@@ -5690,7 +6008,9 @@ class Bullet extends Entity {
     }
     
     // Align rotation with velocity direction dynamically
-    this.rotation = Math.atan2(this.vel.y, this.vel.x);
+    if (this.bulletType !== 'TRAP') {
+      this.rotation = Math.atan2(this.vel.y, this.vel.x);
+    }
     
     // Ambient trail emissions
     const engine = (window as any).gameEngine;
@@ -5730,6 +6050,9 @@ class Bullet extends Entity {
         // Focused high speed light dust for Sniper
         const p = new Particle(this.pos.x, this.pos.y, 'rgba(255, 230, 100, 0.5)', Math.random() * 2 + 1, 10 + Math.random() * 10);
         engine.particles.push(p);
+      } else if (this.bulletType === 'TRAP' && chance < (this.trapAnchored ? 0.18 : 0.08)) {
+        const trapColor = this.trapAnchored ? `${this.trapAccentColor}aa` : 'rgba(250, 204, 21, 0.34)';
+        engine.particles.push(new Particle(this.pos.x, this.pos.y, trapColor, this.trapAnchored ? this.radius * 0.2 : this.radius * 0.12, this.trapAnchored ? 12 : 8, this.trapAnchored ? 'RING' : 'FLASH'));
       } else if (this.bulletType === 'CALAMITY_ORB' && chance < 0.7) {
         const angle = this.rotation + Math.PI + (Math.random() - 0.5) * 1.1;
         const speed = Math.random() * 1.2 + 0.25;
@@ -5769,7 +6092,7 @@ class Bullet extends Entity {
     ctx.save();
     
     // Base theme configurations
-    const baseColor = this.color;
+    const baseColor = getTeamProjectileColor(this.team);
     const strokeColor = COLORS.border;
 
     if (isSniper) {
@@ -6233,7 +6556,7 @@ class Bullet extends Entity {
     const speed = Math.sqrt(this.vel.x * this.vel.x + this.vel.y * this.vel.y);
     const stretch = Math.min(1.95, 1.08 + speed * 0.0021);
     const squish = 1 / Math.sqrt(stretch);
-    const baseColor = this.color;
+    const baseColor = getTeamProjectileColor(this.team);
 
     // Animated shock halo.
     const halo = ctx.createRadialGradient(0, 0, this.radius * 0.2, 0, 0, this.radius * (1.9 + Math.sin(t * 2.8) * 0.08));
@@ -6340,7 +6663,7 @@ class Bullet extends Entity {
   drawBasicCircleBullet(ctx: CanvasRenderingContext2D) {
     ctx.save();
     // Lightweight but class-distinct projectile looks for non-specialized bullet classes.
-    let coreColor = this.color;
+    let coreColor = getTeamProjectileColor(this.team);
     let strokeColor = COLORS.border;
     let innerMark = 'none';
 
@@ -6404,9 +6727,13 @@ class Bullet extends Entity {
         innerMark = 'slash';
         break;
       default:
-        coreColor = this.color;
+        coreColor = getTeamProjectileColor(this.team);
         innerMark = 'none';
         break;
+    }
+
+    if (isPlayableTeam(this.team)) {
+      coreColor = getTeamProjectileColor(this.team);
     }
 
     ctx.beginPath();
@@ -6470,6 +6797,51 @@ class Bullet extends Entity {
     ctx.restore();
   }
 
+  drawTrapBullet(ctx: CanvasRenderingContext2D) {
+    ctx.save();
+    const armedAlpha = this.trapAnchored ? 1 : 0.72;
+    const pulse = this.trapAnchored ? 1 + Math.sin(this.lifeTime * 0.012) * 0.08 : 1;
+    const outerRadius = this.radius * (this.trapAnchored ? 1.18 : 1.04) * pulse;
+    const innerRadius = this.radius * 0.46;
+    const teamColor = this.team === Team.NONE ? this.trapAccentColor : getTeamProjectileColor(this.team);
+    const halo = ctx.createRadialGradient(0, 0, this.radius * 0.18, 0, 0, this.radius * (this.trapAnchored ? 2.6 : 1.7));
+    halo.addColorStop(0, this.trapAnchored ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)');
+    halo.addColorStop(0.4, this.trapAnchored ? 'rgba(250,204,21,0.24)' : 'rgba(250,204,21,0.14)');
+    halo.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius * (this.trapAnchored ? 2.45 : 1.7), 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.trapAnchored ? teamColor : '#a16207';
+    ctx.strokeStyle = COLORS.border;
+    ctx.lineWidth = Math.max(1.6, this.radius * 0.14);
+    ctx.globalAlpha *= armedAlpha;
+    this.traceTrapStarShape(ctx, outerRadius, innerRadius);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = this.trapAnchored ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.38)';
+    ctx.lineWidth = Math.max(0.9, this.radius * 0.08);
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius * 0.2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private traceTrapStarShape(ctx: CanvasRenderingContext2D, outerRadius: number, innerRadius: number) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const radius = i % 2 === 0 ? outerRadius : innerRadius;
+      const angle = (i * Math.PI) / 5;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+
   override drawBody(ctx: CanvasRenderingContext2D) { 
     const remaining = this.maxLifeTime - this.lifeTime; 
     let alpha = remaining < 300 ? Math.max(0, remaining / 300) : 1.0; 
@@ -6490,7 +6862,9 @@ class Bullet extends Entity {
     const isAnnihilator = this.ownerClass === TankClass.ANNIHILATOR;
     const isRebirthBoss = this.ownerClass === TankClass.COLOSSAL || this.ownerClass === TankClass.LEVIATHAN || this.ownerClass === TankClass.WARLORD || this.ownerClass === TankClass.CELESTIAL || this.ownerClass === TankClass.OBLITERATOR;
 
-    if (isSniperFamily) {
+    if (this.bulletType === 'TRAP') {
+      this.drawTrapBullet(ctx);
+    } else if (isSniperFamily) {
       this.drawCustomTacticalBullet(ctx);
     } else if (this.ownerClass === TankClass.OBLITERATOR) {
       // Obliterator always renders with true-circle projectile architecture.
@@ -6506,6 +6880,19 @@ class Bullet extends Entity {
     } else {
       // Default all other classes (including HYBRID) to simple circle bullets for lower render cost.
       this.drawBasicCircleBullet(ctx);
+    }
+
+    if (isPlayableTeam(this.team)) {
+      const displayColor = getTeamProjectileColor(this.team);
+      ctx.save();
+      ctx.strokeStyle = `${displayColor}cc`;
+      ctx.lineWidth = Math.max(1.1, this.radius * 0.12);
+      ctx.shadowBlur = this.radius * 1.2;
+      ctx.shadowColor = displayColor;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius * 1.08, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
     
     ctx.globalAlpha = 1.0; 
@@ -6644,7 +7031,11 @@ class Bullet extends Entity {
     const isWarlord = this.ownerClass === TankClass.WARLORD;
     const isCelestial = this.ownerClass === TankClass.CELESTIAL;
     const isObliterator = this.ownerClass === TankClass.OBLITERATOR;
-    const c0 = isColossal
+    const displayColor = getTeamProjectileColor(this.team);
+    const displayRgb = hexToRgb(displayColor);
+    const c0 = isPlayableTeam(this.team)
+      ? `rgba(${displayRgb.r},${displayRgb.g},${displayRgb.b},0.72)`
+      : isColossal
       ? 'rgba(250,190,120,0.7)'
       : isLeviathan
         ? 'rgba(120,220,255,0.7)'
@@ -6653,7 +7044,7 @@ class Bullet extends Entity {
           : isObliterator
             ? 'rgba(214,120,255,0.76)'
             : 'rgba(210,170,255,0.72)';
-    const c1 = isColossal ? '#d08a4f' : isLeviathan ? '#2dd4ff' : isWarlord ? '#fb7185' : isObliterator ? '#c026ff' : '#a78bfa';
+    const c1 = isPlayableTeam(this.team) ? displayColor : isColossal ? '#d08a4f' : isLeviathan ? '#2dd4ff' : isWarlord ? '#fb7185' : isObliterator ? '#c026ff' : '#a78bfa';
     const c2 = isColossal ? '#2f241c' : isLeviathan ? '#0b2b3a' : isWarlord ? '#3b0f1c' : isObliterator ? '#1a0630' : '#21123d';
 
     const halo = ctx.createRadialGradient(0, 0, this.radius * 0.25, 0, 0, this.radius * (1.45 + Math.sin(t) * 0.08));
@@ -6927,10 +7318,14 @@ export class GameEngine {
           [ShapeType.SQUARE]: true,
           [ShapeType.DIAMOND]: true,
           [ShapeType.TRIANGLE]: true,
+          [ShapeType.STAR]: true,
           [ShapeType.PENTAGON]: true,
           [ShapeType.HEPTAGON]: true,
           [ShapeType.HEXAGON]: true,
           [ShapeType.OCTAGON]: true,
+          [ShapeType.NONAGON]: true,
+          [ShapeType.DECAGON]: true,
+          [ShapeType.DODECAGON]: true,
       },
       cleanupActive: true,
       showSpawnNotifications: false
@@ -6943,10 +7338,11 @@ export class GameEngine {
   rebirthPromptSeen: boolean = false;
 
   primedSpawn: { 
-      type: 'SHAPE' | 'BOSS' | 'ALPHA_PENTAGON' | 'VOID_PORTAL' | 'DUMMY' | 'BOT_TANK' | 'ELITE_TANK', 
+      type: 'SHAPE' | 'BOSS' | 'ALPHA_PENTAGON' | 'VOID_PORTAL' | 'DUMMY' | 'BOT_TANK' | 'ELITE_TANK' | 'DOMINION_TANK', 
       shapeType?: ShapeType, 
       rarity: ShapeRarity,
       classType?: TankClass,
+      weaponProfile?: DominionWeaponProfile,
       spawnAmount?: number
   } | null = null;
 
@@ -7100,6 +7496,7 @@ export class GameEngine {
     this.initSpawnZones();
 
     for (let i = 0; i < 150; i++) this.spawnShape();
+    this.seedTeamFarmFields();
     if (this.gameMode === GameMode.DOMINION) {
       this.spawnDominionObjectives();
     }
@@ -7517,6 +7914,65 @@ export class GameEngine {
     return cy * cols + cx;
   }
 
+  private getShapePopulationLimit(): number {
+    if (this.gameMode === GameMode.SANDBOX && this.sandboxConfig) return this.sandboxConfig.shapeMaxCount;
+    return Number.POSITIVE_INFINITY;
+  }
+
+  private getCommonShapeActiveLimit(): number {
+    if (this.gameMode === GameMode.SANDBOX && this.sandboxConfig) return this.commonShapeMaxActive;
+    return Number.POSITIVE_INFINITY;
+  }
+
+  private getCommonShapeSpawnCooldown(): number {
+    if (this.gameMode === GameMode.DOMINION) return 0.12;
+    if (this.gameMode === GameMode.TEAMS) return 0.14;
+    if (this.gameMode === GameMode.FFA) return 0.18;
+    return 0.85;
+  }
+
+  private seedTeamFarmFields(): void {
+    if (this.inVoid || (this.gameMode !== GameMode.TEAMS && this.gameMode !== GameMode.DOMINION)) return;
+    const teams = this.gameMode === GameMode.DOMINION ? PLAYABLE_TEAMS : [Team.BLUE, Team.RED];
+    const limit = this.getShapePopulationLimit();
+
+    for (const team of teams) {
+      const spawnCenter = this.getTeamSpawnCenter(team);
+      const toMid = Vector.normalize(Vector.sub({ x: CANVAS_WIDTH * 0.5, y: CANVAS_HEIGHT * 0.5 }, spawnCenter));
+      const side = { x: -toMid.y, y: toMid.x };
+      const baseForward = this.gameMode === GameMode.DOMINION ? BASE_ZONE_WIDTH * 1.05 : BASE_ZONE_WIDTH * 0.82;
+      const fieldCount = this.gameMode === GameMode.DOMINION ? 16 : 18;
+
+      for (let i = 0; i < fieldCount && this.currentShapeCount < limit; i++) {
+        const lane = (i % 6) - 2.5;
+        const depth = baseForward + 140 + Math.floor(i / 6) * 170 + Math.random() * 120;
+        const lateral = lane * 110 + Vector.randomRange(-45, 45);
+        const pos = {
+          x: Vector.clamp(spawnCenter.x + toMid.x * depth + side.x * lateral, 120, CANVAS_WIDTH - 120),
+          y: Vector.clamp(spawnCenter.y + toMid.y * depth + side.y * lateral, 120, CANVAS_HEIGHT - 120),
+        };
+        if (Vector.dist(pos, this.player.pos) < 620) continue;
+        let crowded = false;
+        for (const e of this.entities) {
+          if (e.type === EntityType.SHAPE && Vector.dist(e.pos, pos) < 105) {
+            crowded = true;
+            break;
+          }
+        }
+        if (crowded) continue;
+        const roll = Math.random();
+        const type =
+          roll < 0.06 ? ShapeType.PENTAGON :
+          roll < 0.24 ? ShapeType.STAR :
+          roll < 0.46 ? ShapeType.TRIANGLE :
+          roll < 0.68 ? ShapeType.DIAMOND :
+          ShapeType.SQUARE;
+        this.entities.push(new Shape(this.nextId(), pos.x, pos.y, type, false, ShapeRarity.COMMON));
+        this.currentShapeCount++;
+      }
+    }
+  }
+
   private refreshSpawnHeatmap(dt: number) {
     this.spawnHeatmapTimer += dt;
     if (this.spawnHeatmapTimer < 0.4) return;
@@ -7619,31 +8075,47 @@ export class GameEngine {
 
     if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
       const midBias = 1 - distNorm;
-      const octThresh = Math.max(0.0006, 0.0014 + midBias * 0.006 + nestBias * 0.0035 - commonBias * 0.0008);
-      const hexThresh = octThresh + Math.max(0.0032, 0.0072 + midBias * 0.012 + nestBias * 0.01 - commonBias * 0.0048);
-      const heptThresh = hexThresh + Math.max(0.0072, 0.0128 + midBias * 0.016 + nestBias * 0.016 - commonBias * 0.0062);
-      const pentThresh = heptThresh + Math.max(0.022, 0.036 + midBias * 0.03 + nestBias * 0.05 - commonBias * 0.012);
-      const triThresh = Math.min(0.9, pentThresh + 0.43 + commonBias * 0.05 - nestBias * 0.06);
-      const diaThresh = Math.min(0.975, triThresh + 0.16 + commonBias * 0.05 - nestBias * 0.015);
+      const dodecThresh = Math.max(0.00008, 0.00012 + midBias * 0.00075 + nestBias * 0.0004);
+      const decThresh = dodecThresh + Math.max(0.00018, 0.00034 + midBias * 0.0013 + nestBias * 0.00085);
+      const nonThresh = decThresh + Math.max(0.0004, 0.00085 + midBias * 0.0024 + nestBias * 0.0018);
+      const octThresh = nonThresh + Math.max(0.001, 0.0024 + midBias * 0.006 + nestBias * 0.0035 - commonBias * 0.0008);
+      const hexThresh = octThresh + Math.max(0.0036, 0.008 + midBias * 0.012 + nestBias * 0.01 - commonBias * 0.0048);
+      const heptThresh = hexThresh + Math.max(0.0076, 0.014 + midBias * 0.016 + nestBias * 0.016 - commonBias * 0.0062);
+      const pentThresh = heptThresh + Math.max(0.024, 0.04 + midBias * 0.03 + nestBias * 0.05 - commonBias * 0.012);
+      const starThresh = Math.min(0.56, pentThresh + 0.12 + commonBias * 0.035);
+      const triThresh = Math.min(0.88, starThresh + 0.28 + commonBias * 0.045 - nestBias * 0.04);
+      const diaThresh = Math.min(0.975, triThresh + 0.14 + commonBias * 0.045 - nestBias * 0.015);
+      if (roll < dodecThresh) return ShapeType.DODECAGON;
+      if (roll < decThresh) return ShapeType.DECAGON;
+      if (roll < nonThresh) return ShapeType.NONAGON;
       if (roll < octThresh) return ShapeType.OCTAGON;
       if (roll < hexThresh) return ShapeType.HEXAGON;
       if (roll < heptThresh) return ShapeType.HEPTAGON;
       if (roll < pentThresh) return ShapeType.PENTAGON;
+      if (roll < starThresh) return ShapeType.STAR;
       if (roll < triThresh) return ShapeType.TRIANGLE;
       if (roll < diaThresh) return ShapeType.DIAMOND;
       return ShapeType.SQUARE;
     }
 
-    const octThresh = Math.max(0.0007, 0.0017 - commonBias * 0.0006);
-    const hexThresh = octThresh + Math.max(0.0034, 0.0062 - commonBias * 0.0022);
-    const heptThresh = hexThresh + Math.max(0.0058, 0.0098 - commonBias * 0.003);
-    const pentThresh = heptThresh + Math.max(0.01, 0.0162 - commonBias * 0.005);
-    const triThresh = Math.min(0.86, pentThresh + 0.42 + commonBias * 0.07);
-    const diaThresh = Math.min(0.965, triThresh + 0.19 + commonBias * 0.06);
+    const dodecThresh = Math.max(0.00004, 0.00008 - commonBias * 0.00002);
+    const decThresh = dodecThresh + Math.max(0.00012, 0.00022 - commonBias * 0.00004);
+    const nonThresh = decThresh + Math.max(0.00028, 0.00054 - commonBias * 0.00008);
+    const octThresh = nonThresh + Math.max(0.0009, 0.0018 - commonBias * 0.0005);
+    const hexThresh = octThresh + Math.max(0.0036, 0.0066 - commonBias * 0.002);
+    const heptThresh = hexThresh + Math.max(0.0062, 0.0102 - commonBias * 0.0028);
+    const pentThresh = heptThresh + Math.max(0.011, 0.0178 - commonBias * 0.0048);
+    const starThresh = Math.min(0.48, pentThresh + 0.105 + commonBias * 0.04);
+    const triThresh = Math.min(0.86, starThresh + 0.35 + commonBias * 0.055);
+    const diaThresh = Math.min(0.965, triThresh + 0.17 + commonBias * 0.055);
+    if (roll < dodecThresh) return ShapeType.DODECAGON;
+    if (roll < decThresh) return ShapeType.DECAGON;
+    if (roll < nonThresh) return ShapeType.NONAGON;
     if (roll < octThresh) return ShapeType.OCTAGON;
     if (roll < hexThresh) return ShapeType.HEXAGON;
     if (roll < heptThresh) return ShapeType.HEPTAGON;
     if (roll < pentThresh) return ShapeType.PENTAGON;
+    if (roll < starThresh) return ShapeType.STAR;
     if (roll < triThresh) return ShapeType.TRIANGLE;
     if (roll < diaThresh) return ShapeType.DIAMOND;
     return ShapeType.SQUARE;
@@ -7780,10 +8252,14 @@ export class GameEngine {
               [ShapeType.SQUARE]: true,
               [ShapeType.DIAMOND]: true,
               [ShapeType.TRIANGLE]: true,
+              [ShapeType.STAR]: true,
               [ShapeType.PENTAGON]: true,
               [ShapeType.HEPTAGON]: true,
               [ShapeType.HEXAGON]: true,
               [ShapeType.OCTAGON]: true,
+              [ShapeType.NONAGON]: true,
+              [ShapeType.DECAGON]: true,
+              [ShapeType.DODECAGON]: true,
           },
           cleanupActive: true,
           showSpawnNotifications: false
@@ -7942,7 +8418,7 @@ export class GameEngine {
       const worldX = (screenX - viewW/2) / this.cameraZoom + this.cameraPos.x;
       const worldY = (screenY - viewH/2) / this.cameraZoom + this.cameraPos.y;
 
-      const { type, shapeType, rarity, classType, spawnAmount = 1 } = this.primedSpawn;
+      const { type, shapeType, rarity, classType, weaponProfile, spawnAmount = 1 } = this.primedSpawn;
 
       for (let i = 0; i < spawnAmount; i++) {
           const ox = (Math.random() - 0.5) * 40 * (spawnAmount > 1 ? 2 : 0);
@@ -7960,6 +8436,10 @@ export class GameEngine {
           } else if (type === 'ELITE_TANK') { 
               const elite = new EliteTank(this.nextId(), worldX + ox, worldY + oy, classType || TankClass.BASIC);
               this.entities.push(elite);
+          } else if (type === 'DOMINION_TANK') {
+              const dominion = new DominionTank(this.nextId(), worldX + ox, worldY + oy, -1, 260, weaponProfile || 'TRIPLE');
+              dominion.resetForStage(Team.NONE, false);
+              this.entities.push(dominion);
           } else if (type === 'ALPHA_PENTAGON') {
               const shape = new Shape(this.nextId(), worldX + ox, worldY + oy, ShapeType.PENTAGON, false, ShapeRarity.LEGENDARY);
               shape.radius *= 4;
@@ -8585,6 +9065,7 @@ export class GameEngine {
           }
       }
       for (let i = 0; i < 150; i++) this.spawnShape();
+      this.seedTeamFarmFields();
   }
 
   private updateDimensionTransition(dt: number) {
@@ -9217,24 +9698,30 @@ export class GameEngine {
         this.shapeSpawnTimer += dt;
       const activePlayers = this.entities.filter(e => (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY) && !e.isDead).length;
       const modeBaseInterval =
-        this.gameMode === GameMode.DOMINION ? 0.068 :
-        this.gameMode === GameMode.TEAMS ? 0.078 :
-        0.105;
+        this.gameMode === GameMode.DOMINION ? 0.044 :
+        this.gameMode === GameMode.TEAMS ? 0.052 :
+        0.076;
       const populationScale = Math.max(0.75, Math.min(1.45, 1.2 - activePlayers * 0.01));
       const spawnInterval = modeBaseInterval * populationScale;
-    if (this.currentShapeCount < (this.sandboxConfig?.shapeMaxCount || 400) && this.shapeSpawnTimer >= spawnInterval) {
+      const shapePopulationLimit = this.getShapePopulationLimit();
+    if (this.currentShapeCount < shapePopulationLimit && this.shapeSpawnTimer >= spawnInterval) {
         if (this.gameMode !== GameMode.SANDBOX || (this.sandboxConfig?.spawningEnabled)) {
-            const fillPercent = this.currentShapeCount / (this.sandboxConfig?.shapeMaxCount || 400);
+            const fillPercent = this.currentShapeCount / shapePopulationLimit;
             const modeBaseProb =
-              this.gameMode === GameMode.DOMINION ? 0.81 :
-              this.gameMode === GameMode.TEAMS ? 0.75 :
-              0.6;
-            const spawnProb = Math.max(0.12, modeBaseProb * (1 - fillPercent));
-            const commonInWorld = this.entities.filter(e => e.type === EntityType.SHAPE && (e as Shape).rarity === ShapeRarity.COMMON).length;
-            const canSpawnCommon = this.commonShapeCooldown <= 0 && commonInWorld < this.commonShapeMaxActive;
+              this.gameMode === GameMode.DOMINION ? 0.92 :
+              this.gameMode === GameMode.TEAMS ? 0.88 :
+              0.74;
+            const spawnProb = Number.isFinite(shapePopulationLimit)
+              ? Math.max(0.12, modeBaseProb * (1 - fillPercent))
+              : modeBaseProb;
+            const commonLimit = this.getCommonShapeActiveLimit();
+            const commonInWorld = Number.isFinite(commonLimit)
+              ? this.entities.filter(e => e.type === EntityType.SHAPE && (e as Shape).rarity === ShapeRarity.COMMON).length
+              : 0;
+            const canSpawnCommon = this.commonShapeCooldown <= 0 && (!Number.isFinite(commonLimit) || commonInWorld < commonLimit);
             if (canSpawnCommon && Math.random() < spawnProb) {
                 this.spawnShape();
-                this.commonShapeCooldown = 0.85;
+                this.commonShapeCooldown = this.getCommonShapeSpawnCooldown();
                 this.shapeSpawnTimer = 0;
             }
         }
@@ -10106,6 +10593,7 @@ export class GameEngine {
                   xpValue: typeof s.xpValue === 'number' ? s.xpValue : undefined,
                   shapeType: typeof s.shapeType === 'string' ? s.shapeType : undefined,
                   rarity: typeof s.rarity === 'string' ? s.rarity : undefined,
+                  radius: typeof s.radius === 'number' ? s.radius : undefined,
                   type: e.type === EntityType.BOSS ? 'BOSS' : e.type === EntityType.CRASHER ? 'CRASHER' : 'SHAPE',
               });
               continue;
@@ -10171,16 +10659,18 @@ export class GameEngine {
           return;
       }
 
-      const useLegacy = (window as any).__vextorLegacyAI === true;
-      if (useLegacy) {
+      const forceModern = (window as any).__vextorModernAI === true;
+      if (!forceModern) {
           try {
+              // The older tactical controller still has the strongest solo combat feel,
+              // so we keep it as the primary live brain for non-team bot fights.
               EnemyAITanks.update(bot, this, dt, BOT_STAT_PRIORITIES);
+              return;
           } catch (err) {
-              console.warn('Legacy AI fallback failed, switching to AISystem for this bot:', err);
-              this.aiSystem.updateBot(bot, this as any, dt, BOT_STAT_PRIORITIES);
+              console.warn('Legacy tactical AI failed, switching to AISystem for this bot:', err);
           }
-          return;
       }
+
       this.aiSystem.updateBot(bot, this as any, dt, BOT_STAT_PRIORITIES);
   }
 
@@ -10392,13 +10882,17 @@ export class GameEngine {
       Math.max(1.0, tuning.size * (width / 0.8)),
       idx
     );
-    trap.maxLifeTime = 8200;
-    trap.maxHealth *= 5.4;
-    trap.health = trap.maxHealth;
-    trap.displayHealth = trap.maxHealth;
-    trap.mass *= 3.8;
-    trap.friction = 0.994;
-    trap.damage *= 0.72;
+    trap.configureAsTrap({
+      maxLifeTime: 8200,
+      friction: 0.82,
+      anchorSpeed: 0.28,
+      armDelayMs: 120,
+      damageMultiplier: 0.72,
+      healthMultiplier: 5.4,
+      massMultiplier: 3.8,
+      spinRate: 1.65,
+      accentColor: tank.team === Team.NONE ? '#facc15' : getTeamProjectileColor(tank.team),
+    });
     this.entities.push(trap);
 
     if (!this.sandboxConfig.infiniteAmmo) {
@@ -10435,6 +10929,7 @@ export class GameEngine {
         [TankClass.QUAD_TANK]: 0.95,
         [TankClass.TWIN_FLANK]: 0.9,
         [TankClass.ASSASSIN]: 1.2,
+        [TankClass.TRAPPER]: 1.68,
         [TankClass.DESTROYER]: 1.58,
         [TankClass.SPRAYER]: 0.7,
         [TankClass.TRI_ANGLE]: 0.84,
@@ -11094,6 +11589,7 @@ export class GameEngine {
         else if (tank.classType === TankClass.PENTA_SHOT) { bulletSpeedMult = 1.1; bulletDamageMult = 0.88; bulletLifeMult = 1.12; bulletSizeMult = 0.85; }
         else if (tank.classType === TankClass.SPREAD_SHOT) { bulletSpeedMult = 1.2; bulletDamageMult = 0.82; bulletLifeMult = 0.96; bulletSizeMult = 0.8; }
         else if (tank.classType === TankClass.SNIPER) { bulletSpeedMult = 1.5; bulletDamageMult = 1.65; bulletLifeMult = 1.3; bulletSizeMult = 0.9; }
+        else if (tank.classType === TankClass.TRAPPER) { bulletSpeedMult = 0.72; bulletDamageMult = 1.14; bulletLifeMult = 2.4; bulletSizeMult = 1.2; }
         else if (tank.classType === TankClass.ASSASSIN) { bulletSpeedMult = 1.85; bulletDamageMult = 2.25; bulletLifeMult = 1.7; bulletSizeMult = 0.88; }
         else if (tank.classType === TankClass.RANGER || tank.classType === TankClass.STALKER) { bulletSpeedMult = 2.4; bulletDamageMult = 3.20; bulletLifeMult = 2.4; bulletSizeMult = 0.92; }
         else if (isDestroyer) { 
@@ -11227,6 +11723,20 @@ export class GameEngine {
         const tip = Vector.add(startPos, Vector.mult(forward, tank.radius * length));
         
         const b = new Bullet(this.nextId(), tip.x, tip.y, Vector.mult(forward, (BASE_STATS.bulletSpeed + tank.stats[StatType.BULLET_SPEED] * 0.8) * bulletSpeedMult), tank, bulletDamageMult, bulletLifeMult, bulletSizeMult, idx);
+
+        if (tank.classType === TankClass.TRAPPER) {
+            b.configureAsTrap({
+                maxLifeTime: 6800,
+                friction: 0.86,
+                anchorSpeed: 0.42,
+                armDelayMs: 180,
+                damageMultiplier: 0.84,
+                healthMultiplier: 2.35,
+                massMultiplier: 1.8,
+                spinRate: 2.6,
+                accentColor: tank.team === Team.NONE ? '#facc15' : getTeamProjectileColor(tank.team),
+            });
+        }
         
         const isSniperFamily = tank.classType === TankClass.SNIPER || tank.classType === TankClass.ASSASSIN || tank.classType === TankClass.RANGER || tank.classType === TankClass.STALKER;
         if (isSniperFamily) {
@@ -11512,7 +12022,7 @@ export class GameEngine {
       }
 
       if (tank.type === EntityType.ELITE_TANK) {
-        effectiveSpeed = Math.min(effectiveSpeed, 1.58);
+        effectiveSpeed = Math.min(effectiveSpeed, ELITE_TANK_SPEED_CAP);
       }
 
       if (isRamClass) {
@@ -11662,17 +12172,23 @@ export class GameEngine {
   }
 
   spawnShape() {
+    const shapePopulationLimit = this.getShapePopulationLimit();
+    if (this.currentShapeCount >= shapePopulationLimit) return;
     const center = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 }, nestRadius = 1500, isNestSpawn = Math.random() < 0.2; 
     let pos: Vector2, type: ShapeType;
     if (this.inVoid) {
         pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
         const roll = Math.random();
-        if (roll < 0.014) type = ShapeType.OCTAGON; 
-        else if (roll < 0.043) type = ShapeType.HEXAGON; 
-        else if (roll < 0.082) type = ShapeType.HEPTAGON;
-        else if (roll < 0.15) type = ShapeType.PENTAGON; 
-        else if (roll < 0.54) type = ShapeType.TRIANGLE; 
-        else if (roll < 0.76) type = ShapeType.DIAMOND;
+        if (roll < 0.002) type = ShapeType.DODECAGON;
+        else if (roll < 0.006) type = ShapeType.DECAGON;
+        else if (roll < 0.014) type = ShapeType.NONAGON;
+        else if (roll < 0.034) type = ShapeType.OCTAGON; 
+        else if (roll < 0.07) type = ShapeType.HEXAGON; 
+        else if (roll < 0.12) type = ShapeType.HEPTAGON;
+        else if (roll < 0.2) type = ShapeType.PENTAGON;
+        else if (roll < 0.36) type = ShapeType.STAR;
+        else if (roll < 0.66) type = ShapeType.TRIANGLE; 
+        else if (roll < 0.84) type = ShapeType.DIAMOND;
         else type = ShapeType.SQUARE;
     } else if (this.gameMode !== GameMode.SANDBOX) {
         const zoneIndex = this.pickSpawnZoneIndex();
@@ -11688,22 +12204,30 @@ export class GameEngine {
         const angle = Math.random() * Math.PI * 2, dist = Math.sqrt(Math.random()) * nestRadius;
         pos = { x: center.x + Math.cos(angle) * dist, y: center.y + Math.sin(angle) * dist };
         const roll = Math.random();
-        if (roll < 0.018) type = ShapeType.OCTAGON; 
-        else if (roll < 0.058) type = ShapeType.HEXAGON; 
-        else if (roll < 0.11) type = ShapeType.HEPTAGON;
-        else if (roll < 0.23) type = ShapeType.PENTAGON; 
-        else if (roll < 0.67) type = ShapeType.TRIANGLE;
-        else if (roll < 0.84) type = ShapeType.DIAMOND;
+        if (roll < 0.0015) type = ShapeType.DODECAGON;
+        else if (roll < 0.005) type = ShapeType.DECAGON;
+        else if (roll < 0.013) type = ShapeType.NONAGON;
+        else if (roll < 0.035) type = ShapeType.OCTAGON; 
+        else if (roll < 0.08) type = ShapeType.HEXAGON; 
+        else if (roll < 0.145) type = ShapeType.HEPTAGON;
+        else if (roll < 0.285) type = ShapeType.PENTAGON;
+        else if (roll < 0.45) type = ShapeType.STAR;
+        else if (roll < 0.75) type = ShapeType.TRIANGLE;
+        else if (roll < 0.89) type = ShapeType.DIAMOND;
         else type = ShapeType.SQUARE;
     } else {
         pos = Vector.randomPos(CANVAS_WIDTH, CANVAS_HEIGHT);
         const roll = Math.random();
-        if (roll < 0.002) type = ShapeType.OCTAGON; 
-        else if (roll < 0.0085) type = ShapeType.HEXAGON; 
-        else if (roll < 0.016) type = ShapeType.HEPTAGON;
-        else if (roll < 0.031) type = ShapeType.PENTAGON; 
-        else if (roll < 0.43) type = ShapeType.TRIANGLE; 
-        else if (roll < 0.64) type = ShapeType.DIAMOND;
+        if (roll < 0.00006) type = ShapeType.DODECAGON;
+        else if (roll < 0.00024) type = ShapeType.DECAGON;
+        else if (roll < 0.0007) type = ShapeType.NONAGON;
+        else if (roll < 0.0024) type = ShapeType.OCTAGON; 
+        else if (roll < 0.0092) type = ShapeType.HEXAGON; 
+        else if (roll < 0.0175) type = ShapeType.HEPTAGON;
+        else if (roll < 0.035) type = ShapeType.PENTAGON;
+        else if (roll < 0.15) type = ShapeType.STAR;
+        else if (roll < 0.49) type = ShapeType.TRIANGLE; 
+        else if (roll < 0.68) type = ShapeType.DIAMOND;
         else type = ShapeType.SQUARE;
     }
 
@@ -11717,17 +12241,19 @@ export class GameEngine {
     if (nearby.length > densityLimit) return;
 
     if (Vector.dist(pos, this.player.pos) < (this.gameMode === GameMode.TEAMS ? 560 : 500)) return;
-    const sectorW = CANVAS_WIDTH / 3;
-    const sectorH = CANVAS_HEIGHT / 3;
-    const sectorX = Math.max(0, Math.min(2, Math.floor(pos.x / sectorW)));
-    const sectorY = Math.max(0, Math.min(2, Math.floor(pos.y / sectorH)));
-    const sectorShapeCap = Math.ceil(((this.sandboxConfig?.shapeMaxCount || 400) / 9) * 1.28);
-    let sectorShapes = 0;
-    for (const e of this.entities) {
-        if (e.type !== EntityType.SHAPE) continue;
-        if (Math.floor(e.pos.x / sectorW) === sectorX && Math.floor(e.pos.y / sectorH) === sectorY) sectorShapes++;
+    if (Number.isFinite(shapePopulationLimit)) {
+        const sectorW = CANVAS_WIDTH / 3;
+        const sectorH = CANVAS_HEIGHT / 3;
+        const sectorX = Math.max(0, Math.min(2, Math.floor(pos.x / sectorW)));
+        const sectorY = Math.max(0, Math.min(2, Math.floor(pos.y / sectorH)));
+        const sectorShapeCap = Math.ceil((shapePopulationLimit / 9) * 1.28);
+        let sectorShapes = 0;
+        for (const e of this.entities) {
+            if (e.type !== EntityType.SHAPE) continue;
+            if (Math.floor(e.pos.x / sectorW) === sectorX && Math.floor(e.pos.y / sectorH) === sectorY) sectorShapes++;
+        }
+        if (sectorShapes >= sectorShapeCap) return;
     }
-    if (sectorShapes >= sectorShapeCap) return;
     const shape = new Shape(this.nextId(), pos.x, pos.y, type, this.inVoid);
     this.entities.push(shape);
     this.currentShapeCount++;
@@ -12560,7 +13086,7 @@ export class GameEngine {
       ]);
       const tier60 = new Set<TankClass>([
           TankClass.TRIPLE_SHOT, TankClass.QUAD_TANK, TankClass.TWIN_FLANK,
-          TankClass.HUNTER, TankClass.ASSASSIN, TankClass.DESTROYER, TankClass.GUNNER,
+          TankClass.HUNTER, TankClass.TRAPPER, TankClass.ASSASSIN, TankClass.DESTROYER, TankClass.GUNNER,
           TankClass.SPREAD_SHOT, TankClass.TRI_ANGLE, TankClass.OVERSEER,
           TankClass.NURSE, TankClass.LEECH, TankClass.SPRAYER, TankClass.VAMPIRE, TankClass.DOCTOR,
       ]);
@@ -12573,10 +13099,14 @@ export class GameEngine {
       const base = SHAPE_STATS[shape.shapeType]?.xp ?? shape.xpValue;
       const rarityRank = getRarityRank(shape.rarity);
       const shapeWeight =
+        shape.shapeType === ShapeType.DODECAGON ? 5.2 :
+        shape.shapeType === ShapeType.DECAGON ? 4.55 :
+        shape.shapeType === ShapeType.NONAGON ? 4.0 :
         shape.shapeType === ShapeType.OCTAGON ? 3.6 :
         shape.shapeType === ShapeType.HEPTAGON ? 2.95 :
         shape.shapeType === ShapeType.HEXAGON ? 2.4 :
         shape.shapeType === ShapeType.PENTAGON ? 1.6 :
+        shape.shapeType === ShapeType.STAR ? 1.25 :
         shape.shapeType === ShapeType.TRIANGLE ? 1.0 :
         shape.shapeType === ShapeType.DIAMOND ? 0.84 : 0.65;
       const rarityFactor = 1 + rarityRank * 1.35;

@@ -20,6 +20,7 @@ export interface IAITank {
     lastSteering: Vector2;
     availableStatPoints: number;
     isDead: boolean;
+    radius?: number;
     aiTargetId: number | null;
     aiHuntingSpecialId?: number | null;
     aiHuntingTimer?: number;
@@ -263,6 +264,16 @@ export class EnemyAITanks {
                 score *= 2.2;
             } else if (s.shapeType === 'BETA_PENTAGON') {
                 score *= 1.9;
+            } else if (s.shapeType === 'DODECAGON') {
+                score *= 3.3;
+            } else if (s.shapeType === 'DECAGON') {
+                score *= 2.9;
+            } else if (s.shapeType === 'NONAGON') {
+                score *= 2.55;
+            } else if (s.shapeType === 'OCTAGON') {
+                score *= 2.25;
+            } else if (s.shapeType === 'STAR') {
+                score *= 1.28;
             } else if (s.shapeType === 'PENTAGON') {
                 score *= 1.45;
             }
@@ -318,6 +329,11 @@ export class EnemyAITanks {
                 if (s.type === EntityType.BOSS) value += 180;
                 if (s.shapeType === 'ALPHA_PENTAGON') value += 82;
                 if (s.shapeType === 'BETA_PENTAGON') value += 56;
+                if (s.shapeType === 'DODECAGON') value += 150;
+                if (s.shapeType === 'DECAGON') value += 128;
+                if (s.shapeType === 'NONAGON') value += 104;
+                if (s.shapeType === 'OCTAGON') value += 90;
+                if (s.shapeType === 'STAR') value += 34;
                 const nearestEnemyDist = data.enemies.reduce((min: number, e: any) => {
                     const d = Vector.dist(e.pos, s.pos);
                     return d < min ? d : min;
@@ -507,7 +523,8 @@ export class EnemyAITanks {
                 case TankClass.RANGER:
                 case TankClass.ASSASSIN:
                 case TankClass.STALKER:
-                    idealRange = bot.classType === TankClass.RANGER ? 740 : (bot.classType === TankClass.STALKER ? 640 : 580);
+                case TankClass.TRAPPER:
+                    idealRange = bot.classType === TankClass.RANGER ? 740 : (bot.classType === TankClass.STALKER ? 640 : (bot.classType === TankClass.TRAPPER ? 520 : 580));
                     aggroWeight = 1.15;
                     strafeWeight = 1.1;
                     break;
@@ -798,7 +815,7 @@ export class EnemyAITanks {
         
         // Turn speeds optimized dynamically!
         let baseTurnSpeed = 0.14;
-        if (bot.classType === TankClass.SNIPER || bot.classType === TankClass.ASSASSIN || bot.classType === TankClass.RANGER || bot.classType === TankClass.STALKER) {
+        if (bot.classType === TankClass.SNIPER || bot.classType === TankClass.ASSASSIN || bot.classType === TankClass.RANGER || bot.classType === TankClass.STALKER || bot.classType === TankClass.TRAPPER) {
             baseTurnSpeed = 0.074; // precise sniper tracking
         } else if (bot.classType === TankClass.BOOSTER || bot.classType === TankClass.TRI_ANGLE || bot.classType === TankClass.FIGHTER) {
             baseTurnSpeed = 0.21;  // fast but less twitchy close-range turning

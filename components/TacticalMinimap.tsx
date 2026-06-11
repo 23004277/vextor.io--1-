@@ -230,9 +230,9 @@ export const TacticalMinimap: React.FC<TacticalMinimapProps> = ({ markers, mapSi
   return (
     <canvas 
       ref={canvasRef} 
-      width={128} 
-      height={128} 
-      className={`w-full h-full rounded-md border border-white/10 shadow-inner`}
+      width={112} 
+      height={112} 
+      className={`w-full h-full rounded-md border border-white/8 shadow-inner`}
     />
   );
 };

@@ -20,10 +20,14 @@ export enum ShapeType {
   SQUARE = 'SQUARE',
   DIAMOND = 'DIAMOND',
   TRIANGLE = 'TRIANGLE',
+  STAR = 'STAR',
   PENTAGON = 'PENTAGON',
   HEPTAGON = 'HEPTAGON',
   HEXAGON = 'HEXAGON',
   OCTAGON = 'OCTAGON',
+  NONAGON = 'NONAGON',
+  DECAGON = 'DECAGON',
+  DODECAGON = 'DODECAGON',
 }
 
 export enum ShapeRarity {
@@ -130,6 +134,7 @@ export enum TankClass {
   SPRAYER = 'Sprayer',
   TRI_ANGLE = 'Tri-Angle',
   HUNTER = 'Hunter',
+  TRAPPER = 'Trapper',
   GUNNER = 'Gunner',
   DOCTOR = 'Doctor',
   OVERSEER = 'Overseer',
@@ -314,6 +319,17 @@ export interface SandboxConfig {
   showSpawnNotifications: boolean; // Toggle for shape announcements
 }
 
+export type DominionWeaponProfile = 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE';
+
+export type PrimedSpawnConfig = {
+  type: 'SHAPE' | 'BOSS' | 'ALPHA_PENTAGON' | 'VOID_PORTAL' | 'DUMMY' | 'BOT_TANK' | 'ELITE_TANK' | 'DOMINION_TANK';
+  shapeType?: ShapeType;
+  rarity: ShapeRarity;
+  classType?: TankClass;
+  weaponProfile?: DominionWeaponProfile;
+  spawnAmount?: number;
+};
+
 export interface GameState {
   score: number;
   level: number;
@@ -356,13 +372,7 @@ export interface GameState {
   // Sandbox Control
   sandboxConfig?: SandboxConfig;
   // Fabrication Mode (Sandbox Spawning Tool)
-  primedSpawn?: { 
-      type: 'SHAPE' | 'BOSS' | 'ALPHA_PENTAGON' | 'VOID_PORTAL' | 'DUMMY' | 'BOT_TANK' | 'ELITE_TANK'; 
-      shapeType?: ShapeType; 
-      rarity: ShapeRarity; 
-      classType?: TankClass;
-      spawnAmount?: number; // How many to spawn at once
-  } | null;
+  primedSpawn?: PrimedSpawnConfig | null;
   abilityHud?: AbilityHudInfo | null;
   playerState?: PlayerState;
   evolutionTransitionRemaining?: number;

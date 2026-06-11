@@ -195,10 +195,14 @@ const SHAPE_STRATEGIES: Partial<Record<ShapeType, string[]>> = {
     [ShapeType.SQUARE]: ['Starter farm target', 'Low durability', 'Safe early XP chain'],
     [ShapeType.DIAMOND]: ['Sharper drift profile', 'Higher reward than squares', 'Great bridge into mid-map farming'],
     [ShapeType.TRIANGLE]: ['Fast drifting shape', 'Lead shots slightly', 'Good early-mid payout'],
+    [ShapeType.STAR]: ['New early-mid target', 'Better XP than triangles', 'Great for lane-side grinding'],
     [ShapeType.PENTAGON]: ['Tanky resource core', 'Central farming priority', 'Strong level 30+ XP source'],
     [ShapeType.HEPTAGON]: ['Dense faceted shell', 'Late-mid resource spike', 'Rewards stable sustained fire'],
     [ShapeType.HEXAGON]: ['High integrity shell', 'Rewards sustained DPS', 'Great for upgraded builds'],
     [ShapeType.OCTAGON]: ['Ancient relic target', 'Massive XP jackpot', 'Contestable high-value spawn'],
+    [ShapeType.NONAGON]: ['Rare high-tier cache', 'Large collision profile', 'Worth contesting with upgraded builds'],
+    [ShapeType.DECAGON]: ['Heavy endgame resource', 'Slow sustained clear', 'Best farmed with clean spacing'],
+    [ShapeType.DODECAGON]: ['Ultra-rare resource vault', 'Massive durability', 'Server-wide farming prize'],
 };
 
 const CLASS_ROLES: Record<string, ClassRole> = {
@@ -223,7 +227,7 @@ const CLASS_ROLES: Record<string, ClassRole> = {
     TACTICAL: {
         label: 'Advanced Command',
         desc: 'Control-oriented classes built around drones, turrets, and map ownership.',
-        classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.AUTO_GUNNER],
+        classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.TRAPPER, TankClass.AUTO_GUNNER],
         icon: Cpu,
     },
 };
@@ -307,6 +311,7 @@ const getClassBrief = (tankClass: TankClass) => {
         case TankClass.OVERLORD:
         case TankClass.MANAGER:
         case TankClass.OCTO_TANK:
+        case TankClass.TRAPPER:
         case TankClass.AUTO_GUNNER:
             return 'Space control';
         case TankClass.COLOSSAL:

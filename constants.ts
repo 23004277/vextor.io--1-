@@ -48,6 +48,7 @@ export const BOT_STAT_PRIORITIES: Record<TankClass, StatType[]> = {
   [TankClass.SPRAYER]: [StatType.RELOAD, StatType.BULLET_PENETRATION, StatType.BULLET_DAMAGE, StatType.MOVEMENT_SPEED, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.REGEN],
   [TankClass.TRI_ANGLE]: [StatType.MOVEMENT_SPEED, StatType.BODY_DAMAGE, StatType.MAX_HEALTH, StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.MAX_SHIELD, StatType.REGEN],
   [TankClass.OCTO_TANK]: [StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
+  [TankClass.TRAPPER]: [StatType.BULLET_PENETRATION, StatType.BULLET_DAMAGE, StatType.RELOAD, StatType.BULLET_SPEED, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
   [TankClass.PENTA_SHOT]: [StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
   [TankClass.SPREAD_SHOT]: [StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
   [TankClass.HUNTER]: [StatType.BULLET_SPEED, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.RELOAD, StatType.MAX_HEALTH, StatType.MOVEMENT_SPEED, StatType.REGEN],
@@ -118,10 +119,14 @@ export const COLORS = {
   square: '#ffe869',
   diamond: '#74f0d2',
   triangle: '#fc7677',
+  star: '#7dd3fc',
   pentagon: '#768dfc',
   heptagon: '#c989ff',
   hexagon: '#9f76fc', // Purple-ish Hexagon
   octagon: '#ffcc33', // Vibrant Gold/Amber
+  nonagon: '#fb7185',
+  decagon: '#f97316',
+  dodecagon: '#f8fafc',
   crasher: '#f177dd', // Pink Crasher color
   barrel: '#999999',
   border: '#555555',
@@ -168,7 +173,7 @@ export const CLASS_TREE: Partial<Record<TankClass, TankClass[]>> = {
   [TankClass.VAMPIRE]: [TankClass.REAPER],
   // Tier 2 -> Tier 3
   [TankClass.TWIN]: [TankClass.TRIPLE_SHOT, TankClass.QUAD_TANK, TankClass.TWIN_FLANK],
-  [TankClass.SNIPER]: [TankClass.ASSASSIN, TankClass.OVERSEER, TankClass.HUNTER],
+  [TankClass.SNIPER]: [TankClass.ASSASSIN, TankClass.OVERSEER, TankClass.HUNTER, TankClass.TRAPPER],
   [TankClass.MACHINE_GUN]: [TankClass.DESTROYER, TankClass.GUNNER, TankClass.SPRAYER],
   [TankClass.FLANK_GUARD]: [TankClass.TRI_ANGLE, TankClass.QUAD_TANK],
   
@@ -187,6 +192,7 @@ export const CLASS_TREE: Partial<Record<TankClass, TankClass[]>> = {
   // Tier 4 (Finals)
   [TankClass.TRIPLE_TWIN]: [],
   [TankClass.OCTO_TANK]: [],
+  [TankClass.TRAPPER]: [],
   [TankClass.TRIPLE_TANK]: [],
   [TankClass.PENTA_SHOT]: [],
   [TankClass.SPREAD_SHOT]: [],
@@ -263,6 +269,9 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
   [TankClass.HUNTER]: [
     [1.8, 1.2, 0, 0, 1.75, 0], // Bottom Barrel (Widest)
     [2.3, 0.7, 0, 0, 1.75, 0], // Top Barrel (Thinnest)
+  ],
+  [TankClass.TRAPPER]: [
+    [1.52, 1.08, 0.04, 0, 2.2, 0],
   ],
   [TankClass.GUNNER]: [
     // Redesigned "fan-cluster" gunner profile: dual needles + dual support barrels + compact core stabilizer.
@@ -460,6 +469,10 @@ export const CLASS_PROJECTILE_MODIFIERS: Partial<Record<TankClass, {
     penetrationMultiplier: 2.1,
     projectileHealthMultiplier: 2.9,
   },
+  [TankClass.TRAPPER]: {
+    penetrationMultiplier: 1.22,
+    projectileHealthMultiplier: 1.34,
+  },
 };
 
 // --- Shape Stats ---
@@ -468,10 +481,14 @@ export const SHAPE_STATS: Record<ShapeType, { health: number; xp: number; damage
     [ShapeType.SQUARE]: { health: 25, xp: 50, damage: 8, radius: 12.5, color: COLORS.square, sides: 4 },
     [ShapeType.DIAMOND]: { health: 48, xp: 88, damage: 11, radius: 15, color: COLORS.diamond, sides: 4 },
     [ShapeType.TRIANGLE]: { health: 80, xp: 145, damage: 14, radius: 18.75, color: COLORS.triangle, sides: 3 },
+    [ShapeType.STAR]: { health: 145, xp: 235, damage: 16, radius: 23, color: COLORS.star, sides: 10 },
     [ShapeType.PENTAGON]: { health: 300, xp: 440, damage: 20, radius: 31.25, color: COLORS.pentagon, sides: 5 },
     [ShapeType.HEPTAGON]: { health: 560, xp: 760, damage: 28, radius: 40, color: COLORS.heptagon, sides: 7 },
     [ShapeType.HEXAGON]: { health: 800, xp: 1080, damage: 35, radius: 50, color: COLORS.hexagon, sides: 6 },
     [ShapeType.OCTAGON]: { health: 2500, xp: 2650, damage: 60, radius: 110, color: COLORS.octagon, sides: 8 },
+    [ShapeType.NONAGON]: { health: 3600, xp: 3900, damage: 72, radius: 128, color: COLORS.nonagon, sides: 9 },
+    [ShapeType.DECAGON]: { health: 5200, xp: 5700, damage: 84, radius: 145, color: COLORS.decagon, sides: 10 },
+    [ShapeType.DODECAGON]: { health: 8200, xp: 9200, damage: 105, radius: 168, color: COLORS.dodecagon, sides: 12 },
 };
 
 export const BOSS_STATS: Record<string, { id: string; name: string; health: number; xp: number; radius: number; color: string; sides: number; description: string }> = {
@@ -881,35 +898,35 @@ export const QUESTS: Quest[] = [
 
 export const UPDATE_LOG = [
     {
-        id: 'v1.8.3',
-        title: "ENEMY AI COMBAT BRAIN",
-        date: "07/06/26",
-        content: "Enemy tanks got a proper battlefield intelligence pass. They now route around danger, choose cleaner fights, dodge smarter, and hold better combat spacing instead of blindly rushing or wobbling under pressure.",
-        theme: "AI",
-        tags: ["Enemy AI", "Pathfinding", "Targeting", "Combat"],
+        id: 'v1.9.1',
+        title: "SANDBOX COMMAND UPLINK",
+        date: "11/06/26",
+        content: "The archive has been reset to one clean live release, while the newest build rolls together the Trapper class launch, Dominion trap guardian upgrades, better sandbox boss controls, and the latest AI and stability fixes.",
+        theme: "Sandbox / Combat / AI / Update Archive",
+        tags: ["Sandbox", "Trapper", "Dominion", "AI", "Archive", "Stability"],
         sections: [
             {
-                label: "Enemy Movement",
+                label: "Archive Reset",
                 items: [
-                    "Added route-corridor awareness so bots avoid pushing straight through enemy clusters, crashers, bosses, and dangerous shape lanes.",
-                    "Added remembered detour points for stuck recovery, reducing jittery left-right movement when bots get blocked.",
-                    "Added enemy aim-lane avoidance so bots sidestep obvious hostile barrel lines instead of walking into free shots.",
+                    "Wiped the older stacked update context and replaced it with one current release log.",
+                    "Kept the repo changelog and the in-game archive aligned so they describe the same live build.",
+                    "Trimmed the archive structure down to a single clean entry instead of a long running history block.",
                 ],
             },
             {
-                label: "Targeting",
+                label: "Combat Systems",
                 items: [
-                    "Improved target scoring with route safety, shot-lane quality, range fit, ally pressure, finisher windows, and enemy isolation.",
-                    "Bots now prioritize enemies attacking them or nearby allies, making team fights feel more responsive.",
-                    "Farming targets now account for route danger so bots are less likely to body-slam through bad PvE paths.",
+                    "Added the new Trapper tank class as a live Sniper-branch evolution with anchor traps instead of normal bullets.",
+                    "Reworked Dominion trap guardians into Octo Trapper objective tanks with real area-control trap launches.",
+                    "Fixed the trap projectile renderer crash by moving star-path tracing into the projectile renderer scope.",
                 ],
             },
             {
-                label: "Combat Discipline",
+                label: "Sandbox And AI",
                 items: [
-                    "Added smarter fight-commit logic so bots stay aggressive when they can finish a target, but avoid doomed pushes when pressure is too high.",
-                    "Improved bullet dodging with time-to-impact checks instead of only reacting to nearby projectiles.",
-                    "Added dynamic combat range so wounded bots kite wider while still fighting instead of instantly fleeing.",
+                    "Expanded the sandbox menu with direct rebirth boss swaps, elite tank templates, and Dominion guardian fabrication options.",
+                    "Synced shared spawn typing for Dominion fabrication so UI and engine state no longer disagree about primed spawn payloads.",
+                    "Tuned AI control ranges so bots understand the Trapper archetype better and hold cleaner spacing around trap combat.",
                 ],
             },
         ],

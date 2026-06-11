@@ -114,6 +114,7 @@ const CLASS_CATEGORIES = [
             TankClass.BOOSTER, 
             TankClass.FIGHTER, 
             TankClass.OCTO_TANK, 
+            TankClass.TRAPPER,
             TankClass.OVERSEER, 
             TankClass.OVERLORD, 
             TankClass.MANAGER, 
@@ -148,6 +149,28 @@ const CLASS_CATEGORIES = [
             TankClass.OBLITERATOR
         ]
     }
+];
+
+const SANDBOX_BOSS_CLASSES: TankClass[] = [
+  TankClass.COLOSSAL,
+  TankClass.LEVIATHAN,
+  TankClass.WARLORD,
+  TankClass.CELESTIAL,
+  TankClass.OBLITERATOR,
+];
+
+const SANDBOX_ELITE_CLASS_TEMPLATES: TankClass[] = [
+  TankClass.DESTROYER,
+  TankClass.SNIPER,
+  TankClass.OVERLORD,
+  TankClass.TRAPPER,
+];
+
+const SANDBOX_DOMINION_PROFILES: Array<{ id: 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE'; label: string; classType: TankClass; note: string }> = [
+  { id: 'DESTROYER', label: 'Destroyer Dominion', classType: TankClass.DESTROYER, note: 'Siege shell guardian' },
+  { id: 'GUNNER', label: 'Gunner Dominion', classType: TankClass.GUNNER, note: 'Suppression lattice' },
+  { id: 'TRAPPER', label: 'Octo Trapper', classType: TankClass.TRAPPER, note: 'Area denial starfield' },
+  { id: 'TRIPLE', label: 'Triple Dominion', classType: TankClass.TRIPLE_TANK, note: 'Balanced lane pressure' },
 ];
 
 export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, onUpgradeClass, onRestart, onExit, highScores, playHover, engine, settings, deathReport }) => {
@@ -209,7 +232,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     ]);
     const tier60 = new Set<TankClass>([
       TankClass.TRIPLE_SHOT, TankClass.QUAD_TANK, TankClass.TWIN_FLANK,
-      TankClass.HUNTER, TankClass.ASSASSIN, TankClass.DESTROYER, TankClass.GUNNER,
+      TankClass.HUNTER, TankClass.TRAPPER, TankClass.ASSASSIN, TankClass.DESTROYER, TankClass.GUNNER,
       TankClass.SPREAD_SHOT, TankClass.TRI_ANGLE, TankClass.OVERSEER,
       TankClass.NURSE, TankClass.LEECH, TankClass.SPRAYER, TankClass.VAMPIRE, TankClass.DOCTOR,
     ]);
@@ -413,9 +436,15 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                            <ShapePreview type="VOID_PORTAL" rarity={ShapeRarity.COMMON} size={40} />
                         ) : primedSpawn.type === 'DUMMY' ? (
                            <ShapePreview type="DUMMY" rarity={ShapeRarity.COMMON} size={40} />
+                        ) : primedSpawn.type === 'ELITE_TANK' || primedSpawn.type === 'BOT_TANK' || primedSpawn.type === 'DOMINION_TANK' ? (
+                           <TankPreview tankClass={resolvePreviewClass(primedSpawn.classType || TankClass.BASIC)} size={40} showArenaVfx={isRebirthPreviewClass(primedSpawn.classType || TankClass.BASIC)} />
                         ) : null}
                     </div>
-                    <span className="text-white font-black italic">{primedSpawn.rarity} {primedSpawn.shapeType || primedSpawn.type}</span>
+                    <span className="text-white font-black italic">
+                      {primedSpawn.type === 'DOMINION_TANK'
+                        ? `${primedSpawn.weaponProfile || 'TRIPLE'} Dominion`
+                        : `${primedSpawn.rarity} ${primedSpawn.classType || primedSpawn.shapeType || primedSpawn.type}`}
+                    </span>
                     <span className="text-white/40 text-[9px] uppercase font-black tracking-widest">[Click Map]</span>
                 </div>
                 <button 
@@ -680,17 +709,17 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                </div>
              )}
 
-             {settings.showMinimap && (
-              <div className={`relative w-full overflow-hidden rounded-[1.15rem] border border-cyan-400/14 bg-[#050b12]/76 shadow-[0_10px_24px_rgba(0,0,0,0.28)] ${gameMode === GameMode.DOMINION ? 'aspect-[0.9]' : 'aspect-[0.92]'}`}>
-                   <div className="absolute inset-x-0 top-0 z-10 flex h-6 items-center justify-between border-b border-white/8 bg-black/30 px-2">
-                     <span className="text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/78">Tactical Map</span>
-                     <span className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/32">{gameMode === GameMode.DOMINION ? 'zone' : 'x1'}</span>
-                   </div>
-                   <div className="absolute inset-[7px] top-[30px] overflow-hidden rounded-md border border-white/8">
-                     <TacticalMinimap markers={minimapMarkers} mapSize={mapSize} camera={camera} inVoid={inVoid} gameMode={gameState.gameMode} />
-                   </div>
-                </div>
-               )}
+              {settings.showMinimap && (
+               <div className={`relative ml-auto w-[148px] overflow-hidden rounded-[1rem] border border-cyan-400/12 bg-[#050b12]/74 shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${gameMode === GameMode.DOMINION ? 'aspect-[0.88]' : 'aspect-[0.9]'}`}>
+                    <div className="absolute inset-x-0 top-0 z-10 flex h-5 items-center justify-between border-b border-white/7 bg-black/28 px-2">
+                      <span className="text-[7px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Tactical Map</span>
+                      <span className="text-[7px] font-bold uppercase tracking-[0.1em] text-white/30">{gameMode === GameMode.DOMINION ? 'zone' : 'x1'}</span>
+                    </div>
+                    <div className="absolute inset-[6px] top-[24px] overflow-hidden rounded-md border border-white/7">
+                      <TacticalMinimap markers={minimapMarkers} mapSize={mapSize} camera={camera} inVoid={inVoid} gameMode={gameState.gameMode} />
+                    </div>
+                 </div>
+                )}
           </div>
        </div>
 
@@ -933,6 +962,60 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             <span className="text-xs font-black tracking-[0.25em] text-white/30 uppercase">No Matching Chassis</span>
                           </div>
                         )}
+
+                        <div className="space-y-6">
+                            <div className="flex items-center gap-4 px-2">
+                                <span className="text-[10px] font-black text-amber-300/40 uppercase tracking-[0.38em] italic">Boss Override</span>
+                                <div className="h-px flex-1 bg-white/[0.04]"></div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                {SANDBOX_BOSS_CLASSES.map(cls => (
+                                    <button
+                                      key={cls}
+                                      onClick={() => { playHover?.(); onUpgradeClass(cls); }}
+                                      className={`group relative flex flex-col gap-4 rounded-[2rem] border p-5 text-left transition-all ${currentClass === cls ? 'border-amber-300 bg-amber-500/12 shadow-2xl' : 'border-white/8 bg-white/[0.03] hover:border-amber-300/35 hover:bg-white/[0.06]'}`}
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                                          <TankPreview tankClass={resolvePreviewClass(cls)} size={46} showArenaVfx={isRebirthPreviewClass(cls)} />
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/88">{cls}</div>
+                                          <div className="text-[8px] font-black uppercase tracking-[0.14em] text-amber-300/60">Instant boss chassis swap</div>
+                                        </div>
+                                      </div>
+                                      <div className="text-[8px] font-bold uppercase tracking-[0.15em] text-white/34">Sandbox only. Bypasses rebirth gate.</div>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="space-y-6">
+                            <div className="flex items-center gap-4 px-2">
+                                <span className="text-[10px] font-black text-cyan-300/38 uppercase tracking-[0.38em] italic">Dominion Profiles</span>
+                                <div className="h-px flex-1 bg-white/[0.04]"></div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                {SANDBOX_DOMINION_PROFILES.map(profile => (
+                                    <button
+                                      key={profile.id}
+                                      onClick={() => { playHover?.(); onUpgradeClass(profile.classType); }}
+                                      className={`group relative flex flex-col gap-4 rounded-[2rem] border p-5 text-left transition-all ${currentClass === profile.classType ? 'border-cyan-300 bg-cyan-500/12 shadow-2xl' : 'border-white/8 bg-white/[0.03] hover:border-cyan-300/35 hover:bg-white/[0.06]'}`}
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                                          <TankPreview tankClass={resolvePreviewClass(profile.classType)} size={42} />
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/88">{profile.label}</div>
+                                          <div className="text-[8px] font-black uppercase tracking-[0.14em] text-cyan-300/60">{profile.note}</div>
+                                        </div>
+                                      </div>
+                                      <div className="text-[8px] font-bold uppercase tracking-[0.15em] text-white/34">Uses the same combat profile family as Dominion guardians.</div>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                     </motion.div>
                   )}
 
@@ -1012,13 +1095,85 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                     <span className="text-[11px] font-black text-white italic uppercase tracking-widest relative z-10">Grand_Singularity</span>
                                     <div className="absolute inset-0 bg-gradient-to-b from-red-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                                 </button>
-                                <button onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: TankClass.TWIN, rarity: selectedRarity })} className={`p-8 rounded-[3rem] border-2 flex flex-col items-center gap-5 transition-all group relative overflow-hidden ${primedSpawn?.type === 'ELITE_TANK' ? 'bg-amber-500/20 border-amber-500 shadow-2xl' : 'bg-white/[0.03] border-white/5 hover:bg-white/[0.08] hover:border-amber-500/30'}`}>
+                                <button onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: TankClass.DESTROYER, rarity: selectedRarity })} className={`p-8 rounded-[3rem] border-2 flex flex-col items-center gap-5 transition-all group relative overflow-hidden ${primedSpawn?.type === 'ELITE_TANK' ? 'bg-amber-500/20 border-amber-500 shadow-2xl' : 'bg-white/[0.03] border-white/5 hover:bg-white/[0.08] hover:border-amber-500/30'}`}>
                                     <div className="shrink-0 flex items-center justify-center transform group-hover:scale-110 group-active:scale-95 transition-all duration-500 relative z-10">
                                         <TankPreview tankClass={TankClass.DESTROYER} size={84} />
                                     </div>
                                     <span className="text-[11px] font-black text-white italic uppercase tracking-widest relative z-10">Elite_Legionnaire</span>
                                     <div className="absolute inset-0 bg-gradient-to-b from-amber-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                                 </button>
+                            </div>
+
+                            <div className="space-y-6">
+                                <div className="flex items-center gap-4 px-2">
+                                    <span className="text-[10px] font-black text-amber-300/38 uppercase tracking-[0.4em] italic">Elite Boss Fabrication</span>
+                                    <div className="h-px flex-1 bg-white/[0.04]"></div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {SANDBOX_BOSS_CLASSES.map(cls => (
+                                        <button
+                                          key={cls}
+                                          onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: cls, rarity: selectedRarity })}
+                                          className={`rounded-[2rem] border p-4 flex items-center gap-3 transition-all ${primedSpawn?.type === 'ELITE_TANK' && primedSpawn?.classType === cls ? 'bg-amber-500/18 border-amber-300 shadow-xl' : 'bg-white/[0.03] border-white/6 hover:bg-white/[0.07] hover:border-amber-300/30'}`}
+                                        >
+                                          <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
+                                            <TankPreview tankClass={resolvePreviewClass(cls)} size={38} showArenaVfx={isRebirthPreviewClass(cls)} />
+                                          </div>
+                                          <div className="min-w-0 text-left">
+                                            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{cls}</div>
+                                            <div className="text-[7px] font-black uppercase tracking-[0.14em] text-amber-300/60">Spawn boss AI chassis</div>
+                                          </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="space-y-6">
+                                <div className="flex items-center gap-4 px-2">
+                                    <span className="text-[10px] font-black text-cyan-300/38 uppercase tracking-[0.4em] italic">Elite Tank Templates</span>
+                                    <div className="h-px flex-1 bg-white/[0.04]"></div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {SANDBOX_ELITE_CLASS_TEMPLATES.map(cls => (
+                                        <button
+                                          key={cls}
+                                          onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: cls, rarity: selectedRarity })}
+                                          className={`rounded-[2rem] border p-4 flex items-center gap-3 transition-all ${primedSpawn?.type === 'ELITE_TANK' && primedSpawn?.classType === cls ? 'bg-cyan-500/18 border-cyan-300 shadow-xl' : 'bg-white/[0.03] border-white/6 hover:bg-white/[0.07] hover:border-cyan-300/30'}`}
+                                        >
+                                          <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
+                                            <TankPreview tankClass={resolvePreviewClass(cls)} size={36} />
+                                          </div>
+                                          <div className="min-w-0 text-left">
+                                            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{cls}</div>
+                                            <div className="text-[7px] font-black uppercase tracking-[0.14em] text-cyan-300/60">Spawn elite AI variant</div>
+                                          </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="space-y-6">
+                                <div className="flex items-center gap-4 px-2">
+                                    <span className="text-[10px] font-black text-violet-300/38 uppercase tracking-[0.4em] italic">Dominion Guardians</span>
+                                    <div className="h-px flex-1 bg-white/[0.04]"></div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {SANDBOX_DOMINION_PROFILES.map(profile => (
+                                        <button
+                                          key={profile.id}
+                                          onClick={() => handlePrimeSpawn({ type: 'DOMINION_TANK', classType: profile.classType, rarity: ShapeRarity.COMMON, weaponProfile: profile.id })}
+                                          className={`rounded-[2rem] border p-4 flex items-center gap-3 transition-all ${primedSpawn?.type === 'DOMINION_TANK' && primedSpawn?.weaponProfile === profile.id ? 'bg-violet-500/18 border-violet-300 shadow-xl' : 'bg-white/[0.03] border-white/6 hover:bg-white/[0.07] hover:border-violet-300/30'}`}
+                                        >
+                                          <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
+                                            <TankPreview tankClass={resolvePreviewClass(profile.classType)} size={36} />
+                                          </div>
+                                          <div className="min-w-0 text-left">
+                                            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{profile.label}</div>
+                                            <div className="text-[7px] font-black uppercase tracking-[0.14em] text-violet-300/60">{profile.note}</div>
+                                          </div>
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
 
                             {/* Shape Toggles & Spawning */}
@@ -1184,7 +1339,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       </div>
 
         {/* Center HUD */}
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex w-[min(380px,34vw)] flex-col items-center pointer-events-auto">
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex w-[min(330px,30vw)] min-w-[250px] flex-col items-center pointer-events-auto">
             {voidTransitStage && (
               <div className="mb-2 w-full rounded-xl border border-violet-300/18 bg-[#0b0816]/66 px-3 py-2 backdrop-blur-lg shadow-[0_8px_18px_rgba(0,0,0,0.22)]">
                 <div className="flex items-center justify-between gap-3 text-[8px] font-black uppercase tracking-[0.2em] text-violet-100/82">
@@ -1199,48 +1354,48 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 </div>
               </div>
             )}
-            <div className="w-full rounded-[1.1rem] border border-white/7 bg-[#070d13]/58 px-3 py-2.5 backdrop-blur-lg shadow-[0_10px_20px_rgba(0,0,0,0.22)]">
-              <div className="mb-2 flex items-start justify-between gap-3">
+            <div className="w-full rounded-[1rem] border border-cyan-300/10 bg-[#071018]/62 px-3 py-2 backdrop-blur-lg shadow-[0_8px_18px_rgba(0,0,0,0.2)]">
+              <div className="mb-1.5 flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[7px] font-black uppercase tracking-[0.22em] text-cyan-300/52">Combat Telemetry</div>
-                  <div className={`mt-0.5 text-[24px] font-black leading-none tracking-tight ${scoreLabelTone}`}>{scoreLabel}</div>
-                  <div className="mt-1 text-[8px] font-black uppercase tracking-[0.15em] text-white/48">Lvl {level} {compactCurrentClass}</div>
+                  <div className="text-[6px] font-black uppercase tracking-[0.2em] text-cyan-300/54">Combat Telemetry</div>
+                  <div className={`mt-0.5 text-[21px] font-black leading-none tracking-tight ${scoreLabelTone}`}>{scoreLabel}</div>
+                  <div className="mt-0.5 text-[7px] font-black uppercase tracking-[0.14em] text-white/52">Lvl {level} {compactCurrentClass}</div>
                 </div>
-                <div className="flex shrink-0 flex-col items-end gap-1.5">
+                <div className="flex shrink-0 flex-col items-end gap-1">
                   {availableStatPoints > 0 && (
-                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/16 bg-cyan-500/6 px-2 py-0.5">
-                      <span className="text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/70">Points</span>
-                      <span className="text-[11px] font-black text-cyan-300">{availableStatPoints}</span>
+                    <div className="inline-flex items-center gap-1 rounded-md border border-cyan-400/16 bg-cyan-500/6 px-1.5 py-0.5">
+                      <span className="text-[7px] font-black uppercase tracking-[0.16em] text-cyan-200/70">Pts</span>
+                      <span className="text-[10px] font-black text-cyan-300">{availableStatPoints}</span>
                     </div>
                   )}
                   {isDrainingClass && (
-                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/20 bg-rose-950/18 px-2 py-0.5">
-                      <span className="text-[8px] font-black uppercase tracking-[0.16em] text-rose-200/85">Drain</span>
-                      <span className="text-[9px] font-black text-rose-300">{formatScoreValue(liveDrainValue, settings.compactScoreNotation)}</span>
-                      <span className="text-[8px] font-black text-amber-300">x{liveDrainStacks}</span>
+                    <div className="inline-flex items-center gap-1 rounded-md border border-rose-400/20 bg-rose-950/18 px-1.5 py-0.5">
+                      <span className="text-[7px] font-black uppercase tracking-[0.14em] text-rose-200/85">Drain</span>
+                      <span className="text-[8px] font-black text-rose-300">{formatScoreValue(liveDrainValue, settings.compactScoreNotation)}</span>
+                      <span className="text-[7px] font-black text-amber-300">x{liveDrainStacks}</span>
                     </div>
                   )}
                 </div>
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">
-                  <div className="mb-1 flex items-center justify-between text-[7px] font-black uppercase tracking-[0.16em] text-white/42">
+                  <div className="mb-1 flex items-center justify-between text-[6px] font-black uppercase tracking-[0.16em] text-white/46">
                     <span>Hull Integrity</span>
                     <span>{Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}</span>
                   </div>
-                  <div className="relative h-2 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
-                      <div className={`relative h-full transition-all duration-75 ease-out ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / maxHealth) * 100)}%` }} />
+                  <div className="relative h-1.5 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
+                      <div className={`relative h-full transition-all duration-75 ease-out ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / Math.max(1, maxHealth)) * 100)}%` }} />
                   </div>
                 </div>
                 <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">
-                  <div className="mb-1 flex items-center justify-between text-[7px] font-black uppercase tracking-[0.16em] text-white/42">
+                  <div className="mb-1 flex items-center justify-between text-[6px] font-black uppercase tracking-[0.16em] text-white/46">
                     <span>Experience</span>
                     <span>{Math.floor(displayXpPercent)}%</span>
                   </div>
-                  <div className="relative h-2 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
+                  <div className="relative h-1.5 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
                      <div className="relative h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-75 ease-out" style={{ width: `${displayXpPercent}%` }}></div>
-                   </div>
-                 </div>
+                    </div>
+                  </div>
                </div>
             </div>
         </div>

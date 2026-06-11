@@ -64,7 +64,7 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
 
         const getShapeAngleOffset = (): number => {
             if (type === ShapeType.DIAMOND) return Math.PI * 0.25;
-            if (type === ShapeType.TRIANGLE || type === ShapeType.HEPTAGON) return -Math.PI / 2;
+            if (type === ShapeType.TRIANGLE || type === ShapeType.HEPTAGON || type === ShapeType.STAR || type === ShapeType.NONAGON) return -Math.PI / 2;
             return 0;
         };
 
@@ -72,6 +72,19 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
             ctx.beginPath();
             for (let i = 0; i < sides; i++) {
                 const angle = angleOffset + (i * 2 * Math.PI) / sides;
+                const x = Math.cos(angle) * radius;
+                const y = Math.sin(angle) * radius;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+        };
+
+        const traceStarShape = (ctx: CanvasRenderingContext2D, outerRadius: number, innerRadius: number) => {
+            ctx.beginPath();
+            for (let i = 0; i < 10; i++) {
+                const radius = i % 2 === 0 ? outerRadius : innerRadius;
+                const angle = (i * Math.PI) / 5;
                 const x = Math.cos(angle) * radius;
                 const y = Math.sin(angle) * radius;
                 if (i === 0) ctx.moveTo(x, y);
@@ -244,6 +257,33 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
             ctx.restore();
         };
 
+        const drawAdvancedStar = (ctx: CanvasRenderingContext2D, r: number, fillColor: string, strokeColor: string, glowBlur: number, glowColor: string) => {
+            const t = Date.now() / 1000;
+            if (glowBlur > 0) { ctx.shadowBlur = glowBlur; ctx.shadowColor = glowColor; }
+            ctx.save();
+            ctx.rotate(-Math.PI / 2);
+            const shell = ctx.createRadialGradient(0, 0, r * 0.18, 0, 0, r);
+            shell.addColorStop(0, 'rgba(255,255,255,0.34)');
+            shell.addColorStop(0.38, fillColor);
+            shell.addColorStop(1, 'rgba(4,18,34,0.92)');
+            traceStarShape(ctx, r, r * 0.48);
+            ctx.fillStyle = shell;
+            ctx.fill();
+            ctx.lineWidth = 3.2;
+            ctx.strokeStyle = strokeColor;
+            ctx.stroke();
+            ctx.restore();
+            ctx.shadowBlur = 0;
+            ctx.save();
+            ctx.globalAlpha = 0.38;
+            ctx.rotate(t * 0.45);
+            ctx.strokeStyle = glowColor !== 'transparent' ? glowColor : strokeColor;
+            ctx.lineWidth = 2;
+            traceStarShape(ctx, r * 1.2, r * 0.58);
+            ctx.stroke();
+            ctx.restore();
+        };
+
         const render = () => {
             const dt = 0.016;
             pulseTimer += dt * (isBoss ? 2 : 3);
@@ -367,6 +407,8 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
                     ctx.save();
                     if (type === ShapeType.OCTAGON) {
                         drawAdvancedOctagon(ctx, effectiveRadius, fillColor, strokeColor, glowBlur, glowColor);
+                    } else if (type === ShapeType.STAR) {
+                        drawAdvancedStar(ctx, effectiveRadius, fillColor, strokeColor, glowBlur, glowColor);
                     } else if (type === ShapeType.DIAMOND) {
                         drawAdvancedDiamond(ctx, effectiveRadius, fillColor, strokeColor, glowBlur, glowColor);
                     } else if (type === ShapeType.HEPTAGON) {
