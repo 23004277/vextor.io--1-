@@ -1,5 +1,5 @@
 
-import { StatType, TankClass, ShopItem, ShapeType, ShapeRarity, Achievement, Quest } from './types';
+import { StatType, TankClass, ShopItem, ShapeType, ShapeRarity, Achievement, Quest, SecondarySector } from './types';
 
 export const BOT_NAMES = [
     'Spin2Team', 'ProGamer', 'Noob', 'Guest_123', 'VextorPilot', 'Tanky', 'SniperX', 'Destroyer',
@@ -49,6 +49,10 @@ export const BOT_STAT_PRIORITIES: Record<TankClass, StatType[]> = {
   [TankClass.TRI_ANGLE]: [StatType.MOVEMENT_SPEED, StatType.BODY_DAMAGE, StatType.MAX_HEALTH, StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.MAX_SHIELD, StatType.REGEN],
   [TankClass.OCTO_TANK]: [StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
   [TankClass.TRAPPER]: [StatType.BULLET_PENETRATION, StatType.BULLET_DAMAGE, StatType.RELOAD, StatType.BULLET_SPEED, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
+  [TankClass.DUAL_TRAPPER]: [StatType.BULLET_PENETRATION, StatType.BULLET_DAMAGE, StatType.BULLET_SPEED, StatType.RELOAD, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
+  [TankClass.MACHINE_GUN_TRAPPER]: [StatType.RELOAD, StatType.BULLET_SPEED, StatType.BULLET_PENETRATION, StatType.BULLET_DAMAGE, StatType.MOVEMENT_SPEED, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.REGEN],
+  [TankClass.OCTO_TRAPPER]: [StatType.BULLET_PENETRATION, StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_SPEED, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
+  [TankClass.TRIPLE_TRAPPER]: [StatType.BULLET_DAMAGE, StatType.RELOAD, StatType.BULLET_PENETRATION, StatType.BULLET_SPEED, StatType.MOVEMENT_SPEED, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.REGEN],
   [TankClass.PENTA_SHOT]: [StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
   [TankClass.SPREAD_SHOT]: [StatType.RELOAD, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.MAX_HEALTH, StatType.MAX_SHIELD, StatType.MOVEMENT_SPEED, StatType.REGEN],
   [TankClass.HUNTER]: [StatType.BULLET_SPEED, StatType.BULLET_DAMAGE, StatType.BULLET_PENETRATION, StatType.RELOAD, StatType.MAX_HEALTH, StatType.MOVEMENT_SPEED, StatType.REGEN],
@@ -99,14 +103,21 @@ export const CLASS_ABILITY_CONFIG = {
   },
   blood: {
     healthSacrificeRatio: 0.22,
-    activeSeconds: 6.0,
-    lifestealAuraMultiplier: 2.0,
+    activeSeconds: 4.5,
+    lifestealAuraMultiplier: 1.35,
+    burstRadiusMultiplier: 1.22,
+    burstDamageHealthRatio: 0.1,
+    burstHealRatio: 0.22,
+    pactDrainDotStacks: 1,
+    burstDrainDotStacks: 1,
     decayStackDuration: 4.0,
-    decayTickSeconds: 0.5,
-    decayDamagePerStackRatio: 0.012,
-    cooldownSeconds: 12,
+    decayTickSeconds: 0.65,
+    decayDamagePerStackRatio: 0.009,
+    cooldownSeconds: 15,
   },
 } as const;
+
+export const SECONDARY_SECTOR_OPTIONS: SecondarySector[] = ['none', 'restoration', 'blood'];
 
 export const COLORS = {
   background: '#cdcdcd', // Grid lines
@@ -164,13 +175,13 @@ export const STAT_COLORS: Record<StatType, string> = {
 };
 
 export const CLASS_TREE: Partial<Record<TankClass, TankClass[]>> = {
-  [TankClass.BASIC]: [TankClass.TWIN, TankClass.SNIPER, TankClass.MACHINE_GUN, TankClass.FLANK_GUARD, TankClass.PACIFIST_TRAINEE, TankClass.DRAINER_TRAINEE],
-  [TankClass.PACIFIST_TRAINEE]: [TankClass.NURSE],
-  [TankClass.NURSE]: [TankClass.DOCTOR],
-  [TankClass.DOCTOR]: [TankClass.PLAGUE_DOCTOR],
-  [TankClass.DRAINER_TRAINEE]: [TankClass.LEECH],
-  [TankClass.LEECH]: [TankClass.VAMPIRE],
-  [TankClass.VAMPIRE]: [TankClass.REAPER],
+  [TankClass.BASIC]: [TankClass.TWIN, TankClass.SNIPER, TankClass.MACHINE_GUN, TankClass.FLANK_GUARD],
+  [TankClass.PACIFIST_TRAINEE]: [],
+  [TankClass.NURSE]: [],
+  [TankClass.DOCTOR]: [],
+  [TankClass.DRAINER_TRAINEE]: [],
+  [TankClass.LEECH]: [],
+  [TankClass.VAMPIRE]: [],
   // Tier 2 -> Tier 3
   [TankClass.TWIN]: [TankClass.TRIPLE_SHOT, TankClass.QUAD_TANK, TankClass.TWIN_FLANK],
   [TankClass.SNIPER]: [TankClass.ASSASSIN, TankClass.OVERSEER, TankClass.HUNTER, TankClass.TRAPPER],
@@ -188,11 +199,15 @@ export const CLASS_TREE: Partial<Record<TankClass, TankClass[]>> = {
   [TankClass.GUNNER]: [TankClass.AUTO_GUNNER, TankClass.STREAMLINER],
   [TankClass.TRI_ANGLE]: [TankClass.BOOSTER, TankClass.FIGHTER],
   [TankClass.SPRAYER]: [],
+  [TankClass.TRAPPER]: [TankClass.DUAL_TRAPPER, TankClass.MACHINE_GUN_TRAPPER],
+  [TankClass.DUAL_TRAPPER]: [TankClass.OCTO_TRAPPER, TankClass.TRIPLE_TRAPPER],
+  [TankClass.MACHINE_GUN_TRAPPER]: [],
 
   // Tier 4 (Finals)
   [TankClass.TRIPLE_TWIN]: [],
   [TankClass.OCTO_TANK]: [],
-  [TankClass.TRAPPER]: [],
+  [TankClass.OCTO_TRAPPER]: [],
+  [TankClass.TRIPLE_TRAPPER]: [],
   [TankClass.TRIPLE_TANK]: [],
   [TankClass.PENTA_SHOT]: [],
   [TankClass.SPREAD_SHOT]: [],
@@ -227,12 +242,9 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
   ],
   // Tier 3
   [TankClass.TRIPLE_SHOT]: [
-    // Distinct from Twin: heavy central lane + two primary spread cannons + two light wing pokers.
-    [2.08, 0.86, 0.05, 0, 0.9, 0],
-    [1.92, 0.76, 0.02, -Math.PI / 5, 0.92, 0],
-    [1.92, 0.76, 0.02, Math.PI / 5, 0.92, 0],
-    [1.48, 0.56, -0.06, -Math.PI * 0.31, 1.18, 0],
-    [1.48, 0.56, -0.06, Math.PI * 0.31, 1.18, 0],
+    [1.82, 0.74, -0.08, -0.34, 0.94, 0],
+    [1.88, 0.8, -0.04, 0, 0.9, 0],
+    [1.82, 0.74, -0.08, 0.34, 0.94, 0],
   ],
   [TankClass.QUAD_TANK]: [
     [1.9, 0.8, 0, 0, 1, 0],
@@ -249,17 +261,8 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
     [1.8, 1.5, 0, 0, 3.5, 0], // REWORKED: Single colossal stubby barrel
   ],
   [TankClass.SPRAYER]: [
-    // Crown emitters (high-velocity stream shell)
-    [1.58, 0.38, 0.08, 0.09, 0.2, 0.72, 1.95],
-    [1.58, 0.38, 0.08, -0.09, 0.2, -0.72, 1.95],
-    // Mid emitters
-    [1.74, 0.45, 0.05, 0.055, 0.24, 0.44, 1.65],
-    [1.74, 0.45, 0.05, -0.055, 0.24, -0.44, 1.65],
-    // Heavy inner pressure nozzle (signature core cannon)
-    [2.16, 1.08, -0.02, 0, 0.38, 0, 0.52],
-    // Rear vent stabilizers (high spread assist)
-    [1.42, 0.36, -0.14, 0.12, 0.22, 0.88, 2.15],
-    [1.42, 0.36, -0.14, -0.12, 0.22, -0.88, 2.15],
+    [1.54, 1.06, 0.02, 0, 1.18, 0, 1.18],
+    [2.18, 0.58, 0.18, 0, 0.92, 0, 0.64],
   ],
   [TankClass.TRI_ANGLE]: [
     [1.9, 0.8, 0, 0, 1, 0],
@@ -272,6 +275,13 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
   ],
   [TankClass.TRAPPER]: [
     [1.52, 1.08, 0.04, 0, 2.2, 0],
+  ],
+  [TankClass.DUAL_TRAPPER]: [
+    [1.48, 1.02, 0.02, 0, 2.28, 0.52],
+    [1.48, 1.02, 0.02, 0, 2.28, -0.52],
+  ],
+  [TankClass.MACHINE_GUN_TRAPPER]: [
+    [1.66, 1.18, 0.08, 0, 0.9, 0, 0.34],
   ],
   [TankClass.GUNNER]: [
     // Redesigned "fan-cluster" gunner profile: dual needles + dual support barrels + compact core stabilizer.
@@ -298,10 +308,25 @@ export const TANK_CONFIGS: Record<TankClass, number[][]> = {
     [1.9, 0.8, 0, Math.PI, 1, 0], [1.9, 0.8, 0, -(3 * Math.PI) / 4, 1, 0],
     [1.9, 0.8, 0, -Math.PI / 2, 1, 0], [1.9, 0.8, 0, -Math.PI / 4, 1, 0],
   ],
+  [TankClass.OCTO_TRAPPER]: [
+    [1.42, 0.92, 0.02, 0, 2.32, 0],
+    [1.42, 0.92, 0.02, Math.PI / 4, 2.32, 0],
+    [1.42, 0.92, 0.02, Math.PI / 2, 2.32, 0],
+    [1.42, 0.92, 0.02, (3 * Math.PI) / 4, 2.32, 0],
+    [1.42, 0.92, 0.02, Math.PI, 2.32, 0],
+    [1.42, 0.92, 0.02, -(3 * Math.PI) / 4, 2.32, 0],
+    [1.42, 0.92, 0.02, -Math.PI / 2, 2.32, 0],
+    [1.42, 0.92, 0.02, -Math.PI / 4, 2.32, 0],
+  ],
   [TankClass.TRIPLE_TANK]: [
     [1.9, 0.8, 0, 0, 1.0, 0.6], 
     [1.9, 0.8, 0, 0, 1.0, -0.6], 
     [2.1, 0.8, 0, 0, 1.0, 0],
+  ],
+  [TankClass.TRIPLE_TRAPPER]: [
+    [1.56, 0.98, 0.02, 0, 1.96, 0.58],
+    [1.72, 1.06, 0.06, 0, 1.9, 0],
+    [1.56, 0.98, 0.02, 0, 1.96, -0.58],
   ],
   [TankClass.PENTA_SHOT]: [
     [1.9, 0.8, 0, 0, 1, 0],
@@ -473,6 +498,22 @@ export const CLASS_PROJECTILE_MODIFIERS: Partial<Record<TankClass, {
     penetrationMultiplier: 1.22,
     projectileHealthMultiplier: 1.34,
   },
+  [TankClass.DUAL_TRAPPER]: {
+    penetrationMultiplier: 1.16,
+    projectileHealthMultiplier: 1.28,
+  },
+  [TankClass.MACHINE_GUN_TRAPPER]: {
+    penetrationMultiplier: 0.94,
+    projectileHealthMultiplier: 0.96,
+  },
+  [TankClass.OCTO_TRAPPER]: {
+    penetrationMultiplier: 1.08,
+    projectileHealthMultiplier: 1.16,
+  },
+  [TankClass.TRIPLE_TRAPPER]: {
+    penetrationMultiplier: 1.02,
+    projectileHealthMultiplier: 1.08,
+  },
 };
 
 // --- Shape Stats ---
@@ -495,9 +536,9 @@ export const BOSS_STATS: Record<string, { id: string; name: string; health: numb
     ALPHA_PENTAGON: {
         id: 'alpha_pentagon',
         name: 'Alpha Pentagon',
-        health: 3000,
-        xp: 3000,
-        radius: 100,
+        health: 5400,
+        xp: 6200,
+        radius: 138,
         color: '#768dfc',
         sides: 5,
         description: 'A massive polygon found only in the heart of the Pentagon Nest. It acts as a primary objective for high-level players.'
@@ -514,30 +555,214 @@ export const BOSS_STATS: Record<string, { id: string; name: string; health: numb
     }
 };
 
-export const RARITY_CONFIG: Record<ShapeRarity, { xpMult: number; hpMult: number; chance: number; color?: string; sizeMult: number }> = {
-    [ShapeRarity.COMMON]: { xpMult: 1, hpMult: 1, chance: 0.72, sizeMult: 1.0 },
-    [ShapeRarity.UNCOMMON]: { xpMult: 1.6, hpMult: 1.5, chance: 0.18, sizeMult: 1.0 },
-    [ShapeRarity.RARE]: { xpMult: 2.8, hpMult: 3, chance: 0.06, color: '#50ef95', sizeMult: 1.3 },
-    [ShapeRarity.EPIC]: { xpMult: 5, hpMult: 10, chance: 0.015, color: '#ffd700', sizeMult: 1.7 },
-    [ShapeRarity.LEGENDARY]: { xpMult: 9, hpMult: 50, chance: 0.005, color: '#ff5e00', sizeMult: 2.2 },
-    [ShapeRarity.MYTHICAL]: { xpMult: 15, hpMult: 250, chance: 0.001, color: '#a200ff', sizeMult: 2.8 },
-    [ShapeRarity.ETERNAL]: { xpMult: 24, hpMult: 1200, chance: 0.0004, color: '#00ffff', sizeMult: 3.5 },
-    [ShapeRarity.TRANSCENDENT]: { xpMult: 38, hpMult: 5000, chance: 0.0002, color: '#ffffff', sizeMult: 5.0 },
-    [ShapeRarity.GODLY]: { xpMult: 58, hpMult: 25000, chance: 0.00005, color: '#ff00ff', sizeMult: 7.0 },
-    [ShapeRarity.DIVINE]: { xpMult: 85, hpMult: 100000, chance: 0.00001, color: '#6e2cf2', sizeMult: 10.0 },
+export type ShapeRarityProfile = {
+    xpMult: number;
+    hpMult: number;
+    chance: number;
+    color?: string;
+    sizeMult: number;
+    damageMult: number;
+    driftMult: number;
+    spinMult: number;
 };
 
-export const VOID_RARITY_CONFIG: Record<ShapeRarity, { xpMult: number; hpMult: number; chance: number; color?: string; sizeMult: number }> = {
-    [ShapeRarity.COMMON]: { xpMult: 1, hpMult: 1, chance: 0.25, sizeMult: 1.0 },
-    [ShapeRarity.UNCOMMON]: { xpMult: 1.7, hpMult: 1.5, chance: 0.25, sizeMult: 1.0 },
-    [ShapeRarity.RARE]: { xpMult: 3, hpMult: 3, chance: 0.22, color: '#50ef95', sizeMult: 1.3 },
-    [ShapeRarity.EPIC]: { xpMult: 5.5, hpMult: 10, chance: 0.18, color: '#ffd700', sizeMult: 1.7 },
-    [ShapeRarity.LEGENDARY]: { xpMult: 10, hpMult: 50, chance: 0.06, color: '#ff5e00', sizeMult: 2.2 },
-    [ShapeRarity.MYTHICAL]: { xpMult: 18, hpMult: 250, chance: 0.025, color: '#a200ff', sizeMult: 2.8 },
-    [ShapeRarity.ETERNAL]: { xpMult: 30, hpMult: 1200, chance: 0.008, color: '#00ffff', sizeMult: 3.5 },
-    [ShapeRarity.TRANSCENDENT]: { xpMult: 48, hpMult: 5000, chance: 0.002, color: '#ffffff', sizeMult: 5.0 },
-    [ShapeRarity.GODLY]: { xpMult: 72, hpMult: 25000, chance: 0.0008, color: '#ff00ff', sizeMult: 7.0 },
-    [ShapeRarity.DIVINE]: { xpMult: 110, hpMult: 100000, chance: 0.0002, color: '#6e2cf2', sizeMult: 10.0 },
+export const RARITY_CONFIG: Record<ShapeRarity, ShapeRarityProfile> = {
+    [ShapeRarity.COMMON]: { xpMult: 1, hpMult: 1, chance: 0.72, sizeMult: 1.0, damageMult: 1, driftMult: 1, spinMult: 1 },
+    [ShapeRarity.UNCOMMON]: { xpMult: 1.6, hpMult: 1.5, chance: 0.18, sizeMult: 1.05, damageMult: 1.08, driftMult: 1.02, spinMult: 1.04 },
+    [ShapeRarity.RARE]: { xpMult: 2.8, hpMult: 3, chance: 0.06, color: '#50ef95', sizeMult: 1.3, damageMult: 1.18, driftMult: 1.06, spinMult: 1.08 },
+    [ShapeRarity.EPIC]: { xpMult: 5, hpMult: 10, chance: 0.015, color: '#ffd700', sizeMult: 1.7, damageMult: 1.34, driftMult: 1.1, spinMult: 1.12 },
+    [ShapeRarity.LEGENDARY]: { xpMult: 9, hpMult: 50, chance: 0.005, color: '#ff5e00', sizeMult: 2.2, damageMult: 1.64, driftMult: 1.16, spinMult: 1.18 },
+    [ShapeRarity.MYTHICAL]: { xpMult: 15, hpMult: 250, chance: 0.001, color: '#a200ff', sizeMult: 2.8, damageMult: 1.95, driftMult: 1.2, spinMult: 1.26 },
+    [ShapeRarity.ETERNAL]: { xpMult: 24, hpMult: 1200, chance: 0.0004, color: '#00ffff', sizeMult: 3.5, damageMult: 2.35, driftMult: 1.24, spinMult: 1.34 },
+    [ShapeRarity.TRANSCENDENT]: { xpMult: 38, hpMult: 5000, chance: 0.0002, color: '#ffffff', sizeMult: 5.0, damageMult: 2.8, driftMult: 1.3, spinMult: 1.45 },
+    [ShapeRarity.GODLY]: { xpMult: 58, hpMult: 25000, chance: 0.00005, color: '#ff00ff', sizeMult: 7.0, damageMult: 3.4, driftMult: 1.38, spinMult: 1.58 },
+    [ShapeRarity.DIVINE]: { xpMult: 85, hpMult: 100000, chance: 0.00001, color: '#6e2cf2', sizeMult: 10.0, damageMult: 4.1, driftMult: 1.48, spinMult: 1.72 },
+};
+
+export const VOID_RARITY_CONFIG: Record<ShapeRarity, ShapeRarityProfile> = {
+    [ShapeRarity.COMMON]: { xpMult: 1, hpMult: 1, chance: 0.25, sizeMult: 1.0, damageMult: 1.04, driftMult: 1.05, spinMult: 1.05 },
+    [ShapeRarity.UNCOMMON]: { xpMult: 1.7, hpMult: 1.5, chance: 0.25, sizeMult: 1.05, damageMult: 1.12, driftMult: 1.08, spinMult: 1.1 },
+    [ShapeRarity.RARE]: { xpMult: 3, hpMult: 3, chance: 0.22, color: '#50ef95', sizeMult: 1.3, damageMult: 1.24, driftMult: 1.12, spinMult: 1.14 },
+    [ShapeRarity.EPIC]: { xpMult: 5.5, hpMult: 10, chance: 0.18, color: '#ffd700', sizeMult: 1.7, damageMult: 1.42, driftMult: 1.16, spinMult: 1.22 },
+    [ShapeRarity.LEGENDARY]: { xpMult: 10, hpMult: 50, chance: 0.06, color: '#ff5e00', sizeMult: 2.2, damageMult: 1.76, driftMult: 1.2, spinMult: 1.28 },
+    [ShapeRarity.MYTHICAL]: { xpMult: 18, hpMult: 250, chance: 0.025, color: '#a200ff', sizeMult: 2.8, damageMult: 2.08, driftMult: 1.25, spinMult: 1.36 },
+    [ShapeRarity.ETERNAL]: { xpMult: 30, hpMult: 1200, chance: 0.008, color: '#00ffff', sizeMult: 3.5, damageMult: 2.52, driftMult: 1.3, spinMult: 1.46 },
+    [ShapeRarity.TRANSCENDENT]: { xpMult: 48, hpMult: 5000, chance: 0.002, color: '#ffffff', sizeMult: 5.0, damageMult: 3.02, driftMult: 1.38, spinMult: 1.62 },
+    [ShapeRarity.GODLY]: { xpMult: 72, hpMult: 25000, chance: 0.0008, color: '#ff00ff', sizeMult: 7.0, damageMult: 3.74, driftMult: 1.48, spinMult: 1.78 },
+    [ShapeRarity.DIVINE]: { xpMult: 110, hpMult: 100000, chance: 0.0002, color: '#6e2cf2', sizeMult: 10.0, damageMult: 4.55, driftMult: 1.6, spinMult: 1.95 },
+};
+
+const SHAPE_RARITY_CHANCE_OVERRIDES: Partial<Record<ShapeType, Partial<Record<ShapeRarity, number>>>> = {
+    [ShapeType.HEPTAGON]: {
+        [ShapeRarity.COMMON]: 0.58,
+        [ShapeRarity.UNCOMMON]: 0.22,
+        [ShapeRarity.RARE]: 0.11,
+        [ShapeRarity.EPIC]: 0.05,
+        [ShapeRarity.LEGENDARY]: 0.02,
+        [ShapeRarity.MYTHICAL]: 0.008,
+        [ShapeRarity.ETERNAL]: 0.002,
+    },
+    [ShapeType.HEXAGON]: {
+        [ShapeRarity.COMMON]: 0.5,
+        [ShapeRarity.UNCOMMON]: 0.23,
+        [ShapeRarity.RARE]: 0.14,
+        [ShapeRarity.EPIC]: 0.07,
+        [ShapeRarity.LEGENDARY]: 0.035,
+        [ShapeRarity.MYTHICAL]: 0.015,
+        [ShapeRarity.ETERNAL]: 0.006,
+        [ShapeRarity.TRANSCENDENT]: 0.002,
+    },
+    [ShapeType.OCTAGON]: {
+        [ShapeRarity.COMMON]: 0.44,
+        [ShapeRarity.UNCOMMON]: 0.21,
+        [ShapeRarity.RARE]: 0.15,
+        [ShapeRarity.EPIC]: 0.09,
+        [ShapeRarity.LEGENDARY]: 0.06,
+        [ShapeRarity.MYTHICAL]: 0.03,
+        [ShapeRarity.ETERNAL]: 0.012,
+        [ShapeRarity.TRANSCENDENT]: 0.004,
+        [ShapeRarity.GODLY]: 0.0015,
+        [ShapeRarity.DIVINE]: 0.0005,
+    },
+    [ShapeType.NONAGON]: {
+        [ShapeRarity.COMMON]: 0.38,
+        [ShapeRarity.UNCOMMON]: 0.19,
+        [ShapeRarity.RARE]: 0.16,
+        [ShapeRarity.EPIC]: 0.11,
+        [ShapeRarity.LEGENDARY]: 0.075,
+        [ShapeRarity.MYTHICAL]: 0.04,
+        [ShapeRarity.ETERNAL]: 0.018,
+        [ShapeRarity.TRANSCENDENT]: 0.006,
+        [ShapeRarity.GODLY]: 0.002,
+        [ShapeRarity.DIVINE]: 0.0007,
+    },
+    [ShapeType.DECAGON]: {
+        [ShapeRarity.COMMON]: 0.33,
+        [ShapeRarity.UNCOMMON]: 0.18,
+        [ShapeRarity.RARE]: 0.16,
+        [ShapeRarity.EPIC]: 0.12,
+        [ShapeRarity.LEGENDARY]: 0.09,
+        [ShapeRarity.MYTHICAL]: 0.05,
+        [ShapeRarity.ETERNAL]: 0.025,
+        [ShapeRarity.TRANSCENDENT]: 0.01,
+        [ShapeRarity.GODLY]: 0.003,
+        [ShapeRarity.DIVINE]: 0.001,
+    },
+    [ShapeType.DODECAGON]: {
+        [ShapeRarity.COMMON]: 0.26,
+        [ShapeRarity.UNCOMMON]: 0.17,
+        [ShapeRarity.RARE]: 0.15,
+        [ShapeRarity.EPIC]: 0.13,
+        [ShapeRarity.LEGENDARY]: 0.11,
+        [ShapeRarity.MYTHICAL]: 0.07,
+        [ShapeRarity.ETERNAL]: 0.04,
+        [ShapeRarity.TRANSCENDENT]: 0.02,
+        [ShapeRarity.GODLY]: 0.006,
+        [ShapeRarity.DIVINE]: 0.002,
+    },
+};
+
+const VOID_SHAPE_RARITY_CHANCE_OVERRIDES: Partial<Record<ShapeType, Partial<Record<ShapeRarity, number>>>> = {
+    [ShapeType.HEPTAGON]: {
+        [ShapeRarity.COMMON]: 0.2,
+        [ShapeRarity.UNCOMMON]: 0.24,
+        [ShapeRarity.RARE]: 0.24,
+        [ShapeRarity.EPIC]: 0.18,
+        [ShapeRarity.LEGENDARY]: 0.08,
+        [ShapeRarity.MYTHICAL]: 0.04,
+        [ShapeRarity.ETERNAL]: 0.015,
+        [ShapeRarity.TRANSCENDENT]: 0.004,
+        [ShapeRarity.GODLY]: 0.001,
+    },
+    [ShapeType.HEXAGON]: {
+        [ShapeRarity.COMMON]: 0.17,
+        [ShapeRarity.UNCOMMON]: 0.22,
+        [ShapeRarity.RARE]: 0.24,
+        [ShapeRarity.EPIC]: 0.2,
+        [ShapeRarity.LEGENDARY]: 0.1,
+        [ShapeRarity.MYTHICAL]: 0.045,
+        [ShapeRarity.ETERNAL]: 0.018,
+        [ShapeRarity.TRANSCENDENT]: 0.005,
+        [ShapeRarity.GODLY]: 0.0015,
+        [ShapeRarity.DIVINE]: 0.0005,
+    },
+    [ShapeType.OCTAGON]: {
+        [ShapeRarity.COMMON]: 0.14,
+        [ShapeRarity.UNCOMMON]: 0.19,
+        [ShapeRarity.RARE]: 0.22,
+        [ShapeRarity.EPIC]: 0.21,
+        [ShapeRarity.LEGENDARY]: 0.13,
+        [ShapeRarity.MYTHICAL]: 0.065,
+        [ShapeRarity.ETERNAL]: 0.028,
+        [ShapeRarity.TRANSCENDENT]: 0.011,
+        [ShapeRarity.GODLY]: 0.004,
+        [ShapeRarity.DIVINE]: 0.001,
+    },
+    [ShapeType.NONAGON]: {
+        [ShapeRarity.COMMON]: 0.12,
+        [ShapeRarity.UNCOMMON]: 0.17,
+        [ShapeRarity.RARE]: 0.21,
+        [ShapeRarity.EPIC]: 0.21,
+        [ShapeRarity.LEGENDARY]: 0.145,
+        [ShapeRarity.MYTHICAL]: 0.075,
+        [ShapeRarity.ETERNAL]: 0.032,
+        [ShapeRarity.TRANSCENDENT]: 0.013,
+        [ShapeRarity.GODLY]: 0.0045,
+        [ShapeRarity.DIVINE]: 0.0015,
+    },
+    [ShapeType.DECAGON]: {
+        [ShapeRarity.COMMON]: 0.1,
+        [ShapeRarity.UNCOMMON]: 0.15,
+        [ShapeRarity.RARE]: 0.2,
+        [ShapeRarity.EPIC]: 0.22,
+        [ShapeRarity.LEGENDARY]: 0.155,
+        [ShapeRarity.MYTHICAL]: 0.085,
+        [ShapeRarity.ETERNAL]: 0.042,
+        [ShapeRarity.TRANSCENDENT]: 0.02,
+        [ShapeRarity.GODLY]: 0.006,
+        [ShapeRarity.DIVINE]: 0.002,
+    },
+    [ShapeType.DODECAGON]: {
+        [ShapeRarity.COMMON]: 0.08,
+        [ShapeRarity.UNCOMMON]: 0.13,
+        [ShapeRarity.RARE]: 0.18,
+        [ShapeRarity.EPIC]: 0.22,
+        [ShapeRarity.LEGENDARY]: 0.17,
+        [ShapeRarity.MYTHICAL]: 0.1,
+        [ShapeRarity.ETERNAL]: 0.055,
+        [ShapeRarity.TRANSCENDENT]: 0.03,
+        [ShapeRarity.GODLY]: 0.01,
+        [ShapeRarity.DIVINE]: 0.003,
+    },
+};
+
+export const getShapeRarityTable = (
+    type: ShapeType,
+    isInVoid: boolean,
+): Record<ShapeRarity, ShapeRarityProfile> => {
+    const baseConfig = isInVoid ? VOID_RARITY_CONFIG : RARITY_CONFIG;
+    const overrides = (isInVoid ? VOID_SHAPE_RARITY_CHANCE_OVERRIDES : SHAPE_RARITY_CHANCE_OVERRIDES)[type];
+    if (!overrides) return baseConfig;
+
+    const merged = {} as Record<ShapeRarity, ShapeRarityProfile>;
+    let totalChance = 0;
+
+    for (const rarity of Object.values(ShapeRarity) as ShapeRarity[]) {
+        const chance = overrides[rarity] ?? baseConfig[rarity].chance;
+        merged[rarity] = { ...baseConfig[rarity], chance };
+        totalChance += chance;
+    }
+
+    if (totalChance <= 0) return baseConfig;
+
+    for (const rarity of Object.values(ShapeRarity) as ShapeRarity[]) {
+        merged[rarity] = {
+            ...merged[rarity],
+            chance: merged[rarity].chance / totalChance,
+        };
+    }
+
+    return merged;
 };
 
 // --- Shop Items ---
@@ -898,35 +1123,35 @@ export const QUESTS: Quest[] = [
 
 export const UPDATE_LOG = [
     {
-        id: 'v1.9.1',
-        title: "SANDBOX COMMAND UPLINK",
-        date: "11/06/26",
-        content: "The archive has been reset to one clean live release, while the newest build rolls together the Trapper class launch, Dominion trap guardian upgrades, better sandbox boss controls, and the latest AI and stability fixes.",
-        theme: "Sandbox / Combat / AI / Update Archive",
-        tags: ["Sandbox", "Trapper", "Dominion", "AI", "Archive", "Stability"],
+        id: 'v1.9.2',
+        title: "SECTOR SYSTEMS AND MENU SYNC",
+        date: "12/06/26",
+        content: "Blood and Restoration now act as secondary sectors instead of full class branches, letting your main chassis progression continue cleanly while the latest menu, sandbox, HUD, AI, and combat polish lands around that rework.",
+        theme: "Sectors / Sandbox / Audio / UI / AI",
+        tags: ["Sectors", "Blood", "Restoration", "Sandbox", "UI", "AI"],
         sections: [
             {
-                label: "Archive Reset",
+                label: "Sector Rework",
                 items: [
-                    "Wiped the older stacked update context and replaced it with one current release log.",
-                    "Kept the repo changelog and the in-game archive aligned so they describe the same live build.",
-                    "Trimmed the archive structure down to a single clean entry instead of a long running history block.",
+                    "Blood and Restoration now work as secondary sectors instead of separate primary tank paths.",
+                    "Level 30 now opens a sector choice while your main class tree keeps progressing normally.",
+                    "Removed the old stat-transfer edge cases that could leave deaths, swaps, and upgrades feeling weaker or desynced.",
                 ],
             },
             {
-                label: "Combat Systems",
+                label: "Game And UI",
                 items: [
-                    "Added the new Trapper tank class as a live Sniper-branch evolution with anchor traps instead of normal bullets.",
-                    "Reworked Dominion trap guardians into Octo Trapper objective tanks with real area-control trap launches.",
-                    "Fixed the trap projectile renderer crash by moving star-path tracing into the projectile renderer scope.",
+                    "Updated HUD and ability logic to read active sectors instead of legacy Blood and Restoration class branches.",
+                    "Continued sandbox, preview, and main menu cleanup for better organisation, cleaner visuals, and safer control flow.",
+                    "Refined the menu audio visualizer, UI spacing, and related presentation passes around the current build.",
                 ],
             },
             {
-                label: "Sandbox And AI",
+                label: "AI And Combat Polish",
                 items: [
-                    "Expanded the sandbox menu with direct rebirth boss swaps, elite tank templates, and Dominion guardian fabrication options.",
-                    "Synced shared spawn typing for Dominion fabrication so UI and engine state no longer disagree about primed spawn payloads.",
-                    "Tuned AI control ranges so bots understand the Trapper archetype better and hold cleaner spacing around trap combat.",
+                    "Continued trap, aura, and combat cleanup so the new progression model plays more consistently in live matches.",
+                    "Improved several AI and sandbox-side behaviors during the same pass to reduce odd class and objective interactions.",
+                    "This release log stays short for webhook safety. For the fuller archive, open the in-game update log.",
                 ],
             },
         ],

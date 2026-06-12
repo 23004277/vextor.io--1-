@@ -481,7 +481,7 @@ export class TDMAIStrategy implements IAIStrategy {
   }
 
   private getIdealRange(cls: TankClass): number {
-    const name = String(cls);
+    const name = String(cls).toUpperCase();
     if (name.includes('TRAPPER')) return 520;
     if (name.includes('SNIPER') || name.includes('ASSASSIN') || name.includes('RANGER')) return 620;
     if (name.includes('BOOSTER') || name.includes('FIGHTER') || name.includes('TRI_ANGLE') || name.includes('SPRAYER')) return 235;

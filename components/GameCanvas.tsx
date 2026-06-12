@@ -70,50 +70,6 @@ const STANDARD_STAT_ORDER: StatType[] = [
   StatType.MAX_SHIELD,
 ];
 
-const PACIFIST_STAT_ORDER: StatType[] = [
-  StatType.REGEN,
-  StatType.MAX_HEALTH,
-  StatType.BODY_DAMAGE,
-  StatType.HEALING_RADIUS,
-  StatType.HEALING_EFFICIENCY,
-  StatType.HEALING_BURST,
-  StatType.SUPPORT_XP_MULT,
-  StatType.MOVEMENT_SPEED,
-  StatType.BULLET_SPREAD,
-  StatType.MAX_SHIELD,
-];
-
-const DRAINING_STAT_ORDER: StatType[] = [
-  StatType.REGEN,
-  StatType.MAX_HEALTH,
-  StatType.BODY_DAMAGE,
-  StatType.DRAIN_RADIUS,
-  StatType.DRAIN_EFFICIENCY,
-  StatType.DRAIN_LIFESTEAL,
-  StatType.DRAIN_BURST,
-  StatType.MOVEMENT_SPEED,
-  StatType.BULLET_SPREAD,
-  StatType.MAX_SHIELD,
-];
-
-const isPacifistClass = (tankClass: TankClass) =>
-  tankClass === TankClass.PACIFIST_TRAINEE ||
-  tankClass === TankClass.NURSE ||
-  tankClass === TankClass.DOCTOR ||
-  tankClass === TankClass.PLAGUE_DOCTOR;
-
-const isDrainingClass = (tankClass: TankClass) =>
-  tankClass === TankClass.DRAINER_TRAINEE ||
-  tankClass === TankClass.LEECH ||
-  tankClass === TankClass.VAMPIRE ||
-  tankClass === TankClass.REAPER;
-
-const getStatOrderForClass = (tankClass: TankClass): StatType[] => {
-  if (isPacifistClass(tankClass)) return PACIFIST_STAT_ORDER;
-  if (isDrainingClass(tankClass)) return DRAINING_STAT_ORDER;
-  return STANDARD_STAT_ORDER;
-};
-
 const GameCanvas: React.FC<GameCanvasProps> = ({ onStateUpdate, onEngineInit, onGameOver, gameMode, settings }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
@@ -200,7 +156,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onStateUpdate, onEngineInit, on
     };
 
     const tryUpgradeByIndex = (statIndex: number) => {
-      const currentOrder = getStatOrderForClass(engine.player.classType);
+      const currentOrder = STANDARD_STAT_ORDER;
       const statToUpgrade = currentOrder[statIndex];
       if (!statToUpgrade) return false;
 

@@ -1,20 +1,19 @@
 # VEXTOR Changelog
 
-## v1.9.1 - Sandbox Command Uplink
-Date: 11/06/26
-Theme: Sandbox / Combat / AI / Update Archive
+## v1.9.2 - Sector Systems and Menu Sync
+Date: 12/06/26
+Theme: Sectors / Sandbox / Audio / UI / AI
 
-This release resets the archive down to one clean current log and rolls the latest gameplay work into a single update drop that is easier to read in-game and in the repo.
+This update restructures Blood and Restoration into secondary sectors, sharpens menu presentation, improves sandbox flow, and continues AI, HUD, and trap-side cleanup.
 
-### What Changed
-- Replaced the older layered update archive context with one fresh live release entry so the patch log reads cleaner and matches the current build.
-- Added the new `Trapper` class as a real Sniper-branch evolution with deploy-and-anchor star traps instead of standard shells.
-- Reworked Dominion trap guardians into proper `Octo Trapper` objective tanks with dedicated trap-launcher behavior and area denial identity.
-- Expanded the sandbox terminal so you can directly swap into rebirth boss chassis, preview updated class icons, spawn elite tank templates, and fabricate Dominion guardian variants.
-- Fixed the trap projectile renderer crash by moving the star tracing logic into the bullet renderer scope where it belongs.
-- Synced the shared sandbox spawn typing so `DOMINION_TANK` and Dominion weapon profiles no longer throw TypeScript mismatches between UI state and engine state.
-- Continued AI tuning so Trapper-aware bots hold better spacing and use safer control ranges instead of misplaying the new trap archetype.
+### Highlights
+- Blood and Restoration now work as secondary sectors layered on top of your main class instead of replacing it.
+- Level 30 now opens a sector choice so builds can continue into normal class progressions while gaining support or drain utility.
+- Removed the old class-transfer stat weirdness that could leave deaths, mode swaps, or class upgrades feeling weaker or inconsistent.
+- Updated HUD and gameplay logic to respect sector overlays instead of treating Blood and Restoration like isolated chassis paths.
+- Continued sandbox, preview, and menu polish work, including visualizer cleanup and broader UI organisation passes.
+- Ongoing AI, trap, and combat tuning landed alongside the new progression structure.
 
 ### Notes
-- The in-game update archive and this file now intentionally keep only the newest release entry.
-- This release is meant to read like the current live build snapshot rather than a running historical ledger.
+- This changelog is intentionally short for webhook safety.
+- To see more about the update log, go to the main game itself and view the update log.

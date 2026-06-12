@@ -451,7 +451,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
             <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span className="truncate">{error}</span>
+            <span className="break-words">{error}</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -523,8 +523,8 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                   }`}
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-[0.7rem] font-black uppercase italic tracking-[0.22em]">{tab.label}</p>
-                    <p className={`mt-1 truncate text-[0.58rem] font-black uppercase tracking-[0.18em] ${active ? 'opacity-55' : 'opacity-65'}`}>{tab.eyebrow}</p>
+                    <p className="break-words text-[0.7rem] font-black uppercase italic leading-snug tracking-[0.18em]">{tab.label}</p>
+                    <p className={`mt-1 break-words text-[0.58rem] font-black uppercase leading-snug tracking-[0.14em] ${active ? 'opacity-55' : 'opacity-65'}`}>{tab.eyebrow}</p>
                   </div>
                   <span className={`ml-3 rounded-full px-3 py-1 text-[0.65rem] font-black ${active ? 'bg-black/8 text-inherit' : darkMode ? 'bg-white/5 text-white/35' : 'bg-white text-slate-500'}`}>
                     {stat}
@@ -559,7 +559,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                   <span className="text-[0.62rem] font-black uppercase italic tracking-[0.35em] text-cyan-400">Armory</span>
                 </div>
                 <p className={`text-[0.68rem] font-black uppercase tracking-[0.28em] ${softText}`}>{activeTabMeta.eyebrow}</p>
-                <h3 className="mt-1 truncate text-3xl font-black uppercase italic tracking-tight md:text-5xl">{activeTabMeta.label}</h3>
+                <h3 className="mt-1 break-words text-3xl font-black uppercase italic leading-tight tracking-tight md:text-5xl">{activeTabMeta.label}</h3>
                 <p className={`mt-2 max-w-2xl text-sm font-semibold leading-relaxed ${softText}`}>{activeTabMeta.description}</p>
               </div>
 
@@ -571,7 +571,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                     </div>
                     <div className="min-w-0">
                       <p className={`text-[0.58rem] font-black uppercase tracking-[0.18em] ${softText}`}>Loadout Bay</p>
-                      <p className="truncate text-lg font-black uppercase italic tracking-tight">{equippedClassicItem?.name || 'Classic Blue'}</p>
+                      <p className="break-words text-lg font-black uppercase italic leading-tight tracking-tight">{equippedClassicItem?.name || 'Classic Blue'}</p>
                       <p className={`mt-1 text-[0.64rem] font-black uppercase tracking-[0.18em] ${softText}`}>
                         Market {classicOwnedCount}/{marketItems.length} | Rewards {rewardOwnedCount}/{rewardItems.length}
                       </p>
@@ -864,7 +864,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ user, onClose, onUpdateUse
                           <div className="space-y-3 text-center">
                             <div>
                               <p className="text-[0.62rem] font-black uppercase tracking-[0.22em] text-red-300">Elite Variant</p>
-                              <h4 className="mt-1 truncate text-lg font-black uppercase italic tracking-tight">{String(cls)}</h4>
+                              <h4 className="mt-1 break-words text-lg font-black uppercase italic leading-tight tracking-tight">{String(cls)}</h4>
                             </div>
                             <motion.button
                               type="button"

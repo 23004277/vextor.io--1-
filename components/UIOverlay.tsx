@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GameMode, GameSettings, GameState, HighScoreEntry, PlayerState, StatType, TankClass, Team, ShapeType, ShapeRarity } from '../types';
+import { GameMode, GameSettings, GameState, HighScoreEntry, PlayerState, SecondarySector, StatType, TankClass, Team, ShapeType, ShapeRarity } from '../types';
 import { CLASS_TREE, COLORS, STAT_COLORS, TANK_CONFIGS } from '../constants';
 import { TankPreview } from './TankPreview';
 import { ShapePreview } from './ShapePreview';
@@ -13,6 +13,7 @@ interface UIOverlayProps {
   gameState: GameState;
   onUpgradeStat: (stat: StatType) => void;
   onUpgradeClass: (cls: TankClass) => void;
+  onUpgradeSector: (sector: SecondarySector) => void;
   onRestart: () => void;
   onExit: () => void;
   highScores: HighScoreEntry[];
@@ -36,7 +37,14 @@ const STAT_ORDER = [
 ];
 
 type SandboxTab = 'SYSTEM' | 'RESEARCH' | 'SPAWN';
-const SANDBOX_RESEARCH_ICON_REV = '2026-05-28-engine-match';
+const SANDBOX_RESEARCH_ICON_REV = '2026-06-11-sandbox-preview-remaster';
+const isTrapperBranchClass = (cls: TankClass): boolean =>
+  cls === TankClass.TRAPPER ||
+  cls === TankClass.DUAL_TRAPPER ||
+  cls === TankClass.MACHINE_GUN_TRAPPER ||
+  cls === TankClass.OCTO_TRAPPER ||
+  cls === TankClass.TRIPLE_TRAPPER;
+
 const SANDBOX_TAB_META: Record<SandboxTab, { label: string; icon: any; hint: string }> = {
   SYSTEM: { label: 'World', icon: Cpu, hint: 'Simulation controls' },
   RESEARCH: { label: 'Tanks', icon: FlaskConical, hint: 'Class research and swap' },
@@ -115,28 +123,14 @@ const CLASS_CATEGORIES = [
             TankClass.FIGHTER, 
             TankClass.OCTO_TANK, 
             TankClass.TRAPPER,
+            TankClass.DUAL_TRAPPER,
+            TankClass.MACHINE_GUN_TRAPPER,
+            TankClass.OCTO_TRAPPER,
+            TankClass.TRIPLE_TRAPPER,
             TankClass.OVERSEER, 
             TankClass.OVERLORD, 
             TankClass.MANAGER, 
             TankClass.TRIPLE_TANK
-        ]
-    },
-    {
-        name: "Restoration",
-        classes: [
-            TankClass.PACIFIST_TRAINEE,
-            TankClass.NURSE,
-            TankClass.DOCTOR,
-            TankClass.PLAGUE_DOCTOR
-        ]
-    },
-    {
-        name: "Blood",
-        classes: [
-            TankClass.DRAINER_TRAINEE,
-            TankClass.LEECH,
-            TankClass.VAMPIRE,
-            TankClass.REAPER
         ]
     },
     {
@@ -169,13 +163,28 @@ const SANDBOX_ELITE_CLASS_TEMPLATES: TankClass[] = [
 const SANDBOX_DOMINION_PROFILES: Array<{ id: 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE'; label: string; classType: TankClass; note: string }> = [
   { id: 'DESTROYER', label: 'Destroyer Dominion', classType: TankClass.DESTROYER, note: 'Siege shell guardian' },
   { id: 'GUNNER', label: 'Gunner Dominion', classType: TankClass.GUNNER, note: 'Suppression lattice' },
-  { id: 'TRAPPER', label: 'Octo Trapper', classType: TankClass.TRAPPER, note: 'Area denial starfield' },
+  { id: 'TRAPPER', label: 'Octo Trapper', classType: TankClass.OCTO_TRAPPER, note: 'Area denial starfield' },
   { id: 'TRIPLE', label: 'Triple Dominion', classType: TankClass.TRIPLE_TANK, note: 'Balanced lane pressure' },
 ];
 
-export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, onUpgradeClass, onRestart, onExit, highScores, playHover, engine, settings, deathReport }) => {
+const getSandboxPreviewPose = (cls: TankClass): { turretRotation: number; chassisRotation: number } => {
+  if (cls === TankClass.TRAPPER) return { turretRotation: -8, chassisRotation: 4 };
+  if (cls === TankClass.DUAL_TRAPPER) return { turretRotation: -12, chassisRotation: 6 };
+  if (cls === TankClass.MACHINE_GUN_TRAPPER) return { turretRotation: -6, chassisRotation: 4 };
+  if (cls === TankClass.OCTO_TRAPPER) return { turretRotation: 14, chassisRotation: 10 };
+  if (cls === TankClass.TRIPLE_TRAPPER) return { turretRotation: 8, chassisRotation: 5 };
+  if (cls === TankClass.DESTROYER || cls === TankClass.ANNIHILATOR) return { turretRotation: -10, chassisRotation: 3 };
+  if (cls === TankClass.GUNNER || cls === TankClass.AUTO_GUNNER) return { turretRotation: 10, chassisRotation: -4 };
+  if (cls === TankClass.OVERLORD || cls === TankClass.OVERSEER || cls === TankClass.MANAGER) return { turretRotation: -14, chassisRotation: 8 };
+  if (cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.WARLORD || cls === TankClass.CELESTIAL || cls === TankClass.OBLITERATOR) {
+    return { turretRotation: -16, chassisRotation: 6 };
+  }
+  return { turretRotation: -6, chassisRotation: 2 };
+};
+
+export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, onUpgradeClass, onUpgradeSector, onRestart, onExit, highScores, playHover, engine, settings, deathReport }) => {
   const { 
-    score, level, xp, maxXp, stats, availableStatPoints, currentClass, isDead, fps, killFeed, 
+    score, level, xp, maxXp, stats, availableStatPoints, mainClass, currentClass, secondarySector, isDead, fps, killFeed, 
     leaderboard, health, maxHealth, camera, mapSize, gameMode, 
     notifications, inVoid, voidTimeRemaining, isTransformed, transformationTime, 
     transformationReady, activeBuffs, minimapMarkers, sandboxConfig, primedSpawn, abilityHud,
@@ -224,26 +233,32 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
 
   const xpPercent = Math.min(100, (xp / maxXp) * 100);
   const scoreLabel = formatScoreValue(score, settings.compactScoreNotation);
-  const availableClasses = CLASS_TREE[currentClass] || [];
+  const availableClasses = CLASS_TREE[mainClass] || [];
   const getClassUpgradeLevelRequirement = (targetClass: TankClass): number => {
     const tier30 = new Set<TankClass>([
       TankClass.TWIN, TankClass.SNIPER, TankClass.MACHINE_GUN, TankClass.FLANK_GUARD,
-      TankClass.PACIFIST_TRAINEE, TankClass.DRAINER_TRAINEE,
     ]);
     const tier60 = new Set<TankClass>([
       TankClass.TRIPLE_SHOT, TankClass.QUAD_TANK, TankClass.TWIN_FLANK,
       TankClass.HUNTER, TankClass.TRAPPER, TankClass.ASSASSIN, TankClass.DESTROYER, TankClass.GUNNER,
+      TankClass.DUAL_TRAPPER, TankClass.MACHINE_GUN_TRAPPER,
       TankClass.SPREAD_SHOT, TankClass.TRI_ANGLE, TankClass.OVERSEER,
-      TankClass.NURSE, TankClass.LEECH, TankClass.SPRAYER, TankClass.VAMPIRE, TankClass.DOCTOR,
+      TankClass.SPRAYER,
+    ]);
+    const tier90 = new Set<TankClass>([
+      TankClass.OCTO_TRAPPER,
+      TankClass.TRIPLE_TRAPPER,
     ]);
     if (tier30.has(targetClass)) return 30;
     if (tier60.has(targetClass)) return 60;
+    if (tier90.has(targetClass)) return 90;
     return 90;
   };
   const unlockableClasses = availableClasses.filter(cls => level >= getClassUpgradeLevelRequirement(cls as TankClass));
   
   const showBossChoiceUI = playerState === PlayerState.BOSS_SELECTION;
-  const showStandardUpgrades = !showBossChoiceUI && (unlockableClasses.length > 0 && !isTransformed) && gameMode !== GameMode.SANDBOX;
+  const showSectorChoiceUI = playerState === PlayerState.SECTOR_SELECTION;
+  const showStandardUpgrades = !showBossChoiceUI && !showSectorChoiceUI && (unlockableClasses.length > 0 && !isTransformed) && gameMode !== GameMode.SANDBOX;
   const isRebirthClass = currentClass === TankClass.COLOSSAL || currentClass === TankClass.LEVIATHAN || currentClass === TankClass.WARLORD || currentClass === TankClass.CELESTIAL || currentClass === TankClass.OBLITERATOR;
   const showStatUpgradeUI = showStatsMenu && !showStandardUpgrades && !isRebirthClass;
 
@@ -303,7 +318,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }, [dominionTimeRemaining]);
   const scoreLabelTone = level >= 150 ? 'text-amber-200' : level >= 90 ? 'text-cyan-100' : 'text-white';
-  const compactCurrentClass = String(currentClass || 'Basic Tank').replace(/\s+Tank$/i, '').trim();
+  const compactCurrentClass = String(mainClass || currentClass || 'Basic Tank').replace(/\s+Tank$/i, '').trim();
+  const sectorLabel = secondarySector === 'restoration' ? 'Restoration Sector' : secondarySector === 'blood' ? 'Blood Sector' : 'No Sector';
   const contestedDominionCount = dominionZones?.filter((zone) => zone.contested).length ?? 0;
 
   if (isDead) {
@@ -326,7 +342,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
               <div className="text-[9px] uppercase tracking-[0.2em] text-white/45 font-bold">Class</div>
-              <div className="text-lg font-black text-white mt-1 truncate">{currentClass}</div>
+              <div className="mt-1 break-words text-sm font-black leading-tight text-white">{currentClass}</div>
              </div>
           </div>
           {deathReport && (
@@ -370,32 +386,14 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     TankClass.HYBRID
   ].includes(currentClass);
 
-  const isPacifistClass = [
-    TankClass.PACIFIST_TRAINEE,
-    TankClass.NURSE,
-    TankClass.DOCTOR,
-    TankClass.PLAGUE_DOCTOR
-  ].includes(currentClass);
-
-  const isDrainingClass = [
-    TankClass.DRAINER_TRAINEE,
-    TankClass.LEECH,
-    TankClass.VAMPIRE,
-    TankClass.REAPER
-  ].includes(currentClass);
+  const isPacifistClass = secondarySector === 'restoration';
+ 
+  const isDrainingClass = secondarySector === 'blood';
   const liveDrainValue = Math.max(0, bloodDrainLive || 0);
   const liveDrainStacks = Math.max(0, bloodDrainStacks || 0);
   const sessionDrainValue = Math.max(0, bloodDrainSession || 0);
 
-  const currentStatOrder = isPacifistClass ? [
-    StatType.REGEN, StatType.MAX_HEALTH, StatType.BODY_DAMAGE,
-    StatType.HEALING_RADIUS, StatType.HEALING_EFFICIENCY, StatType.HEALING_BURST, StatType.SUPPORT_XP_MULT,
-    StatType.MOVEMENT_SPEED, StatType.BULLET_SPREAD, StatType.MAX_SHIELD
-  ] : isDrainingClass ? [
-    StatType.REGEN, StatType.MAX_HEALTH, StatType.BODY_DAMAGE,
-    StatType.DRAIN_RADIUS, StatType.DRAIN_EFFICIENCY, StatType.DRAIN_LIFESTEAL, StatType.DRAIN_BURST,
-    StatType.MOVEMENT_SPEED, StatType.BULLET_SPREAD, StatType.MAX_SHIELD
-  ] : STAT_ORDER;
+  const currentStatOrder = STAT_ORDER;
 
   const abilityActiveSecs = Math.max(0, Math.ceil(abilityHud?.activeRemaining || 0));
   const abilityCooldownSecs = Math.max(0, Math.ceil(abilityHud?.cooldownRemaining || 0));
@@ -491,10 +489,38 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
           </AnimatePresence>
       </div>
 
-      {(playerState === PlayerState.EVOLVING || showBossChoiceUI) && (
+      {(playerState === PlayerState.EVOLVING || showBossChoiceUI || showSectorChoiceUI) && (
         <div className="absolute inset-0 z-[180] flex items-center justify-center pointer-events-auto px-6">
           <div className="w-full max-w-3xl rounded-3xl border border-cyan-300/20 bg-[#030712]/92 backdrop-blur-2xl shadow-[0_30px_80px_rgba(0,0,0,0.7)] p-6">
-            {playerState === PlayerState.EVOLVING ? (
+            {showSectorChoiceUI ? (
+              <>
+                <div className="text-center">
+                  <div className="text-[11px] font-black uppercase tracking-[0.35em] text-rose-200/80">Secondary Sector</div>
+                  <div className="mt-2 text-3xl font-black text-white">Choose Your Support Path</div>
+                  <p className="mt-3 text-sm leading-6 text-white/58">
+                    Your chassis stays <span className="font-black text-white">{compactCurrentClass}</span>. Pick a sector overlay that adds either healing support or blood drain pressure on top of it.
+                  </p>
+                </div>
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
+                  <button
+                    onClick={() => { onUpgradeSector('restoration'); playHover?.(); }}
+                    className="group rounded-[1.6rem] border border-emerald-300/24 bg-emerald-500/[0.08] p-5 text-left transition hover:border-emerald-200/46 hover:bg-emerald-400/[0.12]"
+                  >
+                    <div className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-200/76">Restoration</div>
+                    <div className="mt-2 text-2xl font-black text-white">Field Sustain</div>
+                    <div className="mt-3 text-sm leading-6 text-white/66">Healing aura, team sustain, and restorative burst utility without replacing your main weapon class.</div>
+                  </button>
+                  <button
+                    onClick={() => { onUpgradeSector('blood'); playHover?.(); }}
+                    className="group rounded-[1.6rem] border border-rose-300/24 bg-rose-500/[0.08] p-5 text-left transition hover:border-rose-200/46 hover:bg-rose-400/[0.12]"
+                  >
+                    <div className="text-[10px] font-black uppercase tracking-[0.24em] text-rose-200/76">Blood</div>
+                    <div className="mt-2 text-2xl font-black text-white">Pressure Sustain</div>
+                    <div className="mt-3 text-sm leading-6 text-white/66">Drain aura, lifesteal, and aggression-based sustain layered onto your existing combat chassis.</div>
+                  </button>
+                </div>
+              </>
+            ) : playerState === PlayerState.EVOLVING ? (
               <div className="text-center py-10">
                 <div className="text-[11px] font-black uppercase tracking-[0.35em] text-cyan-300/70">Evolution Sequence</div>
                 <div className="mt-2 text-3xl font-black text-white">Synchronizing Celestial Core</div>
@@ -518,7 +544,14 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                       onClick={() => { onUpgradeClass(cls); playHover?.(); }}
                       className="group rounded-2xl border border-white/10 bg-white/5 hover:bg-cyan-500/10 hover:border-cyan-300/50 transition-all p-3 flex flex-col items-center gap-2"
                     >
-                      <TankPreview tankClass={resolvePreviewClass(cls)} size={46} showArenaVfx={isRebirthPreviewClass(cls)} />
+                      <TankPreview
+                        key={`${SANDBOX_RESEARCH_ICON_REV}-boss-choice-${cls}`}
+                        tankClass={resolvePreviewClass(cls)}
+                        size={46}
+                        showArenaVfx={isRebirthPreviewClass(cls)}
+                        turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                        chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
+                      />
                       <span className="text-[10px] font-black uppercase tracking-wider text-white/85">{cls}</span>
                     </button>
                   ))}
@@ -551,7 +584,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
              
              {showStandardUpgrades && (
                 <div 
-                  key={`${currentClass}-${unlockableClasses.join('-')}`} 
+                  key={`${mainClass}-${unlockableClasses.join('-')}`} 
                   className="animate-in slide-in-from-left-20 duration-500 ease-out fade-in pointer-events-auto"
                 >
                     <div className="relative overflow-hidden rounded-2xl border border-cyan-400/30 bg-[#0b1119]/88 shadow-[0_12px_32px_rgba(0,0,0,0.32)] backdrop-blur-xl w-[248px]">
@@ -572,6 +605,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                           key={`${SANDBOX_RESEARCH_ICON_REV}-evo-${cls}`}
                                           tankClass={resolvePreviewClass(cls as TankClass)}
                                           size={48}
+                                          turretRotation={getSandboxPreviewPose(cls as TankClass).turretRotation}
+                                          chassisRotation={getSandboxPreviewPose(cls as TankClass).chassisRotation}
                                         /> 
                                     </div>
                                     <div className="w-full text-center pb-2 bg-black/20 group-hover:bg-cyan-400/10 transition-colors">
@@ -660,9 +695,15 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                           >
                              <span className={`text-[10px] font-black ${i < 3 ? 'text-amber-300' : 'text-white/45'}`}>{i + 1}</span>
                              <div className="w-7 h-7 rounded-md bg-black/40 border border-white/10 flex items-center justify-center overflow-hidden">
-                               <TankPreview tankClass={iconClass} size={18} />
+                               <TankPreview
+                                 key={`${SANDBOX_RESEARCH_ICON_REV}-leaderboard-${iconClass}-${entry.id}`}
+                                 tankClass={iconClass}
+                                 size={18}
+                                 turretRotation={getSandboxPreviewPose(iconClass).turretRotation}
+                                 chassisRotation={getSandboxPreviewPose(iconClass).chassisRotation}
+                               />
                              </div>
-                              <span className="truncate font-black tracking-wide">{formatDisplayName(entry.name)}</span>
+                              <span className="break-words font-black leading-tight tracking-wide">{formatDisplayName(entry.name)}</span>
                              <span className="font-mono text-[11px] text-white/75">{formatScoreValue(entry.score, settings.compactScoreNotation)}</span>
                           </div>
                            );
@@ -688,8 +729,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                        {React.createElement(abilityIcon, { className: `w-4 h-4 ${abilityHud.active ? 'text-emerald-300' : abilityReady ? 'text-cyan-300' : 'text-amber-300'}` })}
                      </div>
                      <div className="min-w-0">
-                       <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/90 truncate">{abilityHud.name}</div>
-                       <div className="text-[8px] font-bold uppercase tracking-[0.16em] text-white/45 truncate">{abilityHud.trigger}</div>
+                       <div className="break-words text-[9px] font-black uppercase leading-snug tracking-[0.14em] text-white/90">{abilityHud.name}</div>
+                       <div className="break-words text-[8px] font-bold uppercase leading-snug tracking-[0.16em] text-white/45">{abilityHud.trigger}</div>
                      </div>
                    </div>
                    <span className={`text-[8px] font-black uppercase tracking-[0.14em] shrink-0 ${
@@ -730,51 +771,72 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             initial={{ opacity: 0, x: 36, scale: 0.985 }}
             animate={{ opacity: 1, x: 0, scale: 1, transition: { type: 'spring', stiffness: 280, damping: 24 } }}
             exit={{ opacity: 0, x: 28, scale: 0.99, transition: { duration: 0.18 } }}
-            className="absolute top-24 right-6 w-[560px] max-w-[calc(100vw-3rem)] max-h-[85vh] bg-[#050505]/98 backdrop-blur-3xl border-2 border-cyan-500/20 rounded-[2.25rem] flex flex-col pointer-events-auto overflow-hidden shadow-[0_40px_100px_rgba(0,0,0,0.9)] z-[200]"
+            className="absolute top-20 right-4 z-[200] flex max-h-[calc(100vh-7rem)] w-[620px] max-w-[calc(100vw-1.25rem)] flex-col overflow-hidden rounded-[1.9rem] border border-cyan-400/18 bg-[#06101a]/96 shadow-[0_28px_80px_rgba(0,0,0,0.72)] backdrop-blur-2xl pointer-events-auto"
           >
               {/* Header */}
-              <div className="px-10 py-8 border-b border-white/5 flex justify-between items-center bg-white/[0.01] shrink-0">
-                  <div className="flex items-center gap-5">
-                    <div className="w-12 h-12 bg-cyan-500/10 border border-cyan-500/30 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(6,182,212,0.1)] group">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-cyan-400 group-hover:scale-110 transition-transform" viewBox="0 0 20 20" fill="currentColor"><path d="M13 7H7v6h6V7z" /><path fillRule="evenodd" d="M7 2a1 1 0 012 0v1h2V2a1 1 0 112 0v1h2a2 2 0 012 2v2h1a1 1 0 110 2h-1v2h1a1 1 0 110 2h-1v2a2 2 0 01-2 2h-2v1a1 1 0 11-2 0v-1H9v1a1 1 0 11-2 0v-1H5a2 2 0 01-2-2v-2H2a1 1 0 110-2h1V9H2a1 1 0 110-2h1V5a2 2 0 012-2h2V2zM5 5h10v10H5V5z" clipRule="evenodd" /></svg>
-                    </div>
-                    <div>
-                        <span className="text-xl font-black text-white italic tracking-tighter uppercase leading-none block">TERMINAL_VEXTOR</span>
-                        <div className="flex items-center gap-2 mt-1.5">
-                            <div className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></div>
-                            <p className="text-[9px] font-bold text-cyan-500/60 tracking-[0.4em] uppercase">Status // Superuser_Active</p>
+              <div className="shrink-0 border-b border-cyan-300/10 bg-[linear-gradient(180deg,rgba(15,35,48,0.94),rgba(8,15,24,0.84))] px-5 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-400/22 bg-cyan-400/8 shadow-[inset_0_0_18px_rgba(34,211,238,0.08)]">
+                        <SlidersHorizontal className="h-4.5 w-4.5 text-cyan-300" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="block text-[11px] font-black uppercase tracking-[0.3em] text-cyan-200/80">Sandbox Command Deck</span>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-white/44">
+                          <span className="rounded-full border border-emerald-300/22 bg-emerald-400/10 px-2.5 py-1 text-emerald-200/88">Live</span>
+                          <span>{SANDBOX_TAB_META[activeTab].hint}</span>
                         </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setSandboxOpen(false)}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/45 transition-all hover:border-white/20 hover:bg-white/10 hover:text-white active:scale-95"
+                      aria-label="Close sandbox panel"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4.5 w-4.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                    </button>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-2">
+                      <div className="text-[8px] font-black uppercase tracking-[0.24em] text-white/36">Mode</div>
+                      <div className="mt-1 text-[11px] font-black uppercase tracking-[0.14em] text-white/88">Creative Sandbox</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-2">
+                      <div className="text-[8px] font-black uppercase tracking-[0.24em] text-white/36">Density</div>
+                      <div className="mt-1 text-[11px] font-black uppercase tracking-[0.14em] text-cyan-200/92">{spawnAmount} queued</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-2">
+                      <div className="text-[8px] font-black uppercase tracking-[0.24em] text-white/36">Fabricator</div>
+                      <div className="mt-1 text-[11px] font-black uppercase tracking-[0.14em] text-white/88">{sandboxConfig?.spawningEnabled ? 'Armed' : 'Standby'}</div>
                     </div>
                   </div>
-                  <button onClick={() => setSandboxOpen(false)} className="w-12 h-12 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center transition-all border border-white/5 active:scale-90">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white/40" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
-                  </button>
               </div>
 
               {/* Tabs */}
-              <div className="flex border-b border-white/5 bg-black/40 shrink-0 h-16">
+              <div className="shrink-0 border-b border-cyan-300/10 bg-black/24 px-4 py-3">
+                <div className="grid h-12 grid-cols-3 gap-2 rounded-2xl border border-white/7 bg-black/26 p-1">
                   {(['SYSTEM', 'RESEARCH', 'SPAWN'] as SandboxTab[]).map(tab => (
                       <button 
                         key={tab}
                         onClick={() => { playHover?.(); setActiveTab(tab); }}
                         title={SANDBOX_TAB_META[tab].hint}
-                        className={`flex-1 flex items-center justify-center gap-2 text-[10px] font-black tracking-[0.2em] uppercase transition-all relative group ${activeTab === tab ? 'text-cyan-400 bg-cyan-400/5' : 'text-white/20 hover:text-white/50 hover:bg-white/[0.02]'}`}
+                        className={`relative flex items-center justify-center gap-2 rounded-xl text-[10px] font-black tracking-[0.18em] uppercase transition-all ${activeTab === tab ? 'bg-cyan-400/12 text-cyan-100' : 'text-white/36 hover:bg-white/[0.04] hover:text-white/72'}`}
                       >
-                        {React.createElement(SANDBOX_TAB_META[tab].icon, { className: 'w-3.5 h-3.5 relative z-10' })}
+                        {React.createElement(SANDBOX_TAB_META[tab].icon, { className: 'relative z-10 h-3.5 w-3.5' })}
                         <span className="relative z-10">{SANDBOX_TAB_META[tab].label}</span>
                         {activeTab === tab && (
                             <motion.div 
                                 layoutId="sandboxTab"
-                                className="absolute bottom-0 left-1/2 -translate-x-1/2 w-16 h-1 bg-cyan-400 rounded-t-full shadow-[0_0_15px_#22d3ee]"
+                                className="absolute inset-0 rounded-xl border border-cyan-300/26 shadow-[inset_0_0_24px_rgba(34,211,238,0.08)]"
                             />
                         )}
-                        <div className={`absolute inset-0 bg-gradient-to-t from-cyan-500/10 to-transparent transition-opacity duration-500 ${activeTab === tab ? 'opacity-100' : 'opacity-0'}`}></div>
                       </button>
                   ))}
+                </div>
               </div>
 
               {/* Scrollable Content */}
-              <div className="flex-1 overflow-y-auto p-10 no-scrollbar scroll-smooth space-y-12 overscroll-y-contain">
+              <div className="flex-1 overflow-y-auto px-4 py-4 no-scrollbar scroll-smooth overscroll-y-contain">
                   <AnimatePresence mode="wait">
                   {activeTab === 'SYSTEM' && (
                     <motion.div
@@ -783,10 +845,14 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -8 }}
                       transition={{ duration: 0.16 }}
-                      className="space-y-10"
+                      className="space-y-4"
                     >
+                        <div className="rounded-[1.6rem] border border-cyan-300/10 bg-[linear-gradient(180deg,rgba(10,24,36,0.96),rgba(7,13,20,0.94))] px-4 py-3">
+                            <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200/86">World Controls</div>
+                            <p className="mt-1 text-[10px] font-bold leading-relaxed text-white/42">Core simulation toggles, time scaling, and cleanup tools grouped for quicker mid-match testing.</p>
+                        </div>
                         {/* Core Toggles */}
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-2 gap-3">
                             {[
                                 { id: 'invincible', label: 'GOD_MODE', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
                                 { id: 'infiniteAmmo', label: 'NO_RELOAD', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
@@ -802,16 +868,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                     <button 
                                         key={flag.id}
                                         onClick={() => engine.setSandboxFlag(flag.id, !active)}
-                                        className={`flex items-center gap-4 p-5 rounded-3xl border-2 transition-all group ${active ? 'bg-cyan-500 border-cyan-400 text-black shadow-[0_10px_30px_rgba(34,211,238,0.2)]' : 'bg-white/[0.03] border-white/5 text-white/30 hover:bg-white/[0.06] hover:border-white/10'}`}
+                                        className={`group flex items-center gap-3 rounded-[1.35rem] border px-3 py-3 text-left transition-all ${active ? 'border-cyan-300/50 bg-cyan-400/14 text-cyan-50 shadow-[inset_0_0_22px_rgba(34,211,238,0.08)]' : 'border-white/8 bg-white/[0.025] text-white/32 hover:border-white/14 hover:bg-white/[0.05]'}`}
                                     >
-                                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${active ? 'bg-black/10' : 'bg-black/40'}`}>
-                                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${active ? 'text-black' : 'text-cyan-500/50'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-all ${active ? 'border-cyan-200/35 bg-cyan-200/10' : 'border-white/10 bg-black/28'}`}>
+                                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-4.5 w-4.5 ${active ? 'text-cyan-100' : 'text-cyan-400/52'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={flag.icon} />
                                             </svg>
                                         </div>
-                                        <div className="flex flex-col items-start overflow-hidden">
-                                            <span className="text-[10px] font-black uppercase tracking-widest truncate w-full">{flag.label}</span>
-                                            <span className={`text-[7px] font-black uppercase tracking-[0.2em] mt-0.5 ${active ? 'text-black/60' : 'text-cyan-500/40'}`}>{active ? 'Active' : 'Standby'}</span>
+                                        <div className="min-w-0 flex-1 overflow-hidden">
+                                            <span className="block break-words text-[10px] font-black uppercase leading-snug tracking-[0.16em]">{flag.label.replace(/_/g, ' ')}</span>
+                                            <span className={`mt-1 block text-[8px] font-black uppercase tracking-[0.18em] ${active ? 'text-cyan-100/72' : 'text-white/24'}`}>{active ? 'Enabled' : 'Standby'}</span>
                                         </div>
                                     </button>
                                 );
@@ -819,17 +885,20 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                         </div>
                         
                         {/* Simulation Speed Sliders */}
-                        <div className="space-y-6 bg-white/[0.02] p-8 rounded-[2.5rem] border border-white/5">
-                            <div className="flex justify-between items-center mb-2">
-                                <span className="text-[10px] font-black text-cyan-400 uppercase tracking-[0.3em]">Temporal_Scale</span>
-                                <span className="text-[10px] font-mono text-white/40">{sandboxConfig?.gameSpeed.toFixed(1)}x</span>
+                        <div className="space-y-4 rounded-[1.6rem] border border-white/8 bg-white/[0.025] p-4">
+                            <div className="mb-1 flex items-center justify-between gap-3">
+                                <div>
+                                  <span className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200/82">Temporal Scale</span>
+                                  <p className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/30">Adjust overall simulation speed</p>
+                                </div>
+                                <span className="rounded-full border border-white/10 bg-black/24 px-2.5 py-1 text-[10px] font-mono text-white/56">{sandboxConfig?.gameSpeed.toFixed(1)}x</span>
                             </div>
-                            <div className="flex gap-2">
+                            <div className="grid grid-cols-5 gap-2">
                                 {[0.2, 0.5, 1.0, 2.0, 5.0].map(s => (
                                     <button 
                                         key={s} 
                                         onClick={() => engine.setSandboxFlag('gameSpeed', s)} 
-                                        className={`flex-1 py-3 rounded-xl text-[10px] font-black transition-all border-2 ${sandboxConfig?.gameSpeed === s ? 'bg-white border-white text-black' : 'bg-white/5 border-transparent text-white/30 hover:text-white/60'}`}
+                                        className={`rounded-xl border px-0 py-2.5 text-[10px] font-black transition-all ${sandboxConfig?.gameSpeed === s ? 'border-cyan-200/40 bg-cyan-100 text-black' : 'border-white/8 bg-white/5 text-white/42 hover:text-white/72'}`}
                                     >
                                         {s}x
                                     </button>
@@ -838,22 +907,22 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                         </div>
 
                         {/* Dangerous Tools Section */}
-                        <div className="p-8 rounded-[3rem] bg-red-500/[0.02] border border-red-500/10 space-y-6">
+                        <div className="space-y-4 rounded-[1.6rem] border border-red-400/14 bg-red-500/[0.035] p-4">
                             <div className="flex items-center gap-3">
                                 <div className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_10px_#ef4444]"></div>
-                                <span className="text-[10px] font-black text-red-500/60 uppercase tracking-[0.3em]">Critical_Functions</span>
+                                <span className="text-[10px] font-black uppercase tracking-[0.24em] text-red-200/76">Critical Functions</span>
                             </div>
-                            <div className="grid grid-cols-1 gap-3">
-                                <button onClick={() => engine.maxAllStats()} className="flex items-center justify-between px-8 py-5 rounded-2xl bg-yellow-400 group hover:scale-[1.02] transition-all shadow-xl shadow-yellow-500/10">
-                                    <span className="text-[11px] font-black text-black uppercase tracking-widest italic">MAX_OVERCLOCK_STATS</span>
+                            <div className="grid grid-cols-1 gap-2.5">
+                                <button onClick={() => engine.maxAllStats()} className="group flex items-center justify-between rounded-2xl bg-yellow-300 px-5 py-4 transition-all hover:scale-[1.01]">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.18em] text-black">Max Overclock Stats</span>
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-black transform group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                                 </button>
                                 <div className="grid grid-cols-2 gap-3">
-                                    <button onClick={() => engine.clearEntities('BULLETS')} className="flex items-center justify-center gap-3 px-6 py-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/5 text-white/40 transition-all font-black text-[9px] uppercase tracking-widest italic">Flush_Projectiles</button>
-                                    <button onClick={() => engine.clearEntities('SHAPES')} className="flex items-center justify-center gap-3 px-6 py-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/5 text-white/40 transition-all font-black text-[9px] uppercase tracking-widest italic">Wipe_Shapes</button>
+                                    <button onClick={() => engine.clearEntities('BULLETS')} className="flex items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[9px] font-black uppercase tracking-[0.18em] text-white/52 transition-all hover:bg-white/10 hover:text-white/82">Flush Projectiles</button>
+                                    <button onClick={() => engine.clearEntities('SHAPES')} className="flex items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[9px] font-black uppercase tracking-[0.18em] text-white/52 transition-all hover:bg-white/10 hover:text-white/82">Wipe Shapes</button>
                                 </div>
-                                <button onClick={() => engine.clearEntities('ALL')} className="flex items-center justify-between px-8 py-5 mt-2 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-500 transition-all group">
-                                    <span className="text-[11px] font-black uppercase tracking-widest italic">SYSTEM_DEEP_CLEAN</span>
+                                <button onClick={() => engine.clearEntities('ALL')} className="group mt-1 flex items-center justify-between rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-4 text-red-200 transition-all hover:bg-red-500/18">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.18em]">System Deep Clean</span>
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                 </button>
                             </div>
@@ -868,17 +937,17 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -8 }}
                       transition={{ duration: 0.16 }}
-                      className="space-y-12 pb-10"
+                      className="space-y-4 pb-2"
                     >
-                        <div className="bg-indigo-500/5 border border-indigo-500/20 p-8 rounded-[2.5rem] mb-8 relative overflow-hidden group">
-                            <div className="absolute top-0 right-0 p-8 opacity-5">
+                        <div className="group relative overflow-hidden rounded-[1.6rem] border border-indigo-300/14 bg-indigo-500/6 px-4 py-4">
+                            <div className="absolute top-0 right-0 p-6 opacity-5">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-24 w-24 text-indigo-400" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" /></svg>
                             </div>
-                            <h4 className="text-xs font-black text-indigo-400 uppercase mb-2 tracking-[0.2em] italic">Hot-Swap Chassis Bypass</h4>
-                            <p className="text-[9px] text-indigo-300/50 font-bold leading-relaxed tracking-wider uppercase max-w-[80%]">Modify current hardware configuration in real-time. Warning: Hot-swapping while engines are active may cause temporary stabilization drift.</p>
+                            <h4 className="mb-2 text-[10px] font-black uppercase tracking-[0.24em] text-indigo-200/84">Research Bay</h4>
+                            <p className="max-w-[85%] text-[10px] font-bold leading-relaxed text-white/42">Search by role, switch classes instantly, and jump into boss or dominion chassis without digging through the full progression tree.</p>
                         </div>
 
-                        <div className="p-5 rounded-3xl border border-white/10 bg-black/35 space-y-4">
+                        <div className="space-y-4 rounded-[1.6rem] border border-white/8 bg-white/[0.025] p-4">
                             <div className="flex items-center gap-3">
                                 <div className="relative flex-1">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/35" />
@@ -886,12 +955,12 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                       value={researchQuery}
                                       onChange={(e) => setResearchQuery(e.target.value)}
                                       placeholder="Search class name..."
-                                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-xs font-bold tracking-wide outline-none focus:border-cyan-400/60"
+                                      className="w-full rounded-xl border border-white/10 bg-black/24 py-2.5 pl-9 pr-3 text-xs font-bold tracking-wide text-white outline-none focus:border-cyan-400/60"
                                     />
                                 </div>
                                 <button
                                   onClick={() => { setResearchQuery(''); setResearchSector('ALL'); }}
-                                  className="px-3 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest text-white/70 bg-white/5 border border-white/10 hover:bg-white/10"
+                                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/70 hover:bg-white/10"
                                   title="Clear search and filters"
                                 >
                                   Reset
@@ -902,7 +971,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                 <button
                                   key={name}
                                   onClick={() => setResearchSector(name)}
-                                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider border transition-all ${researchSector === name ? 'bg-cyan-500 text-black border-cyan-300' : 'bg-white/5 text-white/60 border-white/10 hover:text-white'}`}
+                                  className={`rounded-lg border px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.14em] transition-all ${researchSector === name ? 'border-cyan-300 bg-cyan-400 text-black' : 'border-white/10 bg-white/5 text-white/60 hover:text-white'}`}
                                 >
                                   {name}
                                 </button>
@@ -911,45 +980,49 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                         </div>
 
                         {researchCategories.map(cat => (
-                            <div key={cat.name} className="space-y-6">
-                                <div className="flex items-center gap-4 px-2">
-                                    <span className="text-[10px] font-black text-white/20 uppercase tracking-[0.5em] italic">{cat.name} Sector</span>
+                            <div key={cat.name} className="space-y-3">
+                                <div className="flex items-center gap-4 px-1">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.24em] text-white/42">{cat.name} Sector</span>
                                     <div className="h-px flex-1 bg-white/[0.04]"></div>
                                 </div>
-                                <div className="grid grid-cols-2 gap-4">
+                                <div className="grid grid-cols-2 gap-3">
                                     {cat.classes.map(cls => (
                                         <button 
                                             key={cls} 
                                             onClick={() => { playHover?.(); onUpgradeClass(cls); }} 
-                                            className={`group relative flex flex-col gap-6 p-6 rounded-[2.5rem] border-2 transition-all overflow-hidden ${currentClass === cls ? 'bg-indigo-600 border-indigo-400 shadow-2xl' : 'bg-white/[0.03] border-white/5 hover:border-indigo-500/30 hover:bg-white/[0.06]'}`}
+                                            className={`group relative flex flex-col gap-4 overflow-hidden rounded-[1.5rem] border p-4 text-left transition-all ${currentClass === cls ? 'border-indigo-300/55 bg-indigo-500/16 shadow-[inset_0_0_24px_rgba(99,102,241,0.14)]' : 'border-white/8 bg-white/[0.03] hover:border-indigo-300/24 hover:bg-white/[0.06]'}`}
                                         >
-                                            <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none transform translate-x-4 -translate-y-4">
+                                            <div className="pointer-events-none absolute top-0 right-0 translate-x-3 -translate-y-3 p-3 opacity-5">
                                                 <TankPreview
                                                   key={`${SANDBOX_RESEARCH_ICON_REV}-bg-${cls}`}
                                                   tankClass={resolvePreviewClass(cls)}
-                                                  size={100}
+                                                  size={84}
                                                   showArenaVfx={isRebirthPreviewClass(cls)}
+                                                  turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                                  chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
                                                 />
                                             </div>
-                                            <div className="shrink-0 transform group-hover:scale-110 transition-transform duration-500 relative z-10 w-fit">
-                                                <div className="p-4 rounded-3xl bg-black/40 border border-white/10 group-hover:border-white/20 transition-all shadow-xl">
+                                            <div className="relative z-10 w-fit shrink-0 transition-transform duration-500 group-hover:scale-105">
+                                                <div className="rounded-2xl border border-white/10 bg-black/28 p-3 transition-all group-hover:border-white/20">
                                                     <TankPreview
                                                       key={`${SANDBOX_RESEARCH_ICON_REV}-card-${cls}`}
                                                       tankClass={resolvePreviewClass(cls)}
-                                                      size={54}
+                                                      size={48}
                                                       color={currentClass === cls ? '#fff' : undefined}
                                                       showArenaVfx={isRebirthPreviewClass(cls)}
+                                                      turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                                      chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
                                                     />
                                                 </div>
                                             </div>
                                             <div className="relative z-10 flex flex-col">
-                                                <div className="flex items-center gap-2 mb-1.5">
+                                                <div className="mb-1.5 flex items-center gap-2">
                                                     <div className={`w-1.5 h-1.5 rounded-full ${currentClass === cls ? 'bg-white animate-pulse' : 'bg-indigo-500'}`}></div>
-                                                    <span className={`text-[11px] font-black uppercase italic tracking-tighter ${currentClass === cls ? 'text-white' : 'text-white/80'}`}>{cls.replace(' Tank', '')}</span>
+                                                    <span className={`text-[10px] font-black uppercase tracking-[0.14em] ${currentClass === cls ? 'text-white' : 'text-white/82'}`}>{cls.replace(' Tank', '')}</span>
                                                 </div>
                                                 <div className="flex items-center justify-between">
-                                                    <span className={`text-[7px] font-black uppercase tracking-widest ${currentClass === cls ? 'text-white/60' : 'text-white/20'}`}>Ref_UID: {cls.toUpperCase().replace(/\s/g, '_')}</span>
-                                                    {currentClass === cls && <span className="text-[7px] font-black text-white bg-black/30 px-1.5 py-0.5 rounded-full uppercase">Current</span>}
+                                                    <span className={`text-[7px] font-black uppercase tracking-[0.16em] ${currentClass === cls ? 'text-white/56' : 'text-white/24'}`}>Ref {cls.toUpperCase().replace(/\s/g, '_')}</span>
+                                                    {currentClass === cls && <span className="rounded-full bg-black/28 px-1.5 py-0.5 text-[7px] font-black uppercase text-white">Current</span>}
                                                 </div>
                                             </div>
                                         </button>
@@ -958,26 +1031,33 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             </div>
                         ))}
                         {researchCategories.length === 0 && (
-                          <div className="p-10 rounded-3xl border border-white/10 bg-white/[0.03] text-center">
-                            <span className="text-xs font-black tracking-[0.25em] text-white/30 uppercase">No Matching Chassis</span>
+                          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-8 text-center">
+                            <span className="text-xs font-black uppercase tracking-[0.22em] text-white/30">No Matching Chassis</span>
                           </div>
                         )}
 
-                        <div className="space-y-6">
-                            <div className="flex items-center gap-4 px-2">
-                                <span className="text-[10px] font-black text-amber-300/40 uppercase tracking-[0.38em] italic">Boss Override</span>
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-4 px-1">
+                                <span className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200/62">Boss Override</span>
                                 <div className="h-px flex-1 bg-white/[0.04]"></div>
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 gap-3">
                                 {SANDBOX_BOSS_CLASSES.map(cls => (
                                     <button
                                       key={cls}
                                       onClick={() => { playHover?.(); onUpgradeClass(cls); }}
-                                      className={`group relative flex flex-col gap-4 rounded-[2rem] border p-5 text-left transition-all ${currentClass === cls ? 'border-amber-300 bg-amber-500/12 shadow-2xl' : 'border-white/8 bg-white/[0.03] hover:border-amber-300/35 hover:bg-white/[0.06]'}`}
+                                      className={`group relative flex flex-col gap-3 rounded-[1.4rem] border p-4 text-left transition-all ${currentClass === cls ? 'border-amber-300/55 bg-amber-500/12 shadow-[inset_0_0_20px_rgba(245,158,11,0.12)]' : 'border-white/8 bg-white/[0.03] hover:border-amber-300/35 hover:bg-white/[0.06]'}`}
                                     >
                                       <div className="flex items-center gap-3">
-                                        <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
-                                          <TankPreview tankClass={resolvePreviewClass(cls)} size={46} showArenaVfx={isRebirthPreviewClass(cls)} />
+                                        <div className="rounded-2xl border border-white/10 bg-black/30 p-2.5">
+                                          <TankPreview
+                                            key={`${SANDBOX_RESEARCH_ICON_REV}-boss-override-${cls}`}
+                                            tankClass={resolvePreviewClass(cls)}
+                                            size={42}
+                                            showArenaVfx={isRebirthPreviewClass(cls)}
+                                            turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                            chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
+                                          />
                                         </div>
                                         <div className="min-w-0">
                                           <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/88">{cls}</div>
@@ -990,21 +1070,27 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             </div>
                         </div>
 
-                        <div className="space-y-6">
-                            <div className="flex items-center gap-4 px-2">
-                                <span className="text-[10px] font-black text-cyan-300/38 uppercase tracking-[0.38em] italic">Dominion Profiles</span>
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-4 px-1">
+                                <span className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200/60">Dominion Profiles</span>
                                 <div className="h-px flex-1 bg-white/[0.04]"></div>
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 gap-3">
                                 {SANDBOX_DOMINION_PROFILES.map(profile => (
                                     <button
                                       key={profile.id}
                                       onClick={() => { playHover?.(); onUpgradeClass(profile.classType); }}
-                                      className={`group relative flex flex-col gap-4 rounded-[2rem] border p-5 text-left transition-all ${currentClass === profile.classType ? 'border-cyan-300 bg-cyan-500/12 shadow-2xl' : 'border-white/8 bg-white/[0.03] hover:border-cyan-300/35 hover:bg-white/[0.06]'}`}
+                                      className={`group relative flex flex-col gap-3 rounded-[1.4rem] border p-4 text-left transition-all ${currentClass === profile.classType ? 'border-cyan-300/55 bg-cyan-500/12 shadow-[inset_0_0_20px_rgba(34,211,238,0.1)]' : 'border-white/8 bg-white/[0.03] hover:border-cyan-300/35 hover:bg-white/[0.06]'}`}
                                     >
                                       <div className="flex items-center gap-3">
-                                        <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
-                                          <TankPreview tankClass={resolvePreviewClass(profile.classType)} size={42} />
+                                        <div className="rounded-2xl border border-white/10 bg-black/30 p-2.5">
+                                          <TankPreview
+                                            key={`${SANDBOX_RESEARCH_ICON_REV}-dominion-profile-${profile.id}`}
+                                            tankClass={resolvePreviewClass(profile.classType)}
+                                            size={42}
+                                            turretRotation={getSandboxPreviewPose(profile.classType).turretRotation}
+                                            chassisRotation={getSandboxPreviewPose(profile.classType).chassisRotation}
+                                          />
                                         </div>
                                         <div className="min-w-0">
                                           <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/88">{profile.label}</div>
@@ -1026,59 +1112,59 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -8 }}
                       transition={{ duration: 0.16 }}
-                      className="space-y-12"
+                      className="space-y-4"
                     >
                         {/* Spawning Settings */}
-                        <div className="p-10 rounded-[3rem] bg-white/[0.03] border-2 border-white/5 space-y-10">
-                            <div className="flex items-center justify-between group">
+                        <div className="space-y-5 rounded-[1.6rem] border border-white/8 bg-white/[0.03] p-4">
+                            <div className="flex items-center justify-between gap-4">
                                 <div className="flex flex-col">
-                                    <span className="text-sm font-black text-white uppercase tracking-tighter italic">Molecular_Fabricator</span>
+                                    <span className="text-[10px] font-black uppercase tracking-[0.24em] text-white/86">Spawn Fabricator</span>
                                     <div className="flex items-center gap-2 mt-1">
                                         <div className={`w-2 h-2 rounded-full ${sandboxConfig?.spawningEnabled ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`}></div>
-                                        <span className={`text-[9px] font-black uppercase tracking-widest ${sandboxConfig?.spawningEnabled ? 'text-green-500' : 'text-red-500/60'}`}>{sandboxConfig?.spawningEnabled ? 'ONLINE_READY' : 'FABRICATION_LOCKED'}</span>
+                                        <span className={`text-[9px] font-black uppercase tracking-[0.18em] ${sandboxConfig?.spawningEnabled ? 'text-green-400' : 'text-red-300/60'}`}>{sandboxConfig?.spawningEnabled ? 'Online Ready' : 'Fabrication Locked'}</span>
                                     </div>
                                 </div>
                                 <button 
                                     onClick={() => engine.setSandboxFlag('spawningEnabled', !sandboxConfig?.spawningEnabled)} 
-                                    className={`w-20 h-10 rounded-full p-1.5 transition-all relative ${sandboxConfig?.spawningEnabled ? 'bg-green-500 shadow-[0_0_30px_rgba(34,197,94,0.3)]' : 'bg-white/10'}`}
+                                    className={`relative h-10 w-20 rounded-full p-1.5 transition-all ${sandboxConfig?.spawningEnabled ? 'bg-green-500 shadow-[0_0_24px_rgba(34,197,94,0.22)]' : 'bg-white/10'}`}
                                 >
                                     <div className={`w-7 h-7 rounded-full bg-white transition-all transform shadow-2xl ${sandboxConfig?.spawningEnabled ? 'translate-x-10' : 'translate-x-0'}`} />
                                 </button>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-10">
+                            <div className="grid grid-cols-2 gap-3">
                                 <div className="space-y-4">
-                                    <span className="text-[10px] font-black text-white/20 uppercase tracking-[0.3em] px-2 italic">Fabrication_Density</span>
-                                    <div className="flex items-center gap-4 bg-black/40 p-1 rounded-2xl border border-white/5">
-                                        <button onClick={() => setSpawnAmount(prev => Math.max(1, prev - 1))} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center active:scale-90 transition-all">-</button>
+                                    <span className="px-1 text-[9px] font-black uppercase tracking-[0.18em] text-white/32">Fabrication Density</span>
+                                    <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-black/24 p-1.5">
+                                        <button onClick={() => setSpawnAmount(prev => Math.max(1, prev - 1))} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 transition-all hover:bg-white/10 active:scale-90">-</button>
                                         <span className="flex-1 text-center font-black text-white text-lg">{spawnAmount}</span>
-                                        <button onClick={() => setSpawnAmount(prev => Math.min(25, prev + 1))} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center active:scale-90 transition-all">+</button>
+                                        <button onClick={() => setSpawnAmount(prev => Math.min(25, prev + 1))} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 transition-all hover:bg-white/10 active:scale-90">+</button>
                                     </div>
                                 </div>
                                 <div className="space-y-4">
-                                    <span className="text-[10px] font-black text-white/20 uppercase tracking-[0.3em] px-2 italic">Spawn_Rate</span>
-                                    <div className="flex items-center gap-4 bg-black/40 p-1 rounded-2xl border border-white/5">
-                                        <button onClick={() => engine.setSandboxFlag('shapeSpawnRate', Math.max(0.1, (sandboxConfig?.shapeSpawnRate || 1) - 0.5))} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center active:scale-90 transition-all">-</button>
+                                    <span className="px-1 text-[9px] font-black uppercase tracking-[0.18em] text-white/32">Spawn Rate</span>
+                                    <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-black/24 p-1.5">
+                                        <button onClick={() => engine.setSandboxFlag('shapeSpawnRate', Math.max(0.1, (sandboxConfig?.shapeSpawnRate || 1) - 0.5))} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 transition-all hover:bg-white/10 active:scale-90">-</button>
                                         <span className="flex-1 text-center font-black text-white text-lg">{sandboxConfig?.shapeSpawnRate.toFixed(1)}x</span>
-                                        <button onClick={() => engine.setSandboxFlag('shapeSpawnRate', Math.min(10, (sandboxConfig?.shapeSpawnRate || 1) + 0.5))} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center active:scale-90 transition-all">+</button>
+                                        <button onClick={() => engine.setSandboxFlag('shapeSpawnRate', Math.min(10, (sandboxConfig?.shapeSpawnRate || 1) + 0.5))} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 transition-all hover:bg-white/10 active:scale-90">+</button>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
-                        <div className={`transition-all duration-700 space-y-12 ${sandboxConfig?.spawningEnabled ? 'opacity-100' : 'opacity-20 pointer-events-none filter grayscale blur-sm scale-[0.98]'}`}>
+                        <div className={`space-y-4 transition-all duration-700 ${sandboxConfig?.spawningEnabled ? 'opacity-100' : 'pointer-events-none scale-[0.98] opacity-20 blur-sm filter grayscale'}`}>
                             {/* Rarity Selector */}
-                            <div className="space-y-4">
-                                <div className="flex items-center justify-between px-2">
-                                    <span className="text-[10px] font-black text-cyan-400 uppercase tracking-[0.4em] italic leading-none">Genetic_Integrity</span>
-                                    <span className="text-[8px] font-black text-white/20 uppercase">Core_Rarity_Profiles</span>
+                            <div className="space-y-3 rounded-[1.6rem] border border-white/8 bg-white/[0.025] p-4">
+                                <div className="flex items-center justify-between px-1">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200/82">Rarity Profile</span>
+                                    <span className="text-[8px] font-black uppercase tracking-[0.16em] text-white/24">Core Loadout</span>
                                 </div>
-                                <div className="grid grid-cols-3 gap-2 p-2 bg-black/40 rounded-[2rem] border border-white/5">
+                                <div className="grid grid-cols-3 gap-2 rounded-[1.3rem] border border-white/8 bg-black/24 p-2">
                                     {[ShapeRarity.COMMON, ShapeRarity.RARE, ShapeRarity.EPIC, ShapeRarity.LEGENDARY, ShapeRarity.MYTHICAL, ShapeRarity.TRANSCENDENT].map(r => (
                                         <button 
                                             key={r} 
                                             onClick={() => { playHover?.(); setSelectedRarity(r); }} 
-                                            className={`py-3 rounded-xl text-[10px] font-black uppercase transition-all border-2 relative overflow-hidden group ${selectedRarity === r ? 'bg-cyan-500 border-cyan-400 text-black shadow-lg shadow-cyan-500/20 animate-pulse' : 'bg-transparent border-transparent text-white/20 hover:text-white/50 hover:bg-white/[0.02]'}`}
+                                            className={`relative overflow-hidden rounded-xl border py-2.5 text-[10px] font-black uppercase transition-all ${selectedRarity === r ? 'border-cyan-300 bg-cyan-400 text-black shadow-lg shadow-cyan-500/14' : 'border-transparent bg-transparent text-white/28 hover:bg-white/[0.02] hover:text-white/52'}`}
                                         >
                                             <span className="relative z-10">{r}</span>
                                         </button>
@@ -1087,26 +1173,32 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             </div>
 
                             {/* Elite Entities */}
-                            <div className="grid grid-cols-2 gap-4">
-                                <button onClick={() => handlePrimeSpawn({ type: 'BOSS', rarity: selectedRarity })} className={`p-8 rounded-[3rem] border-2 flex flex-col items-center gap-5 transition-all group relative overflow-hidden ${primedSpawn?.type === 'BOSS' ? 'bg-red-500/20 border-red-500 shadow-2xl' : 'bg-white/[0.03] border-white/5 hover:bg-white/[0.08] hover:border-red-500/30'}`}>
+                            <div className="grid grid-cols-2 gap-3">
+                                <button onClick={() => handlePrimeSpawn({ type: 'BOSS', rarity: selectedRarity })} className={`group relative flex flex-col items-center gap-4 overflow-hidden rounded-[1.6rem] border p-5 transition-all ${primedSpawn?.type === 'BOSS' ? 'border-red-400 bg-red-500/16 shadow-[inset_0_0_24px_rgba(239,68,68,0.12)]' : 'border-white/8 bg-white/[0.03] hover:border-red-400/30 hover:bg-white/[0.08]'}`}>
                                     <div className="shrink-0 flex items-center justify-center transform group-hover:scale-110 group-active:scale-95 transition-all duration-500 relative z-10">
-                                        <ShapePreview type="GRAND_SINGULARITY" rarity={ShapeRarity.COMMON} size={84} />
+                                        <ShapePreview type="GRAND_SINGULARITY" rarity={ShapeRarity.COMMON} size={72} />
                                     </div>
-                                    <span className="text-[11px] font-black text-white italic uppercase tracking-widest relative z-10">Grand_Singularity</span>
+                                    <span className="relative z-10 text-[10px] font-black uppercase tracking-[0.16em] text-white">Grand Singularity</span>
                                     <div className="absolute inset-0 bg-gradient-to-b from-red-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                                 </button>
-                                <button onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: TankClass.DESTROYER, rarity: selectedRarity })} className={`p-8 rounded-[3rem] border-2 flex flex-col items-center gap-5 transition-all group relative overflow-hidden ${primedSpawn?.type === 'ELITE_TANK' ? 'bg-amber-500/20 border-amber-500 shadow-2xl' : 'bg-white/[0.03] border-white/5 hover:bg-white/[0.08] hover:border-amber-500/30'}`}>
+                                <button onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: TankClass.DESTROYER, rarity: selectedRarity })} className={`group relative flex flex-col items-center gap-4 overflow-hidden rounded-[1.6rem] border p-5 transition-all ${primedSpawn?.type === 'ELITE_TANK' ? 'border-amber-300 bg-amber-500/16 shadow-[inset_0_0_24px_rgba(245,158,11,0.12)]' : 'border-white/8 bg-white/[0.03] hover:border-amber-400/30 hover:bg-white/[0.08]'}`}>
                                     <div className="shrink-0 flex items-center justify-center transform group-hover:scale-110 group-active:scale-95 transition-all duration-500 relative z-10">
-                                        <TankPreview tankClass={TankClass.DESTROYER} size={84} />
+                                        <TankPreview
+                                          key={`${SANDBOX_RESEARCH_ICON_REV}-elite-legionnaire`}
+                                          tankClass={TankClass.DESTROYER}
+                                          size={72}
+                                          turretRotation={getSandboxPreviewPose(TankClass.DESTROYER).turretRotation}
+                                          chassisRotation={getSandboxPreviewPose(TankClass.DESTROYER).chassisRotation}
+                                        />
                                     </div>
-                                    <span className="text-[11px] font-black text-white italic uppercase tracking-widest relative z-10">Elite_Legionnaire</span>
+                                    <span className="relative z-10 text-[10px] font-black uppercase tracking-[0.16em] text-white">Elite Legionnaire</span>
                                     <div className="absolute inset-0 bg-gradient-to-b from-amber-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                                 </button>
                             </div>
 
-                            <div className="space-y-6">
-                                <div className="flex items-center gap-4 px-2">
-                                    <span className="text-[10px] font-black text-amber-300/38 uppercase tracking-[0.4em] italic">Elite Boss Fabrication</span>
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-4 px-1">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-200/60">Elite Boss Fabrication</span>
                                     <div className="h-px flex-1 bg-white/[0.04]"></div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
@@ -1114,10 +1206,17 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                         <button
                                           key={cls}
                                           onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: cls, rarity: selectedRarity })}
-                                          className={`rounded-[2rem] border p-4 flex items-center gap-3 transition-all ${primedSpawn?.type === 'ELITE_TANK' && primedSpawn?.classType === cls ? 'bg-amber-500/18 border-amber-300 shadow-xl' : 'bg-white/[0.03] border-white/6 hover:bg-white/[0.07] hover:border-amber-300/30'}`}
+                                          className={`flex items-center gap-3 rounded-[1.35rem] border p-4 transition-all ${primedSpawn?.type === 'ELITE_TANK' && primedSpawn?.classType === cls ? 'border-amber-300 bg-amber-500/16 shadow-[inset_0_0_20px_rgba(245,158,11,0.1)]' : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.07] hover:border-amber-300/30'}`}
                                         >
                                           <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
-                                            <TankPreview tankClass={resolvePreviewClass(cls)} size={38} showArenaVfx={isRebirthPreviewClass(cls)} />
+                                            <TankPreview
+                                              key={`${SANDBOX_RESEARCH_ICON_REV}-elite-boss-${cls}`}
+                                              tankClass={resolvePreviewClass(cls)}
+                                              size={38}
+                                              showArenaVfx={isRebirthPreviewClass(cls)}
+                                              turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                              chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
+                                            />
                                           </div>
                                           <div className="min-w-0 text-left">
                                             <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{cls}</div>
@@ -1128,9 +1227,9 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                 </div>
                             </div>
 
-                            <div className="space-y-6">
-                                <div className="flex items-center gap-4 px-2">
-                                    <span className="text-[10px] font-black text-cyan-300/38 uppercase tracking-[0.4em] italic">Elite Tank Templates</span>
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-4 px-1">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200/60">Elite Tank Templates</span>
                                     <div className="h-px flex-1 bg-white/[0.04]"></div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
@@ -1138,10 +1237,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                         <button
                                           key={cls}
                                           onClick={() => handlePrimeSpawn({ type: 'ELITE_TANK', group: 'ELITE', classType: cls, rarity: selectedRarity })}
-                                          className={`rounded-[2rem] border p-4 flex items-center gap-3 transition-all ${primedSpawn?.type === 'ELITE_TANK' && primedSpawn?.classType === cls ? 'bg-cyan-500/18 border-cyan-300 shadow-xl' : 'bg-white/[0.03] border-white/6 hover:bg-white/[0.07] hover:border-cyan-300/30'}`}
+                                          className={`flex items-center gap-3 rounded-[1.35rem] border p-4 transition-all ${primedSpawn?.type === 'ELITE_TANK' && primedSpawn?.classType === cls ? 'border-cyan-300 bg-cyan-500/16 shadow-[inset_0_0_20px_rgba(34,211,238,0.1)]' : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.07] hover:border-cyan-300/30'}`}
                                         >
                                           <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
-                                            <TankPreview tankClass={resolvePreviewClass(cls)} size={36} />
+                                            <TankPreview
+                                              key={`${SANDBOX_RESEARCH_ICON_REV}-elite-template-${cls}`}
+                                              tankClass={resolvePreviewClass(cls)}
+                                              size={36}
+                                              turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                              chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
+                                            />
                                           </div>
                                           <div className="min-w-0 text-left">
                                             <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{cls}</div>
@@ -1152,9 +1257,9 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                 </div>
                             </div>
 
-                            <div className="space-y-6">
-                                <div className="flex items-center gap-4 px-2">
-                                    <span className="text-[10px] font-black text-violet-300/38 uppercase tracking-[0.4em] italic">Dominion Guardians</span>
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-4 px-1">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.22em] text-violet-200/62">Dominion Guardians</span>
                                     <div className="h-px flex-1 bg-white/[0.04]"></div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
@@ -1162,10 +1267,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                         <button
                                           key={profile.id}
                                           onClick={() => handlePrimeSpawn({ type: 'DOMINION_TANK', classType: profile.classType, rarity: ShapeRarity.COMMON, weaponProfile: profile.id })}
-                                          className={`rounded-[2rem] border p-4 flex items-center gap-3 transition-all ${primedSpawn?.type === 'DOMINION_TANK' && primedSpawn?.weaponProfile === profile.id ? 'bg-violet-500/18 border-violet-300 shadow-xl' : 'bg-white/[0.03] border-white/6 hover:bg-white/[0.07] hover:border-violet-300/30'}`}
+                                          className={`flex items-center gap-3 rounded-[1.35rem] border p-4 transition-all ${primedSpawn?.type === 'DOMINION_TANK' && primedSpawn?.weaponProfile === profile.id ? 'border-violet-300 bg-violet-500/16 shadow-[inset_0_0_20px_rgba(167,139,250,0.1)]' : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.07] hover:border-violet-300/30'}`}
                                         >
                                           <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
-                                            <TankPreview tankClass={resolvePreviewClass(profile.classType)} size={36} />
+                                            <TankPreview
+                                              key={`${SANDBOX_RESEARCH_ICON_REV}-dominion-guardian-${profile.id}`}
+                                              tankClass={resolvePreviewClass(profile.classType)}
+                                              size={36}
+                                              turretRotation={getSandboxPreviewPose(profile.classType).turretRotation}
+                                              chassisRotation={getSandboxPreviewPose(profile.classType).chassisRotation}
+                                            />
                                           </div>
                                           <div className="min-w-0 text-left">
                                             <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{profile.label}</div>
@@ -1177,16 +1288,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             </div>
 
                             {/* Shape Toggles & Spawning */}
-                            <div className="space-y-6">
-                                <div className="flex items-center gap-4 px-2">
-                                    <span className="text-[10px] font-black text-white/20 uppercase tracking-[0.4em] italic">Standard_Templates</span>
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-4 px-1">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.22em] text-white/42">Standard Templates</span>
                                     <div className="h-px flex-1 bg-white/[0.04]"></div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
                                     {(Object.values(ShapeType) as ShapeType[]).map(t => {
                                         const isEnabled = sandboxConfig?.enabledShapes[t];
                                         return (
-                                            <div key={t} className="bg-white/[0.02] border border-white/5 rounded-3xl p-3 flex items-center gap-4 group">
+                                            <div key={t} className="group flex items-center gap-3 rounded-[1.3rem] border border-white/8 bg-white/[0.02] p-3">
                                                 <button 
                                                     onClick={() => engine.setShapeToggle(t, !isEnabled)} 
                                                     className={`w-6 h-6 rounded-lg transition-all border flex items-center justify-center shrink-0 ${isEnabled ? 'bg-cyan-500 border-cyan-400 text-black' : 'bg-black/40 border-white/10 text-transparent'}`}
@@ -1195,7 +1306,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                                 </button>
                                                 <button 
                                                     onClick={() => handlePrimeSpawn({ type: 'SHAPE', shapeType: t, rarity: selectedRarity })} 
-                                                    className="flex-1 flex items-center justify-between pr-4 group/btn"
+                                                    className="group/btn flex flex-1 items-center justify-between pr-2"
                                                 >
                                                     <div className="flex items-center gap-3">
                                                         <ShapePreview type={t} rarity={selectedRarity} size={28} />
@@ -1230,17 +1341,17 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
               </div>
               
               {/* Footer */}
-              <div className="px-10 py-6 bg-cyan-400/[0.01] border-t border-white/5 shrink-0 flex justify-between items-center">
-                 <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-cyan-500/40 uppercase tracking-[0.5em] leading-none mb-1">Terminal_Active // 0x2A // REV_9</span>
-                    <p className="text-[7px] text-white/20 font-bold uppercase tracking-widest italic">Optimized for experimental chassis testing</p>
-                 </div>
-                 <div className="flex items-center gap-3">
-                    <div className="h-1.5 w-24 bg-white/5 rounded-full overflow-hidden">
-                        <div className="h-full bg-cyan-500/20 w-1/3 animate-pulse"></div>
-                    </div>
-                    <span className="text-[8px] font-black text-white/10 tracking-[0.2em]">v.0.95.122</span>
-                 </div>
+              <div className="flex shrink-0 items-center justify-between gap-3 border-t border-cyan-300/10 bg-black/24 px-5 py-3">
+                  <div className="flex flex-col">
+                     <span className="mb-1 text-[8px] font-black uppercase tracking-[0.32em] text-cyan-300/44">Deck Ready</span>
+                     <p className="text-[8px] font-bold uppercase tracking-[0.18em] text-white/28">Rapid iteration for classes, threats, and spawn flow</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                     <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/6">
+                         <div className="h-full w-1/2 bg-gradient-to-r from-cyan-400/28 to-cyan-200/38"></div>
+                     </div>
+                     <span className="text-[8px] font-black tracking-[0.16em] text-white/18">LOCAL BUILD</span>
+                  </div>
               </div>
           </motion.div>
       )}
@@ -1278,13 +1389,18 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 const canUpgrade = availableStatPoints > 0 && !isMaxed && !showStandardUpgrades;
                const hotkey = idx + 1 === 10 ? '0' : (idx + 1).toString();
                
-               let displayLabel: string = stat;
-               if (isDroneClass) {
-                 if (stat === StatType.BULLET_PENETRATION) displayLabel = "Drone Health";
-                 if (stat === StatType.BULLET_DAMAGE) displayLabel = "Drone Damage";
-               }
+                let displayLabel: string = stat;
+                if (isDroneClass) {
+                  if (stat === StatType.BULLET_PENETRATION) displayLabel = "Drone Health";
+                  if (stat === StatType.BULLET_DAMAGE) displayLabel = "Drone Damage";
+                }
+                if (isTrapperBranchClass(currentClass)) {
+                  if (stat === StatType.BULLET_SPEED) displayLabel = "Trap Range";
+                  if (stat === StatType.BULLET_PENETRATION) displayLabel = "Trap Health";
+                  if (stat === StatType.BULLET_DAMAGE) displayLabel = "Trap Damage";
+                }
 
-               return (
+                return (
                  <div 
                   key={stat} 
                   className={`
@@ -1308,7 +1424,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
 
                    <div className="flex flex-col flex-1 min-w-0">
                       <div className="flex justify-between items-center mb-0.5">
-                        <span className={`text-[8px] font-black uppercase tracking-[0.1em] truncate leading-none ${canUpgrade ? 'text-white' : 'text-white/40'}`}>
+                        <span className={`break-words text-[8px] font-black uppercase leading-snug tracking-[0.1em] ${canUpgrade ? 'text-white' : 'text-white/40'}`}>
                           {displayLabel}
                         </span>
                         <span className={`text-[7px] font-mono font-bold ${isMaxed ? 'text-yellow-500' : 'text-white/20'}`}>
@@ -1354,12 +1470,21 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 </div>
               </div>
             )}
-            <div className="w-full rounded-[1rem] border border-cyan-300/10 bg-[#071018]/62 px-3 py-2 backdrop-blur-lg shadow-[0_8px_18px_rgba(0,0,0,0.2)]">
+            <div className="w-full rounded-[1rem] border border-cyan-300/10 bg-[#071018]/62 px-3 py-2.5 backdrop-blur-lg shadow-[0_8px_18px_rgba(0,0,0,0.2)]">
               <div className="mb-1.5 flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[6px] font-black uppercase tracking-[0.2em] text-cyan-300/54">Combat Telemetry</div>
-                  <div className={`mt-0.5 text-[21px] font-black leading-none tracking-tight ${scoreLabelTone}`}>{scoreLabel}</div>
-                  <div className="mt-0.5 text-[7px] font-black uppercase tracking-[0.14em] text-white/52">Lvl {level} {compactCurrentClass}</div>
+                  <div className="text-[6.5px] font-black uppercase tracking-[0.16em] text-cyan-300/54">Combat Telemetry</div>
+                  <div className={`mt-0.5 break-words text-[21px] font-black leading-none tracking-tight ${scoreLabelTone}`}>{scoreLabel}</div>
+                  <div className="mt-0.5 break-words text-[7.5px] font-black uppercase leading-snug tracking-[0.11em] text-white/52">Lvl {level} {compactCurrentClass}</div>
+                  <div className={`mt-1 inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[6.5px] font-black uppercase tracking-[0.16em] ${
+                    secondarySector === 'restoration'
+                      ? 'border-emerald-300/26 bg-emerald-500/10 text-emerald-200'
+                      : secondarySector === 'blood'
+                        ? 'border-rose-300/26 bg-rose-500/10 text-rose-200'
+                        : 'border-white/10 bg-white/[0.04] text-white/42'
+                  }`}>
+                    {sectorLabel}
+                  </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   {availableStatPoints > 0 && (
@@ -1379,22 +1504,30 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
               </div>
               <div className="space-y-1">
                 <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">
-                  <div className="mb-1 flex items-center justify-between text-[6px] font-black uppercase tracking-[0.16em] text-white/46">
-                    <span>Hull Integrity</span>
-                    <span>{Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}</span>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-[6px] font-black uppercase tracking-[0.16em] text-white/46">Hull Integrity</span>
+                    <span className="text-[8.5px] font-black tracking-[0.04em] text-white/92">
+                      {Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}
+                    </span>
                   </div>
                   <div className="relative h-1.5 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
                       <div className={`relative h-full transition-all duration-75 ease-out ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / Math.max(1, maxHealth)) * 100)}%` }} />
                   </div>
                 </div>
                 <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">
-                  <div className="mb-1 flex items-center justify-between text-[6px] font-black uppercase tracking-[0.16em] text-white/46">
-                    <span>Experience</span>
-                    <span>{Math.floor(displayXpPercent)}%</span>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-[6px] font-black uppercase tracking-[0.16em] text-white/46">Experience</span>
+                    <span className="rounded-md border border-amber-300/22 bg-[linear-gradient(180deg,rgba(251,191,36,0.16),rgba(251,146,60,0.12))] px-2 py-0.5 text-[10px] font-black tracking-[0.03em] text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.16)]">
+                      {Math.floor(displayXpPercent)}%
+                    </span>
                   </div>
-                  <div className="relative h-1.5 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
-                     <div className="relative h-full bg-gradient-to-r from-yellow-400 to-orange-400 transition-all duration-75 ease-out" style={{ width: `${displayXpPercent}%` }}></div>
-                    </div>
+                  <div className="relative h-2.5 overflow-hidden rounded-full border border-amber-200/18 bg-[linear-gradient(180deg,rgba(18,12,4,0.82),rgba(10,8,4,0.9))] shadow-[inset_0_0_12px_rgba(0,0,0,0.28)]">
+                     <div className="relative h-full bg-gradient-to-r from-yellow-300 via-amber-400 to-orange-400 transition-all duration-75 ease-out shadow-[0_0_18px_rgba(251,191,36,0.22)]" style={{ width: `${displayXpPercent}%` }}>
+                       <div className="absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-white/35 to-transparent" />
+                     </div>
+                     <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),transparent_45%,rgba(0,0,0,0.14))]" />
+                    <div className="pointer-events-none absolute inset-y-[3px] left-2 right-2 rounded-full border-t border-white/8" />
+                  </div>
                   </div>
                </div>
             </div>

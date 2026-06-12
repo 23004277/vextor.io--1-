@@ -65,6 +65,19 @@ export interface IGameEngine {
 
 export class EnemyAITanks {
     private static readonly ALLOW_PLAYER_DRIVEN_SOCIAL = false;
+    private static isCloseFarmClass(classType: TankClass): boolean {
+        return classType === TankClass.BOOSTER ||
+            classType === TankClass.TRI_ANGLE ||
+            classType === TankClass.FIGHTER ||
+            classType === TankClass.SPRAYER;
+    }
+    static isTrapperBranch(classType: TankClass): boolean {
+        return classType === TankClass.TRAPPER ||
+            classType === TankClass.DUAL_TRAPPER ||
+            classType === TankClass.MACHINE_GUN_TRAPPER ||
+            classType === TankClass.OCTO_TRAPPER ||
+            classType === TankClass.TRIPLE_TRAPPER;
+    }
     static isPacifist(classType: TankClass): boolean {
         return classType === TankClass.PACIFIST_TRAINEE || 
                classType === TankClass.NURSE || 
@@ -77,6 +90,61 @@ export class EnemyAITanks {
                classType === TankClass.LEECH || 
                classType === TankClass.VAMPIRE || 
                classType === TankClass.REAPER;
+    }
+
+    private static getFarmHazardWeight(target: any): number {
+        if (target.type === EntityType.BOSS) return 3.6;
+        if (target.type === EntityType.CRASHER) {
+            return typeof target.shapeType === 'string' && target.shapeType.toUpperCase().includes('GRAND_SINGULARITY') ? 2.8 : 1.6;
+        }
+
+        switch (String(target.shapeType || '').toUpperCase()) {
+            case 'DODECAGON': return 3.2;
+            case 'DECAGON': return 2.9;
+            case 'NONAGON': return 2.6;
+            case 'OCTAGON': return 2.25;
+            case 'ALPHA_PENTAGON': return 2.2;
+            case 'BETA_PENTAGON': return 1.95;
+            case 'PENTAGON': return 1.6;
+            case 'DIAMOND': return 1.55;
+            case 'HEPTAGON': return 1.45;
+            case 'HEXAGON': return 1.35;
+            case 'STAR': return 1.25;
+            default: return 1.0;
+        }
+    }
+
+    private static getPreferredFarmRange(bot: IAITank, target: any): number {
+        const radius = target.radius ?? 24;
+        const isLongRange = this.isTrapperBranch(bot.classType) ||
+            bot.classType === TankClass.SNIPER ||
+            bot.classType === TankClass.ASSASSIN ||
+            bot.classType === TankClass.RANGER ||
+            bot.classType === TankClass.STALKER;
+        const isCloseClass = this.isCloseFarmClass(bot.classType);
+
+        let range = radius + 92;
+        if (target.type === EntityType.CRASHER) range += 36;
+        if (target.type === EntityType.BOSS) range += 160;
+
+        switch (String(target.shapeType || '').toUpperCase()) {
+            case 'ALPHA_PENTAGON': range += 72; break;
+            case 'BETA_PENTAGON': range += 50; break;
+            case 'PENTAGON': range += 42; break;
+            case 'DODECAGON': range += 150; break;
+            case 'DECAGON': range += 126; break;
+            case 'NONAGON': range += 102; break;
+            case 'OCTAGON': range += 86; break;
+            case 'STAR': range += 34; break;
+            case 'HEXAGON': range += 44; break;
+            case 'HEPTAGON': range += 58; break;
+            case 'DIAMOND': range += 48; break;
+            default: break;
+        }
+
+        if (isLongRange) range += 46;
+        if (isCloseClass) range = Math.max(range, radius + 88);
+        return range;
     }
 
     /**
@@ -253,9 +321,11 @@ export class EnemyAITanks {
         if (data.shapes.length === 0) return null;
         let bestTarget = null;
         let bestScore = -Infinity;
+        const botHpRatio = bot.health / Math.max(1, bot.maxHealth);
 
         for (const s of data.shapes) {
             const dist = Vector.dist(bot.pos, s.pos);
+            const preferredRange = this.getPreferredFarmRange(bot, s);
             let score = 520 / (dist + 18);
 
             if (s.type === EntityType.BOSS) {
@@ -287,6 +357,10 @@ export class EnemyAITanks {
             }, Infinity);
             if (nearestEnemyDist < 260) score *= 0.62;
             if (nearestEnemyDist < 180) score *= 0.48;
+            if (dist < preferredRange * 0.62) score *= 0.28;
+            else if (dist < preferredRange * 0.82) score *= 0.55;
+            else if (dist < preferredRange) score *= 0.82;
+            if (botHpRatio < 0.52) score *= Math.max(0.4, 1 - (this.getFarmHazardWeight(s) - 1) * 0.18);
 
             if (score > bestScore) {
                 bestScore = score;
@@ -524,7 +598,17 @@ export class EnemyAITanks {
                 case TankClass.ASSASSIN:
                 case TankClass.STALKER:
                 case TankClass.TRAPPER:
-                    idealRange = bot.classType === TankClass.RANGER ? 740 : (bot.classType === TankClass.STALKER ? 640 : (bot.classType === TankClass.TRAPPER ? 520 : 580));
+                case TankClass.DUAL_TRAPPER:
+                case TankClass.MACHINE_GUN_TRAPPER:
+                case TankClass.OCTO_TRAPPER:
+                case TankClass.TRIPLE_TRAPPER:
+                    idealRange = bot.classType === TankClass.RANGER ? 740 :
+                        bot.classType === TankClass.STALKER ? 640 :
+                        bot.classType === TankClass.MACHINE_GUN_TRAPPER ? 420 :
+                        bot.classType === TankClass.OCTO_TRAPPER ? 460 :
+                        bot.classType === TankClass.TRIPLE_TRAPPER ? 500 :
+                        bot.classType === TankClass.DUAL_TRAPPER ? 540 :
+                        520;
                     aggroWeight = 1.15;
                     strafeWeight = 1.1;
                     break;
@@ -617,37 +701,47 @@ export class EnemyAITanks {
             }
 
         } else if (bot.aiState === AIState.FARM && target) {
-            // 🚜 FARM SHAPES: Maintain spacing to shoot nodes without colliding
+            // Smart farming: hold a real standoff instead of face-planting into shapes.
             const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
             const dist = Vector.dist(bot.pos, target.pos);
-            const isRammer = bot.classType === TankClass.BOOSTER || bot.classType === TankClass.TRI_ANGLE;
-            
-            const idealFarmRange = isRammer ? 10 : 200;
+            const idealFarmRange = this.getPreferredFarmRange(bot, target);
 
             for (let i = 0; i < numRays; i++) {
                 const dotTo = Vector.dot(rays[i], toTarget);
                 let val = 0;
-                if (dist < idealFarmRange - 30) {
-                    val = -dotTo * 1.1; // backup
-                } else if (dist > idealFarmRange + 50) {
-                    val = dotTo * 0.85; // advance
+                if (dist < idealFarmRange - 24) {
+                    val = -dotTo * 1.2;
+                } else if (dist > idealFarmRange + 72) {
+                    val = dotTo * 0.8;
                 } else {
                     const orbitDir = { x: -toTarget.y, y: toTarget.x };
-                    val = Math.abs(Vector.dot(rays[i], orbitDir)) * 0.65;
+                    const radialStabilize = dotTo * (dist > idealFarmRange ? 0.12 : -0.18);
+                    val = Math.abs(Vector.dot(rays[i], orbitDir)) * 0.72 + radialStabilize;
                 }
                 interests[i] = Math.max(0, val);
             }
 
             this.updateAim(bot, engine, target);
-            bot.aiShooting = !isRammer || dist < 120;
+            bot.aiShooting = dist <= idealFarmRange + 180;
 
         } else if (bot.aiState === AIState.HUNT && target) {
-            // 🎯 PRIORITY HUNT: Rapidly close distance to rare shape
+            // Rare-shape pursuit should still respect collision spacing.
             const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
             const dist = Vector.dist(bot.pos, target.pos);
-            
+            const idealHuntRange = this.getPreferredFarmRange(bot, target) + 28;
+
             for (let i = 0; i < numRays; i++) {
-                interests[i] = Math.max(0, Vector.dot(rays[i], toTarget) * 1.5);
+                const dotTo = Vector.dot(rays[i], toTarget);
+                let val = 0;
+                if (dist < idealHuntRange - 20) {
+                    val = -dotTo * 1.1;
+                } else if (dist > idealHuntRange + 90) {
+                    val = dotTo * 1.22;
+                } else {
+                    const orbitDir = { x: -toTarget.y, y: toTarget.x };
+                    val = Math.abs(Vector.dot(rays[i], orbitDir)) * 0.62;
+                }
+                interests[i] = Math.max(0, val);
             }
 
             this.updateAim(bot, engine, target);
@@ -737,14 +831,18 @@ export class EnemyAITanks {
             }
         }
 
-        // 4. Boss / Void Portals High Collision Avoidance
-        const hazards = data.shapes.filter((s: any) => s.type === EntityType.VOID_PORTAL || s.type === EntityType.BOSS);
+        // 4. Shape / Boss / Portal collision avoidance
+        const activeFarmTargetId = target?.id ?? null;
+        const hazards = data.shapes.filter((s: any) => s.type === EntityType.VOID_PORTAL || s.type === EntityType.BOSS || s.type === EntityType.SHAPE || s.type === EntityType.CRASHER);
         for (const h of hazards) {
             const toHaz = Vector.sub(h.pos, bot.pos);
             const d = Vector.mag(toHaz);
-            const safeDist = h.type === EntityType.BOSS ? 400 : 250;
+            const safeDist = h.type === EntityType.VOID_PORTAL
+                ? 250
+                : this.getPreferredFarmRange(bot, h) + (h.id === activeFarmTargetId ? 0 : 24);
             if (d < safeDist) {
-                const hazardRepel = 3.5 * (1.0 - d / safeDist);
+                const committedWeight = h.id === activeFarmTargetId ? 0.42 : 1.0;
+                const hazardRepel = (1.8 + this.getFarmHazardWeight(h) * 0.58) * (1.0 - d / safeDist) * committedWeight;
                 this.applyDanger(rays, dangers, Vector.normalize(toHaz), hazardRepel);
             }
         }
@@ -815,7 +913,7 @@ export class EnemyAITanks {
         
         // Turn speeds optimized dynamically!
         let baseTurnSpeed = 0.14;
-        if (bot.classType === TankClass.SNIPER || bot.classType === TankClass.ASSASSIN || bot.classType === TankClass.RANGER || bot.classType === TankClass.STALKER || bot.classType === TankClass.TRAPPER) {
+        if (bot.classType === TankClass.SNIPER || bot.classType === TankClass.ASSASSIN || bot.classType === TankClass.RANGER || bot.classType === TankClass.STALKER || this.isTrapperBranch(bot.classType)) {
             baseTurnSpeed = 0.074; // precise sniper tracking
         } else if (bot.classType === TankClass.BOOSTER || bot.classType === TankClass.TRI_ANGLE || bot.classType === TankClass.FIGHTER) {
             baseTurnSpeed = 0.21;  // fast but less twitchy close-range turning
@@ -896,3 +994,4 @@ export class EnemyAITanks {
         }
     }
 }
+

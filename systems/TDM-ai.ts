@@ -380,7 +380,7 @@ export class TDMAISystem {
   }
 
   private computeFarmGoal(bot: IAITank, target: Player, allies: Player[]): Vector2 {
-    const offset = this.farmSlotOffset(bot, target, allies);
+    const offset = this.farmSlotOffset(bot, target, allies, this.getFarmApproachRange(bot, target));
     const anchor = {
       x: this.clamp(target.pos.x + offset.x, 120, this.config.worldWidth - 120),
       y: this.clamp(target.pos.y + offset.y, 120, this.config.worldHeight - 120),
@@ -471,15 +471,20 @@ export class TDMAISystem {
   private computeFarmObstacleRepel(bot: IAITank, targets: Player[], committedTargetId: number | null): Vector2 {
     let fx = 0;
     let fy = 0;
-    const r2 = 175 * 175;
 
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i];
-      if (target.id === committedTargetId) continue;
+      const preferredRange = this.getFarmApproachRange(bot, target);
+      const repelRadius = preferredRange + Math.max(28, (target.radius ?? 24) * 0.22);
+      const r2 = repelRadius * repelRadius;
       const d2 = Math.max(1, Vector.distSq(bot.pos, target.pos));
       if (d2 > r2) continue;
       const away = Vector.normalize(Vector.sub(bot.pos, target.pos));
-      const w = 1 - Math.sqrt(d2) / 175;
+      const distance = Math.sqrt(d2);
+      const closeness = 1 - distance / repelRadius;
+      const committedWeight = target.id === committedTargetId ? 0.42 : 1.0;
+      const hazardWeight = this.getFarmHazardWeight(target);
+      const w = closeness * committedWeight * (0.75 + hazardWeight * 0.45);
       fx += away.x * w;
       fy += away.y * w;
     }
@@ -581,6 +586,8 @@ export class TDMAISystem {
       const xp = typeof t.xpValue === 'number' ? t.xpValue : t.type === 'BOSS' ? 1800 : t.type === 'CRASHER' ? 120 : 40;
       const hpRatio = (t.health ?? 100) / Math.max(1, t.maxHealth ?? 100);
       const distance = Math.sqrt(d2);
+      const preferredRange = this.getFarmApproachRange(bot, t);
+      const botHpRatio = bot.health / Math.max(1, bot.maxHealth);
       const lowLevelBias = Math.max(0, 28 - ((bot as { level?: number }).level ?? 1)) / 28;
       const home = this.getSafeZoneCenter(bot.team);
       const farmLaneProgress = 1 - Math.min(1, Vector.dist(t.pos, home) / Math.max(1, Vector.dist(this.config.mapCenter, home)));
@@ -589,8 +596,17 @@ export class TDMAISystem {
       const rarityBonus = this.getLegacyFarmRarityBonus(t);
       const nearbyEnemyPenalty = this.getFarmEnemyPenalty(t);
       const woundedBonus = (1 - hpRatio) * 0.55;
+      const overcrowdPenalty =
+        distance < preferredRange * 0.62 ? 0.28 :
+        distance < preferredRange * 0.82 ? 0.55 :
+        distance < preferredRange ? 0.82 :
+        1.0;
+      const durabilityPenalty =
+        botHpRatio < 0.52
+          ? Math.max(0.4, 1 - (this.getFarmHazardWeight(t) - 1) * 0.18)
+          : 1.0;
       const score =
-        ((xp * legacyShapeBonus * rarityBonus) * (1 + commonFarmBonus) * (0.72 + farmLaneProgress * 0.28) * nearbyEnemyPenalty) / Math.max(120, distance)
+        ((xp * legacyShapeBonus * rarityBonus) * (1 + commonFarmBonus) * (0.72 + farmLaneProgress * 0.28) * nearbyEnemyPenalty * overcrowdPenalty * durabilityPenalty) / Math.max(120, distance)
         + woundedBonus;
       if (score > bestScore) {
         best = t;
@@ -811,13 +827,65 @@ export class TDMAISystem {
     return TUNING.combatRange;
   }
 
-  private farmSlotOffset(bot: IAITank, target: Player, allies: Player[]): Vector2 {
+  private farmSlotOffset(bot: IAITank, target: Player, allies: Player[], preferredRange: number): Vector2 {
     const occupancy = this.getSharedTargetOccupancy(bot, target.id, allies);
     const span = Math.max(3, Math.min(8, occupancy + 2));
     const slot = (bot.id % span) - Math.floor(span / 2);
     const angle = ((bot.id * 137.5) % 360) * (Math.PI / 180) + slot * 0.24;
-    const radius = (target.radius ?? 26) + 95 + Math.abs(slot) * 12;
+    const radius = preferredRange + Math.abs(slot) * 14;
     return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+  }
+
+  private getFarmApproachRange(bot: IAITank, target: Player): number {
+    const radius = target.radius ?? 24;
+    const name = String(bot.classType || '');
+    const isCloseClass = name.includes('BOOSTER') || name.includes('FIGHTER') || name.includes('TRI_ANGLE') || name.includes('SPRAYER');
+    const isLongRangeClass = name.includes('SNIPER') || name.includes('ASSASSIN') || name.includes('RANGER') || name.includes('TRAPPER');
+
+    let range = radius + 92;
+    if (target.type === 'CRASHER') range += 36;
+    if (target.type === 'BOSS') range += 160;
+
+    switch ((target.shapeType || '').toUpperCase()) {
+      case 'ALPHA_PENTAGON': range += 72; break;
+      case 'BETA_PENTAGON': range += 50; break;
+      case 'PENTAGON': range += 42; break;
+      case 'DODECAGON': range += 150; break;
+      case 'DECAGON': range += 126; break;
+      case 'NONAGON': range += 102; break;
+      case 'OCTAGON': range += 86; break;
+      case 'STAR': range += 34; break;
+      case 'HEXAGON': range += 44; break;
+      case 'HEPTAGON': range += 58; break;
+      case 'DIAMOND': range += 48; break;
+      default: break;
+    }
+
+    if (isLongRangeClass) range += 46;
+    if (isCloseClass) range = Math.max(range, radius + 88);
+    return range;
+  }
+
+  private getFarmHazardWeight(target: Player): number {
+    if (target.type === 'BOSS') return 3.6;
+    if (target.type === 'CRASHER') {
+      return typeof target.shapeType === 'string' && target.shapeType.toUpperCase().includes('GRAND_SINGULARITY') ? 2.8 : 1.6;
+    }
+
+    switch ((target.shapeType || '').toUpperCase()) {
+      case 'DODECAGON': return 3.2;
+      case 'DECAGON': return 2.9;
+      case 'NONAGON': return 2.6;
+      case 'OCTAGON': return 2.25;
+      case 'ALPHA_PENTAGON': return 2.2;
+      case 'BETA_PENTAGON': return 1.95;
+      case 'PENTAGON': return 1.6;
+      case 'DIAMOND': return 1.55;
+      case 'HEPTAGON': return 1.45;
+      case 'HEXAGON': return 1.35;
+      case 'STAR': return 1.25;
+      default: return 1.0;
+    }
   }
 
   private getSafeZoneCenter(team: Team): Vector2 {

@@ -13,6 +13,13 @@ interface TankPreviewProps {
     showArenaVfx?: boolean;
 }
 
+const isTrapperBranchClass = (tankClass: TankClass) =>
+    tankClass === TankClass.TRAPPER ||
+    tankClass === TankClass.DUAL_TRAPPER ||
+    tankClass === TankClass.MACHINE_GUN_TRAPPER ||
+    tankClass === TankClass.OCTO_TRAPPER ||
+    tankClass === TankClass.TRIPLE_TRAPPER;
+
 const TankPreviewComponent: React.FC<TankPreviewProps> = ({ 
     tankClass, 
     color, 
@@ -35,10 +42,12 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
     const isGunner = tankClass === TankClass.GUNNER;
     const isAutoGunner = tankClass === TankClass.AUTO_GUNNER;
     const isGunnerFamily = isGunner || isAutoGunner;
+    const isTripleShot = tankClass === TankClass.TRIPLE_SHOT;
     const isTripleTank = tankClass === TankClass.TRIPLE_TANK;
     const isDroneCommander = tankClass === TankClass.OVERSEER || tankClass === TankClass.OVERLORD || tankClass === TankClass.MANAGER;
     const isMachineGun = tankClass === TankClass.MACHINE_GUN;
     const isHybrid = tankClass === TankClass.HYBRID;
+    const isTrapperBranch = isTrapperBranchClass(tankClass);
     
     let tankColor = color || COLORS.player;
     if (isBossTank) {
@@ -118,13 +127,28 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                         {tankClass === TankClass.COLOSSAL ? (
                             <g>
                                 <polygon 
-                                    points={`${effectiveRadius * 0.95},0 0,${-effectiveRadius * 0.9} ${-effectiveRadius * 0.95},0 0,${effectiveRadius * 0.9}`}
+                                    points={[
+                                        `${effectiveRadius * 1.02},0`,
+                                        `${effectiveRadius * 0.5},${-effectiveRadius * 0.88}`,
+                                        `${-effectiveRadius * 0.4},${-effectiveRadius * 0.98}`,
+                                        `${-effectiveRadius * 1.04},${-effectiveRadius * 0.34}`,
+                                        `${-effectiveRadius * 1.04},${effectiveRadius * 0.34}`,
+                                        `${-effectiveRadius * 0.4},${effectiveRadius * 0.98}`,
+                                        `${effectiveRadius * 0.5},${effectiveRadius * 0.88}`,
+                                    ].join(' ')}
                                     fill={tankColor} 
                                     stroke={COLORS.border} 
                                     strokeWidth={strokeWidth} 
                                 />
                                 <polygon 
-                                    points={`${effectiveRadius * 0.58},0 0,${-effectiveRadius * 0.52} ${-effectiveRadius * 0.58},0 0,${effectiveRadius * 0.52}`}
+                                    points={[
+                                        `${effectiveRadius * 0.54},0`,
+                                        `${effectiveRadius * 0.14},${-effectiveRadius * 0.5}`,
+                                        `${-effectiveRadius * 0.46},${-effectiveRadius * 0.56}`,
+                                        `${-effectiveRadius * 0.7},0`,
+                                        `${-effectiveRadius * 0.46},${effectiveRadius * 0.56}`,
+                                        `${effectiveRadius * 0.14},${effectiveRadius * 0.5}`,
+                                    ].join(' ')}
                                     fill="rgba(0,0,0,0.3)" 
                                     stroke={COLORS.border} 
                                     strokeWidth={strokeWidth} 
@@ -133,9 +157,9 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                         ) : tankClass === TankClass.LEVIATHAN ? (
                             <g>
                                 <polygon 
-                                    points={Array.from({length: 10}).map((_, i) => {
-                                        const angle = (i * 2 * Math.PI) / 10 - Math.PI / 2;
-                                        const r = i % 2 === 0 ? effectiveRadius * 0.95 : effectiveRadius * 0.44;
+                                    points={Array.from({length: 12}).map((_, i) => {
+                                        const angle = (i * 2 * Math.PI) / 12 - Math.PI / 2;
+                                        const r = i % 3 === 0 ? effectiveRadius * 1.02 : i % 2 === 0 ? effectiveRadius * 0.66 : effectiveRadius * 0.34;
                                         return `${Math.cos(angle) * r},${Math.sin(angle) * r}`;
                                     }).join(' ')}
                                     fill={tankColor} 
@@ -143,11 +167,13 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                                     strokeWidth={strokeWidth} 
                                 />
                                 <polygon
-                                  points={Array.from({length: 10}).map((_, i) => {
-                                      const angle = (i * 2 * Math.PI) / 10 - Math.PI / 2;
-                                      const r = i % 2 === 0 ? effectiveRadius * 0.52 : effectiveRadius * 0.24;
-                                      return `${Math.cos(angle) * r},${Math.sin(angle) * r}`;
-                                  }).join(' ')}
+                                  points={[
+                                      `0,${-effectiveRadius * 0.64}`,
+                                      `${effectiveRadius * 0.56},${-effectiveRadius * 0.14}`,
+                                      `${effectiveRadius * 0.42},${effectiveRadius * 0.56}`,
+                                      `${-effectiveRadius * 0.42},${effectiveRadius * 0.56}`,
+                                      `${-effectiveRadius * 0.56},${-effectiveRadius * 0.14}`,
+                                  ].join(' ')}
                                   fill="rgba(0,0,0,0.24)"
                                   stroke={COLORS.border}
                                   strokeWidth={strokeWidth}
@@ -156,33 +182,41 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                         ) : tankClass === TankClass.WARLORD ? (
                             <g>
                                 <polygon
-                                    points={`${effectiveRadius * 1.0},0 ${-effectiveRadius * 0.7},${-effectiveRadius * 0.9} ${-effectiveRadius * 0.7},${effectiveRadius * 0.9}`}
+                                    points={[
+                                        `${effectiveRadius * 1.02},0`,
+                                        `${effectiveRadius * 0.18},${-effectiveRadius * 0.58}`,
+                                        `${-effectiveRadius * 0.24},${-effectiveRadius * 0.96}`,
+                                        `${-effectiveRadius * 0.84},${-effectiveRadius * 0.54}`,
+                                        `${-effectiveRadius * 0.84},${effectiveRadius * 0.54}`,
+                                        `${-effectiveRadius * 0.24},${effectiveRadius * 0.96}`,
+                                        `${effectiveRadius * 0.18},${effectiveRadius * 0.58}`,
+                                    ].join(' ')}
                                     fill={tankColor} 
                                     stroke={COLORS.border} 
                                     strokeWidth={strokeWidth} 
                                 />
-                                <polygon
-                                    points={`${effectiveRadius * 0.55},0 ${-effectiveRadius * 0.35},${-effectiveRadius * 0.45} ${-effectiveRadius * 0.35},${effectiveRadius * 0.45}`}
+                                <rect
+                                    x={-effectiveRadius * 0.3}
+                                    y={-effectiveRadius * 0.34}
+                                    width={effectiveRadius * 0.68}
+                                    height={effectiveRadius * 0.68}
+                                    rx={effectiveRadius * 0.1}
                                     fill="rgba(0,0,0,0.3)" 
                                     stroke={COLORS.border} 
                                     strokeWidth={strokeWidth} 
+                                />
+                                <polygon
+                                    points={`${effectiveRadius * 0.38},0 ${-effectiveRadius * 0.02},${-effectiveRadius * 0.22} ${-effectiveRadius * 0.02},${effectiveRadius * 0.22}`}
+                                    fill="rgba(255,255,255,0.12)"
                                 />
                             </g>
                         ) : tankClass === TankClass.CELESTIAL ? (
                             <g>
                                 <polygon
-                                    points={Array.from({ length: 5 }).map((_, i) => {
-                                        const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
-                                        return `${Math.cos(a) * effectiveRadius * 1.1},${Math.sin(a) * effectiveRadius * 1.1}`;
-                                    }).join(' ')}
-                                    fill="none"
-                                    stroke="rgba(192,132,252,0.75)"
-                                    strokeWidth={strokeWidth * 1.2}
-                                />
-                                <polygon
-                                    points={Array.from({ length: 5 }).map((_, i) => {
-                                        const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
-                                        return `${Math.cos(a) * effectiveRadius * 0.9},${Math.sin(a) * effectiveRadius * 0.9}`;
+                                    points={Array.from({ length: 10 }).map((_, i) => {
+                                        const a = -Math.PI / 2 + (i * 2 * Math.PI) / 10;
+                                        const rr = i % 2 === 0 ? effectiveRadius * 0.98 : effectiveRadius * 0.58;
+                                        return `${Math.cos(a) * rr},${Math.sin(a) * rr}`;
                                     }).join(' ')}
                                     fill={tankColor}
                                     stroke={COLORS.border}
@@ -191,11 +225,19 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                                 <polygon
                                     points={Array.from({ length: 5 }).map((_, i) => {
                                         const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
-                                        return `${Math.cos(a) * effectiveRadius * 0.5},${Math.sin(a) * effectiveRadius * 0.5}`;
+                                        return `${Math.cos(a) * effectiveRadius * 1.14},${Math.sin(a) * effectiveRadius * 1.14}`;
                                     }).join(' ')}
+                                    fill="none"
+                                    stroke="rgba(192,132,252,0.75)"
+                                    strokeWidth={strokeWidth * 1.2}
+                                />
+                                <circle
+                                    cx="0"
+                                    cy="0"
+                                    r={effectiveRadius * 0.42}
                                     fill="rgba(0,0,0,0.25)"
                                     stroke={COLORS.border}
-                                    strokeWidth={strokeWidth}
+                                    strokeWidth={strokeWidth * 0.85}
                                 />
                             </g>
                         ) : tankClass === TankClass.OBLITERATOR ? (
@@ -203,20 +245,30 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                                 <polygon
                                     points={Array.from({ length: 16 }).map((_, i) => {
                                         const a = -Math.PI / 2 + (i * 2 * Math.PI) / 16;
-                                        const rr = i % 2 === 0 ? effectiveRadius * 1.03 : effectiveRadius * 0.6;
+                                        const rr = i % 2 === 0 ? effectiveRadius * 1.02 : effectiveRadius * 0.72;
                                         return `${Math.cos(a) * rr},${Math.sin(a) * rr}`;
                                     }).join(' ')}
                                     fill={tankColor}
                                     stroke={COLORS.border}
                                     strokeWidth={strokeWidth}
                                 />
+                                <polygon
+                                  points={Array.from({ length: 8 }).map((_, i) => {
+                                      const a = -Math.PI / 2 + (i * 2 * Math.PI) / 8;
+                                      const rr = i % 2 === 0 ? effectiveRadius * 0.68 : effectiveRadius * 0.52;
+                                      return `${Math.cos(a) * rr},${Math.sin(a) * rr}`;
+                                  }).join(' ')}
+                                  fill="rgba(30,10,60,0.28)"
+                                  stroke="rgba(233,213,255,0.42)"
+                                  strokeWidth={strokeWidth * 0.85}
+                                />
                                 <circle
                                     cx="0"
                                     cy="0"
-                                    r={effectiveRadius * 0.58}
-                                    fill="rgba(30,10,60,0.28)"
+                                    r={effectiveRadius * 0.36}
+                                    fill="rgba(255,255,255,0.08)"
                                     stroke="rgba(233,213,255,0.42)"
-                                    strokeWidth={strokeWidth * 0.85}
+                                    strokeWidth={strokeWidth * 0.7}
                                 />
                             </g>
                         ) : tankClass === TankClass.REAPER ? (
@@ -405,6 +457,66 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                                 );
                             }
 
+                            if (isTrapperBranch) {
+                                const isMachineTrapper = tankClass === TankClass.MACHINE_GUN_TRAPPER;
+                                const isHeavyTrapper = tankClass === TankClass.DUAL_TRAPPER || tankClass === TankClass.OCTO_TRAPPER || tankClass === TankClass.TRIPLE_TRAPPER;
+                                const shellLen = bLen * (isMachineTrapper ? 1.16 : isHeavyTrapper ? 1.22 : 1.12);
+                                const shellWid = bWid * (isMachineTrapper ? 1.08 : isHeavyTrapper ? 1.22 : 1.14);
+                                return (
+                                    <g key={i} transform={`rotate(${rotation}) translate(${xOff * effectiveRadius}, ${yOff * effectiveRadius})`}>
+                                        <defs>
+                                            <linearGradient id={`${previewId}-trapper-${i}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                                                <stop offset="0%" stopColor={isMachineTrapper ? '#1f2937' : '#202b38'} />
+                                                <stop offset="34%" stopColor="#e2e8f0" />
+                                                <stop offset="66%" stopColor="#8e9aab" />
+                                                <stop offset="100%" stopColor="#2b3645" />
+                                            </linearGradient>
+                                        </defs>
+                                        <path
+                                            d={`M ${-shellLen * 0.04} ${-shellWid * 0.46}
+                                                L ${shellLen * 0.54} ${-shellWid * 0.46}
+                                                L ${shellLen * 0.68} ${-shellWid * 0.6}
+                                                L ${shellLen * 0.88} ${-shellWid * 0.6}
+                                                L ${shellLen} ${-shellWid * 0.24}
+                                                L ${shellLen} ${shellWid * 0.24}
+                                                L ${shellLen * 0.88} ${shellWid * 0.6}
+                                                L ${shellLen * 0.68} ${shellWid * 0.6}
+                                                L ${shellLen * 0.54} ${shellWid * 0.46}
+                                                L ${-shellLen * 0.04} ${shellWid * 0.46} Z`}
+                                            fill={`url(#${previewId}-trapper-${i})`}
+                                            stroke={COLORS.border}
+                                            strokeWidth={strokeWidth}
+                                        />
+                                        <rect x={shellLen * 0.56} y={-shellWid * 0.46} width={shellLen * 0.08} height={shellWid * 0.92} fill="rgba(15,23,42,0.82)" />
+                                        <rect x={shellLen * 0.78} y={-shellWid * 0.54} width={shellLen * 0.07} height={shellWid * 1.08} fill="rgba(15,23,42,0.82)" />
+                                        {isMachineTrapper ? (
+                                            <>
+                                                {[0.16, 0.28, 0.4, 0.52, 0.64, 0.76, 0.88].map((slot) => (
+                                                    <rect key={slot} x={shellLen * slot} y={-shellWid * 0.32} width={shellLen * 0.026} height={shellWid * 0.64} fill="rgba(15,23,42,0.78)" />
+                                                ))}
+                                                <rect x={shellLen * 0.08} y={-shellWid * 0.08} width={shellLen * 0.44} height={shellWid * 0.16} fill="rgba(255,255,255,0.1)" />
+                                            </>
+                                        ) : isHeavyTrapper ? (
+                                            <>
+                                                <rect x={shellLen * 0.12} y={-shellWid * 0.28} width={shellLen * 0.34} height={shellWid * 0.1} fill="rgba(255,255,255,0.14)" />
+                                                <rect x={shellLen * 0.12} y={shellWid * 0.18} width={shellLen * 0.34} height={shellWid * 0.1} fill="rgba(255,255,255,0.14)" />
+                                                <rect x={shellLen * 0.18} y={-shellWid * 0.56} width={shellLen * 0.18} height={shellWid * 0.2} fill="none" stroke="rgba(15,23,42,0.82)" strokeWidth={strokeWidth * 0.7} />
+                                                <rect x={shellLen * 0.18} y={shellWid * 0.36} width={shellLen * 0.18} height={shellWid * 0.2} fill="none" stroke="rgba(15,23,42,0.82)" strokeWidth={strokeWidth * 0.7} />
+                                            </>
+                                        ) : null}
+                                        <path
+                                            d={`M ${shellLen * 0.06} ${-shellWid * 0.18}
+                                                L ${shellLen * 0.46} ${-shellWid * 0.18}
+                                                L ${shellLen * 0.52} 0
+                                                L ${shellLen * 0.46} ${shellWid * 0.18}
+                                                L ${shellLen * 0.06} ${shellWid * 0.18} Z`}
+                                            fill="rgba(96,165,250,0.5)"
+                                        />
+                                        <line x1={shellLen * 0.94} y1={-shellWid * 0.15} x2={shellLen * 0.94} y2={shellWid * 0.15} stroke="rgba(15,23,42,0.88)" strokeWidth={strokeWidth * 0.8} />
+                                    </g>
+                                );
+                            }
+
                             if (isHybrid) {
                                 if (i === 0) {
                                     const endWid = bWid * 0.76;
@@ -547,6 +659,41 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                                             <line key={slot} x1={bLen * slot} y1={-bWid * 0.42} x2={bLen * slot} y2={bWid * 0.42} stroke="rgba(18,24,30,0.65)" strokeWidth={strokeWidth * 0.6} />
                                         ))}
                                         <line x1={bLen} y1={-bWid * 0.3} x2={bLen} y2={bWid * 0.3} stroke="#222" strokeWidth={strokeWidth} />
+                                    </g>
+                                );
+                            }
+
+                            if (isTripleShot) {
+                                const isCenterBarrel = Math.abs(angleOff) < 0.01;
+                                const shellLen = bLen * (isCenterBarrel ? 0.98 : 0.92);
+                                const shellWid = bWid * (isCenterBarrel ? 1.02 : 0.94);
+                                return (
+                                    <g key={i} transform={`rotate(${rotation}) translate(${xOff * effectiveRadius}, ${yOff * effectiveRadius})`}>
+                                        <rect
+                                            x={0}
+                                            y={-shellWid * 0.5}
+                                            width={shellLen}
+                                            height={shellWid}
+                                            rx={shellWid * 0.08}
+                                            fill="#7f7f84"
+                                            stroke={COLORS.border}
+                                            strokeWidth={strokeWidth}
+                                        />
+                                        <rect
+                                            x={shellLen * 0.12}
+                                            y={-shellWid * 0.34}
+                                            width={shellLen * 0.72}
+                                            height={shellWid * 0.68}
+                                            fill="rgba(255,255,255,0.32)"
+                                        />
+                                        <line
+                                            x1={shellLen}
+                                            y1={-shellWid * 0.5}
+                                            x2={shellLen}
+                                            y2={shellWid * 0.5}
+                                            stroke={isCenterBarrel ? '#52525b' : '#5b5b63'}
+                                            strokeWidth={strokeWidth}
+                                        />
                                     </g>
                                 );
                             }

@@ -11,6 +11,7 @@ import { TankPreview } from './TankPreview';
 
 interface MainMenuProps {
   isPlaying: boolean;
+  bootUnlocked: boolean;
   playerName: string;
   setPlayerName: (name: string) => void;
   user: User | null;
@@ -163,6 +164,8 @@ const safeNumber = (value: unknown, fallback = 0) => {
   return Number.isFinite(numberValue) ? numberValue : fallback;
 };
 
+const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
 const useCountUp = (target: number, duration = 850) => {
   const cleanTarget = Math.max(0, safeNumber(target));
   const [value, setValue] = useState(cleanTarget);
@@ -232,8 +235,8 @@ const Panel: React.FC<{
     {(title || subtitle) && (
       <header className="flex shrink-0 min-w-0 items-start justify-between gap-3 border-b border-cyan-300/10 px-4 py-3">
         <div className="min-w-0">
-          {title && <div className="menu-copy text-[9px] font-black uppercase leading-[1.35] tracking-[0.20em] text-cyan-100/86">{title}</div>}
-          {subtitle && <div className="menu-copy mt-0.5 text-[8px] font-bold uppercase leading-[1.45] tracking-[0.10em] text-sky-100/38">{subtitle}</div>}
+          {title && <div className="menu-copy break-words text-[9px] font-black uppercase leading-[1.35] tracking-[0.20em] text-cyan-100/86">{title}</div>}
+          {subtitle && <div className="menu-copy mt-0.5 break-words text-[8px] font-bold uppercase leading-[1.45] tracking-[0.10em] text-sky-100/38">{subtitle}</div>}
         </div>
         <div className="mt-1 h-1.5 w-1.5 shrink-0 rotate-45 bg-cyan-300/75 shadow-[0_0_14px_rgba(32,230,255,0.75)]" />
       </header>
@@ -280,8 +283,8 @@ const NavButton: React.FC<{
       <Icon className="h-4 w-4" />
     </div>
     <div className="min-w-0 flex-1">
-      <div className="menu-copy text-[9px] font-black uppercase leading-[1.35] tracking-[0.13em] text-cyan-50/90">{label}</div>
-      <div className="menu-copy mt-0.5 text-[7.5px] font-bold uppercase leading-[1.4] tracking-[0.065em] text-sky-100/38">{sub}</div>
+      <div className="menu-copy break-words text-[9px] font-black uppercase leading-[1.35] tracking-[0.13em] text-cyan-50/90">{label}</div>
+      <div className="menu-copy mt-0.5 break-words text-[7.5px] font-bold uppercase leading-[1.4] tracking-[0.065em] text-sky-100/38">{sub}</div>
     </div>
     <ChevronRight className="h-4 w-4 shrink-0 text-cyan-200/28 transition group-hover:translate-x-0.5 group-hover:text-cyan-200/76" />
   </button>
@@ -319,8 +322,8 @@ const ModeButton: React.FC<{
         </span>
         <span className="h-2 w-2 shrink-0 rotate-45" style={{ background: active ? meta.color : 'rgba(155,214,226,0.22)' }} />
       </div>
-      <div className="menu-copy relative mt-2 text-[11px] font-black uppercase leading-[1.25] tracking-[0.045em] text-cyan-50/92">{meta.title}</div>
-      <div className="menu-copy relative mt-1 text-[8px] font-bold uppercase leading-[1.45] tracking-[0.035em] text-sky-100/42">{meta.desc}</div>
+      <div className="menu-copy relative mt-2 break-words text-[11px] font-black uppercase leading-[1.25] tracking-[0.045em] text-cyan-50/92">{meta.title}</div>
+      <div className="menu-copy relative mt-1 break-words text-[8px] font-bold uppercase leading-[1.45] tracking-[0.035em] text-sky-100/42">{meta.desc}</div>
     </button>
   );
 };
@@ -356,7 +359,7 @@ const TeamButton: React.FC<{
               {meta.short}
             </span>
           </div>
-          <div className="menu-copy mt-1.5 text-[9.5px] font-black uppercase leading-[1.28] tracking-[0.045em] text-cyan-50/88">{meta.label}</div>
+          <div className="menu-copy mt-1.5 break-words text-[9.5px] font-black uppercase leading-[1.28] tracking-[0.045em] text-cyan-50/88">{meta.label}</div>
         </div>
         <div className="shrink-0 text-right">
           <div className="text-[7px] font-black uppercase tracking-[0.10em] text-sky-100/32">Units</div>
@@ -385,7 +388,7 @@ const LeaderboardRow: React.FC<{ entry: HighScoreEntry; index: number }> = ({ en
         <div className="mt-1 text-[8.5px] font-black uppercase tracking-[0.10em]" style={{ color }}>{rankLabel}</div>
       </div>
       <div className="min-w-0 flex-1">
-        <div className="menu-copy text-[9.5px] font-black uppercase leading-[1.3] tracking-[0.045em] text-cyan-50/90">{entry.name || 'Unknown'}</div>
+        <div className="menu-copy break-words text-[9.5px] font-black uppercase leading-[1.3] tracking-[0.045em] text-cyan-50/90">{entry.name || 'Unknown'}</div>
         <div className="menu-copy mt-0.5 text-[6.8px] font-bold uppercase leading-[1.35] tracking-[0.07em] text-sky-100/35">Arena score uplink</div>
       </div>
       <div className="shrink-0 rounded-full border border-cyan-300/10 bg-cyan-950/30 px-2.5 py-1.5 text-[8.5px] font-black uppercase tracking-[0.055em]" style={{ color }}>
@@ -398,8 +401,8 @@ const LeaderboardRow: React.FC<{ entry: HighScoreEntry; index: number }> = ({ en
 const ControlRow: React.FC<{ label: string; keyLabel: string; desc: string }> = ({ label, keyLabel, desc }) => (
   <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-2.5">
     <div className="min-w-0">
-      <div className="menu-copy text-[8.5px] font-black uppercase leading-[1.3] tracking-[0.10em] text-cyan-50/78">{label}</div>
-      <div className="menu-copy mt-0.5 text-[7.5px] font-bold uppercase leading-[1.35] tracking-[0.055em] text-sky-100/34">{desc}</div>
+      <div className="menu-copy break-words text-[8.5px] font-black uppercase leading-[1.3] tracking-[0.10em] text-cyan-50/78">{label}</div>
+      <div className="menu-copy mt-0.5 break-words text-[7.5px] font-bold uppercase leading-[1.35] tracking-[0.055em] text-sky-100/34">{desc}</div>
     </div>
     <kbd className="min-w-[46px] shrink-0 rounded-md border border-teal-300/20 bg-teal-400/10 px-2 py-1.5 text-center text-[8px] font-black uppercase tracking-[0.065em] text-teal-200">
       {keyLabel}
@@ -499,6 +502,7 @@ const PolicyModal: React.FC<{ open: boolean; type: 'privacy' | 'terms'; onClose:
 
 export const MainMenu: React.FC<MainMenuProps> = ({
   isPlaying,
+  bootUnlocked,
   playerName,
   setPlayerName,
   user,
@@ -533,6 +537,12 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTos, setShowTos] = useState(false);
   const compactHeight = useMediaQuery('(max-height: 820px)');
+  const logoPulse = clampValue((musicSnapshot?.logoPulse ?? 0), 0, 1.3);
+  const reactorPulse = clampValue((musicSnapshot?.reactorPulse ?? 0), 0, 1.6);
+  const backgroundGlow = clampValue((musicSnapshot?.backgroundGlow ?? 0), 0, 1.2);
+  const bloom = clampValue((musicSnapshot?.bloom ?? 0), 0, 1.3);
+  const scanlineIntensity = clampValue((musicSnapshot?.scanlineIntensity ?? 0), 0, 1.1);
+  const glitchIntensity = clampValue((musicSnapshot?.glitchIntensity ?? 0), 0, 1.15);
 
   const stats = user?.stats ?? { maxLevel: 1, totalKills: 0, totalDeaths: 0, totalScore: 0 };
   const totalKills = safeNumber(stats.totalKills);
@@ -627,10 +637,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       {!isPlaying && (
         <motion.div
           variants={containerVar}
-          initial="hidden"
-          animate="visible"
+          initial={bootUnlocked ? 'hidden' : false}
+          animate={bootUnlocked ? 'visible' : undefined}
           exit="exit"
-          className="vextor-menu absolute inset-0 z-50 h-[100dvh] max-h-[100dvh] overflow-hidden select-none"
+          className={`vextor-menu absolute inset-0 z-50 h-[100dvh] max-h-[100dvh] overflow-hidden select-none transition-[filter,opacity,transform] duration-500 ${bootUnlocked ? 'pointer-events-auto opacity-100 blur-0 brightness-100 saturate-100 scale-100' : 'pointer-events-none opacity-90 blur-[10px] brightness-[0.62] saturate-[0.72] scale-[0.992]'}`}
           style={{
             color: UI.ink,
             background:
@@ -741,30 +751,41 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               </motion.aside>
 
               <motion.main variants={panelVar} className="min-h-0 min-w-0">
-                <form onSubmit={submitHandler} className="grid h-full min-h-0 min-w-0 gap-2.5 overflow-hidden lg:grid-rows-[auto_minmax(210px,1fr)_auto]">
-                  <Panel bodyClassName="p-0" className="shrink-0">
+                <form onSubmit={submitHandler} className="grid h-full min-h-0 min-w-0 gap-2.5 overflow-visible lg:grid-rows-[auto_minmax(210px,1fr)_auto]">
+                  <Panel bodyClassName="p-0" className="shrink-0 overflow-visible">
                     <div className="grid min-w-0 gap-3 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(260px,360px)] xl:items-center">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-cyan-300/16 bg-cyan-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/82">{modeMeta.code}</span>
                           <span className="rounded-full border border-violet-300/16 bg-violet-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.15em] text-violet-200/72">{latestUpdate?.id ?? 'Live Build'}</span>
                         </div>
-                        <div className="relative mt-2 inline-block max-w-full overflow-visible pr-5 md:pr-7">
+                        <div
+                          className="vextor-logo-shell relative mt-2 max-w-full overflow-visible"
+                          style={{
+                            transform: `scale(${1 + logoPulse * 0.035})`,
+                            filter: `drop-shadow(0 0 ${20 + bloom * 18}px rgba(32,230,255,${0.14 + backgroundGlow * 0.12}))`,
+                            transition: 'transform 70ms linear, filter 90ms linear',
+                          }}
+                        >
                           <h1
                             className="vextor-title"
                             style={{
                               fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                              fontSize: compactHeight ? 'clamp(38px, 5.2vw, 70px)' : 'clamp(46px, 6vw, 92px)',
+                              fontSize: compactHeight ? 'clamp(38px, 4.8vw, 70px)' : 'clamp(42px, 5.35vw, 88px)',
                               fontWeight: 900,
                               fontStyle: 'italic',
-                              letterSpacing: '-0.04em',
-                              lineHeight: 0.9,
+                              letterSpacing: '-0.038em',
+                              lineHeight: 1.04,
                               textTransform: 'uppercase',
                               background: 'linear-gradient(90deg, #20e6ff 0%, #2cffc7 42%, #a98cff 100%)',
                               WebkitBackgroundClip: 'text',
                               backgroundClip: 'text',
                               color: 'transparent',
-                              filter: 'drop-shadow(0 0 34px rgba(32,230,255,0.2))',
+                              filter: `drop-shadow(0 0 ${28 + bloom * 22}px rgba(32,230,255,${0.18 + backgroundGlow * 0.16}))`,
+                              display: 'inline-block',
+                              paddingLeft: '0.035em',
+                              paddingRight: '0.16em',
+                              transform: `translate3d(${glitchIntensity * 0.8}px, ${reactorPulse * -0.6}px, 0)`,
                             }}
                           >
                             VEXTOR
@@ -776,21 +797,24 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                               className={klass}
                               style={{
                                 fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                                fontSize: compactHeight ? 'clamp(38px, 5.2vw, 70px)' : 'clamp(46px, 6vw, 92px)',
+                                fontSize: compactHeight ? 'clamp(38px, 5vw, 70px)' : 'clamp(44px, 5.8vw, 92px)',
                                 fontWeight: 900,
                                 fontStyle: 'italic',
-                                letterSpacing: '-0.04em',
-                                lineHeight: 0.9,
+                                letterSpacing: '-0.038em',
+                                lineHeight: 1.04,
                                 textTransform: 'uppercase',
                                 color: klass.endsWith('r') ? UI.rose : UI.cyan,
                                 position: 'absolute',
                                 inset: 0,
-                                opacity: 0,
-                                mixBlendMode: 'screen',
-                                pointerEvents: 'none',
-                              }}
-                            >
-                              VEXTOR
+                                 opacity: glitchIntensity > 0.22 ? 0.08 + glitchIntensity * 0.08 : 0,
+                                 mixBlendMode: 'screen',
+                                 pointerEvents: 'none',
+                                 paddingLeft: '0.035em',
+                                 paddingRight: '0.16em',
+                                 transform: `translate3d(${klass.endsWith('r') ? 1 + glitchIntensity * 2.2 : -1 - glitchIntensity * 2.2}px, 0, 0)`,
+                               }}
+                             >
+                               VEXTOR
                             </h1>
                           ))}
                         </div>
@@ -810,7 +834,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                           className="min-w-0 rounded-2xl border border-violet-300/18 bg-[linear-gradient(135deg,rgba(36,24,66,0.62),rgba(18,22,42,0.92))] px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-violet-300/32"
                         >
                           <div className="menu-copy text-[8px] font-black uppercase leading-[1.3] tracking-[0.12em] text-violet-200/64">Latest Update</div>
-                          <div className="menu-copy mt-1 text-[11px] font-black uppercase leading-[1.35] tracking-[0.045em] text-cyan-50/90">{latestUpdate.title}</div>
+                          <div className="menu-copy mt-1 break-words text-[11px] font-black uppercase leading-[1.35] tracking-[0.045em] text-cyan-50/90">{latestUpdate.title}</div>
                           <div className="menu-copy mt-2 text-[8px] font-bold uppercase leading-[1.3] tracking-[0.08em] text-sky-100/40">{latestUpdate.date}</div>
                         </button>
                       )}
@@ -818,10 +842,25 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   </Panel>
 
                   <Panel bodyClassName="p-0" className="min-h-0 overflow-hidden">
-                    <div className="relative flex h-full min-h-[220px] items-center justify-center overflow-hidden p-3" style={{ background: 'radial-gradient(circle at center, rgba(32,230,255,0.1), transparent 58%)' }}>
+                    <div
+                      className="relative flex h-full min-h-[220px] items-center justify-center overflow-hidden p-3"
+                      style={{
+                        background: `
+                          radial-gradient(circle at center, rgba(32,230,255,${0.08 + backgroundGlow * 0.12}), transparent 58%),
+                          radial-gradient(circle at 50% 56%, rgba(255,213,79,${0.02 + reactorPulse * 0.08}), transparent 22%)
+                        `,
+                        boxShadow: `inset 0 0 ${28 + bloom * 24}px rgba(32,230,255,${0.04 + backgroundGlow * 0.06})`,
+                      }}
+                    >
                       <MenuMusicVisualizer snapshot={musicSnapshot} variant="hero" />
-                      <div className="absolute inset-x-10 top-1/2 h-px bg-gradient-to-r from-transparent via-cyan-300/20 to-transparent" />
-                      <div className="absolute inset-y-8 left-1/2 w-px bg-gradient-to-b from-transparent via-teal-300/14 to-transparent" />
+                      <div
+                        className="absolute inset-x-10 top-1/2 h-px bg-gradient-to-r from-transparent via-cyan-300/20 to-transparent"
+                        style={{ opacity: 0.45 + scanlineIntensity * 0.24 }}
+                      />
+                      <div
+                        className="absolute inset-y-8 left-1/2 w-px bg-gradient-to-b from-transparent via-teal-300/14 to-transparent"
+                        style={{ opacity: 0.42 + reactorPulse * 0.18 }}
+                      />
                       <div className="relative z-10">
                         <InteractiveTankPreview tankColor={tankColor} isTeamsMode={isTeamsMode} parallax={parallax} compact={compactHeight} musicSnapshot={musicSnapshot} />
                       </div>
@@ -1029,9 +1068,29 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               max-width: 100%;
             }
 
-            .vextor-title {
-              max-width: 100%;
+            .vextor-logo-shell {
+              display: inline-flex;
+              width: max-content;
+              max-width: min(100%, calc(100% - 0.1rem));
+              min-width: 0;
+              padding-top: 0.14em;
+              padding-left: clamp(0.12rem, 0.3vw, 0.28rem);
+              padding-right: clamp(0.95rem, 1.9vw, 1.8rem);
+              padding-bottom: 0.14em;
               overflow: visible;
+              isolation: isolate;
+            }
+
+            .vextor-title,
+            .vextor-glitch-r,
+            .vextor-glitch-b {
+              display: block;
+              width: max-content;
+              min-width: max-content;
+              max-width: none;
+              white-space: nowrap;
+              overflow: visible;
+              text-rendering: geometricPrecision;
             }
 
             @keyframes glitchR {
@@ -1086,10 +1145,25 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             }
 
             @media (max-height: 760px) and (min-width: 1024px) {
+              .vextor-logo-shell {
+                padding-right: clamp(0.7rem, 1.3vw, 1.1rem);
+              }
               .vextor-title,
               .vextor-glitch-r,
               .vextor-glitch-b {
-                letter-spacing: -0.04em !important;
+                letter-spacing: -0.034em !important;
+              }
+            }
+
+            @media (max-width: 767px) {
+              .vextor-logo-shell {
+                max-width: 100%;
+                padding-right: 0.72rem;
+              }
+              .vextor-title,
+              .vextor-glitch-r,
+              .vextor-glitch-b {
+                letter-spacing: -0.03em !important;
               }
             }
           `}</style>

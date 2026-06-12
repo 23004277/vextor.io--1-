@@ -1,19 +1,33 @@
 export type BackgroundMusicState = 'stopped' | 'playing' | 'paused';
 
 export type BackgroundMusicSection =
-  | 'warmup'
-  | 'drive'
-  | 'surge'
+  | 'idle'
+  | 'intro'
+  | 'build'
   | 'drop'
   | 'breakdown'
-  | 'finale'
-  | 'cooldown';
+  | 'finale';
 
 export type BackgroundMusicVisualizerFrame = {
   bars: number[];
+  waveform: number[];
   beatPulse: number;
   beatPhase: number;
   downbeatPulse: number;
+  beatDetected: boolean;
+  manualBeatPulse: number;
+  bass: number;
+  mids: number;
+  highs: number;
+  energy: number;
+  reactorPulse: number;
+  logoPulse: number;
+  backgroundGlow: number;
+  bloom: number;
+  particleBurst: number;
+  uiFlicker: number;
+  scanlineIntensity: number;
+  glitchIntensity: number;
   currentTime: number;
   duration: number;
   progress: number;
@@ -24,55 +38,137 @@ export type BackgroundMusicVisualizerFrame = {
   loopCount: number;
   formattedCurrentTime: string;
   formattedDuration: string;
+  paused: boolean;
+  volume: number;
 };
 
-const MENU_TRACK_URL = new URL('./musicasset/Final_Sector_Charge.mp3', import.meta.url).href;
-const TRACK_DURATION_SECONDS = 175;
-const BPM = 128;
-const BEATS_PER_BAR = 4;
-const FADE_IN_MS = 1500;
-const FADE_OUT_MS = 1250;
-const LOOP_RESET_FADE_MS = 220;
-const ENTRY_BREAK_MS = 3750;
-const REFRESH_BREAK_MS = 5000;
-const REFRESH_BREAK_AFTER_LOOPS = 1;
+const MENU_TRACK_URL = new URL('./musicasset/Button_Mash_Glory.mp3', import.meta.url).href;
+const FALLBACK_DURATION_SECONDS = 180;
+const FADE_IN_MS = 1400;
+const FADE_OUT_MS = 900;
+const DEFAULT_BAR_COUNT = 36;
+const DEFAULT_WAVEFORM_POINTS = 80;
+const FFT_SIZE = 4096;
+const SMOOTHING_TIME_CONSTANT = 0.78;
+const BEAT_COOLDOWN_MS = 170;
+const BEAT_SPIKE_THRESHOLD = 0.08;
+const MANUAL_BEAT_WINDOW = 0.075;
 
-const SECTION_TIMELINE: Array<{ start: number; end: number; key: BackgroundMusicSection; label: string; energy: number }> = [
-  { start: 0, end: 22, key: 'warmup', label: 'Signal Warmup', energy: 0.42 },
-  { start: 22, end: 52, key: 'drive', label: 'Charge Run', energy: 0.58 },
-  { start: 52, end: 74, key: 'surge', label: 'Vector Surge', energy: 0.72 },
-  { start: 74, end: 112, key: 'drop', label: 'Final Sector Drop', energy: 0.98 },
-  { start: 112, end: 136, key: 'breakdown', label: 'Cooling Break', energy: 0.46 },
-  { start: 136, end: 165, key: 'finale', label: 'Overdrive Finale', energy: 1.06 },
-  { start: 165, end: TRACK_DURATION_SECONDS, key: 'cooldown', label: 'Exit Drift', energy: 0.38 },
+const MENU_BEAT_MAP_SECONDS: number[] = [
+  // Add exact musical hit timestamps here for cinematic sync.
 ];
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const lerp = (from: number, to: number, alpha: number) => from + (to - from) * alpha;
+
+const averageRange = (data: Uint8Array, start: number, end: number): number => {
+  const safeStart = clamp(Math.floor(start), 0, data.length);
+  const safeEnd = clamp(Math.floor(end), safeStart + 1, data.length);
+  let total = 0;
+  for (let i = safeStart; i < safeEnd; i += 1) total += data[i];
+  return total / Math.max(1, safeEnd - safeStart) / 255;
+};
+
+const formatTime = (totalSeconds: number): string => {
+  const clamped = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(clamped / 60);
+  const seconds = clamped % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+const createZeroBars = (count: number) => Array.from({ length: count }, () => 0);
+
+const getBars = (data: Uint8Array, barCount: number, output: number[]): number[] => {
+  const usableBins = Math.max(1, Math.floor(data.length * 0.92));
+  const binsPerBar = usableBins / barCount;
+  if (output.length !== barCount) output.length = barCount;
+
+  for (let barIndex = 0; barIndex < barCount; barIndex += 1) {
+    const start = Math.floor(barIndex * binsPerBar);
+    const end = Math.max(start + 1, Math.floor((barIndex + 1) * binsPerBar));
+    let peak = 0;
+    let weighted = 0;
+    let weightTotal = 0;
+    for (let i = start; i < end; i += 1) {
+      const normalized = data[i] / 255;
+      const weight = 1 + (i / usableBins) * 0.35;
+      weighted += normalized * weight;
+      weightTotal += weight;
+      if (normalized > peak) peak = normalized;
+    }
+    const avg = weightTotal > 0 ? weighted / weightTotal : 0;
+    output[barIndex] = clamp(avg * 0.72 + peak * 0.52, 0, 1);
+  }
+
+  return output;
+};
+
+const getWaveform = (data: Uint8Array, pointCount: number, output: number[]): number[] => {
+  const step = Math.max(1, Math.floor(data.length / pointCount));
+  if (output.length !== pointCount) output.length = pointCount;
+  for (let i = 0; i < pointCount; i += 1) {
+    const sample = data[Math.min(data.length - 1, i * step)] ?? 128;
+    output[i] = clamp((sample - 128) / 128, -1, 1);
+  }
+  return output;
+};
+
+const detectSection = (progress: number, bass: number, energy: number): { key: BackgroundMusicSection; label: string } => {
+  if (energy < 0.08) return { key: 'idle', label: 'Signal Idle' };
+  if (progress < 0.16) return { key: 'intro', label: 'Boot Sequence' };
+  if (progress < 0.38) return { key: 'build', label: 'Charge Build' };
+  if (progress < 0.68) return bass > 0.56 ? { key: 'drop', label: 'Impact Drive' } : { key: 'build', label: 'Charge Build' };
+  if (progress < 0.84) return energy < 0.34 ? { key: 'breakdown', label: 'Cooling Break' } : { key: 'drop', label: 'Impact Drive' };
+  return { key: 'finale', label: 'Victory Surge' };
+};
 
 export class BackgroundMusic {
   private audio: HTMLAudioElement | null = null;
   private state: BackgroundMusicState = 'stopped';
   private volume = 1;
   private fadeRafId: number | null = null;
-  private monitorRafId: number | null = null;
-  private refreshBreakTimeoutId: number | null = null;
   private fadeToken = 0;
   private wantsPlayback = false;
-  private inRefreshBreak = false;
-  private refreshBreakEndsAt = 0;
-  private completedLoops = 0;
-  private trackBoundaryPending = false;
-  private entryBreakTaken = false;
+  private loopCount = 0;
+  private lastCurrentTime = 0;
+
+  private audioContext: AudioContext | null = null;
+  private sourceNode: MediaElementAudioSourceNode | null = null;
+  private analyserNode: AnalyserNode | null = null;
+  private gainNode: GainNode | null = null;
+
+  private frequencyData: Uint8Array | null = null;
+  private timeDomainData: Uint8Array | null = null;
+  private barBuffer = createZeroBars(DEFAULT_BAR_COUNT);
+  private waveformBuffer = createZeroBars(DEFAULT_WAVEFORM_POINTS);
+
+  private prevBass = 0;
+  private lastBeatAt = -Infinity;
+  private beatPulse = 0;
+  private downbeatPulse = 0;
+  private manualBeatPulse = 0;
+  private manualBeatCursor = 0;
+  private smoothedBass = 0;
+  private smoothedMids = 0;
+  private smoothedHighs = 0;
+  private smoothedEnergy = 0;
+  private smoothedBars = createZeroBars(DEFAULT_BAR_COUNT);
+  private smoothedWaveform = createZeroBars(DEFAULT_WAVEFORM_POINTS);
+  private lastFrameAt = 0;
+  private lastBeatDetected = false;
+  private currentGain = 0;
 
   init(): void {
     if (this.audio) return;
 
     const audio = new Audio(MENU_TRACK_URL);
-    audio.loop = false;
+    audio.loop = true;
     audio.preload = 'auto';
-    audio.volume = 0;
-    audio.muted = false;
     audio.currentTime = 0;
-    audio.setAttribute('playsinline', 'true');
     audio.crossOrigin = 'anonymous';
+    audio.setAttribute('playsinline', 'true');
+
+    audio.addEventListener('ended', this.handleEnded);
 
     this.audio = audio;
     this.state = 'paused';
@@ -88,62 +184,34 @@ export class BackgroundMusic {
     if (!audio) return;
 
     this.wantsPlayback = true;
-    this.inRefreshBreak = false;
-    this.refreshBreakEndsAt = 0;
-    this.clearRefreshBreak();
+    this.ensureAudioGraph();
+
+    if (this.audioContext?.state === 'suspended') {
+      try {
+        await this.audioContext.resume();
+      } catch {
+        return;
+      }
+    }
+
     this.cancelFade();
 
-    if (!this.entryBreakTaken && audio.currentTime < 0.01) {
-      this.entryBreakTaken = true;
-      this.inRefreshBreak = true;
-      this.refreshBreakEndsAt = performance.now() + ENTRY_BREAK_MS;
-      this.state = 'paused';
-      this.refreshBreakTimeoutId = window.setTimeout(() => {
-        this.refreshBreakTimeoutId = null;
-        this.inRefreshBreak = false;
-        this.refreshBreakEndsAt = 0;
-        if (!this.wantsPlayback || !this.audio) return;
-        void this.resume();
-      }, ENTRY_BREAK_MS);
-      this.ensureMonitorLoop();
-      return;
-    }
-
-    if (this.inRefreshBreak) {
-      this.ensureMonitorLoop();
-      return;
-    }
-
-    if (audio.currentTime >= TRACK_DURATION_SECONDS || audio.ended) {
-      audio.currentTime = 0;
-    }
-
-    audio.muted = false;
-
     if (audio.paused) {
-      audio.volume = 0;
       try {
         await audio.play();
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'NotAllowedError') {
-          return;
-        }
+        if (error instanceof DOMException && error.name === 'NotAllowedError') return;
         throw error;
       }
     }
 
     this.state = 'playing';
-    this.ensureMonitorLoop();
-    await this.fadeTo(this.volume, FADE_IN_MS);
+    await this.fadeAudio(this.volume, FADE_IN_MS);
   }
 
   pause(): void {
-    const audio = this.audio;
     this.wantsPlayback = false;
-    this.inRefreshBreak = false;
-    this.refreshBreakEndsAt = 0;
-    this.clearRefreshBreak();
-
+    const audio = this.audio;
     if (!audio) {
       this.state = 'paused';
       return;
@@ -152,62 +220,66 @@ export class BackgroundMusic {
     const token = ++this.fadeToken;
     this.state = 'paused';
 
-    void this.fadeTo(0, FADE_OUT_MS, token).then(() => {
+    void this.fadeAudio(0, FADE_OUT_MS, token).then(() => {
       if (!this.audio || token !== this.fadeToken) return;
       this.audio.pause();
-      this.stopMonitorLoop();
     });
   }
 
   pauseImmediately(): void {
     this.wantsPlayback = false;
-    this.inRefreshBreak = false;
-    this.refreshBreakEndsAt = 0;
-    this.trackBoundaryPending = false;
-    this.clearRefreshBreak();
     this.cancelFade();
-
-    if (!this.audio) {
-      this.state = 'paused';
-      return;
-    }
-
-    this.audio.volume = 0;
-    this.audio.pause();
-    this.stopMonitorLoop();
+    if (this.audio) this.audio.pause();
+    if (this.gainNode) this.gainNode.gain.value = 0;
+    this.currentGain = 0;
     this.state = 'paused';
   }
 
   stop(): void {
     this.wantsPlayback = false;
-    this.inRefreshBreak = false;
-    this.refreshBreakEndsAt = 0;
-    this.completedLoops = 0;
-    this.trackBoundaryPending = false;
-    this.entryBreakTaken = false;
     this.cancelFade();
-    this.stopMonitorLoop();
-    this.clearRefreshBreak();
 
     if (this.audio) {
       this.audio.pause();
       this.audio.currentTime = 0;
+      this.audio.removeEventListener('ended', this.handleEnded);
       this.audio.src = '';
       this.audio.load();
     }
 
+    this.sourceNode?.disconnect();
+    this.analyserNode?.disconnect();
+    this.gainNode?.disconnect();
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      void this.audioContext.close();
+    }
+
     this.audio = null;
+    this.audioContext = null;
+    this.sourceNode = null;
+    this.analyserNode = null;
+    this.gainNode = null;
+    this.frequencyData = null;
+    this.timeDomainData = null;
+    this.barBuffer = createZeroBars(DEFAULT_BAR_COUNT);
+    this.waveformBuffer = createZeroBars(DEFAULT_WAVEFORM_POINTS);
+    this.smoothedBars = createZeroBars(DEFAULT_BAR_COUNT);
+    this.smoothedWaveform = createZeroBars(DEFAULT_WAVEFORM_POINTS);
+    this.prevBass = 0;
+    this.beatPulse = 0;
+    this.downbeatPulse = 0;
+    this.manualBeatPulse = 0;
+    this.loopCount = 0;
+    this.manualBeatCursor = 0;
+    this.lastCurrentTime = 0;
+    this.currentGain = 0;
     this.state = 'stopped';
   }
 
   setVolume(volume: number): void {
-    this.volume = this.clamp(volume, 0, 1);
-    if (!this.audio) return;
-
-    if (this.state === 'playing' && !this.audio.paused) {
-      this.audio.volume = this.volume;
-    } else if (this.state !== 'playing') {
-      this.audio.volume = 0;
+    this.volume = clamp(volume, 0, 1);
+    if (this.state === 'playing') {
+      void this.fadeAudio(this.volume, 180);
     }
   }
 
@@ -216,187 +288,233 @@ export class BackgroundMusic {
   }
 
   getVisualizerFrame(): BackgroundMusicVisualizerFrame {
+    const now = performance.now();
+    const dtMs = this.lastFrameAt > 0 ? now - this.lastFrameAt : 16.67;
+    this.lastFrameAt = now;
+    const dtNorm = clamp(dtMs / 16.67, 0.5, 2.4);
+
+    const audio = this.audio;
+    const analyser = this.analyserNode;
+    const isAudioActive = Boolean(audio && analyser && !audio.paused && this.state === 'playing');
+
+    let bass = 0;
+    let mids = 0;
+    let highs = 0;
+    let energy = 0;
+    let beatDetected = false;
+
+    if (isAudioActive && this.frequencyData && this.timeDomainData) {
+      analyser.getByteFrequencyData(this.frequencyData);
+      analyser.getByteTimeDomainData(this.timeDomainData);
+
+      const bassEnd = Math.floor(this.frequencyData.length * 0.08);
+      const midsEnd = Math.floor(this.frequencyData.length * 0.34);
+      const highsEnd = Math.floor(this.frequencyData.length * 0.8);
+
+      bass = averageRange(this.frequencyData, 1, bassEnd);
+      mids = averageRange(this.frequencyData, bassEnd, midsEnd);
+      highs = averageRange(this.frequencyData, midsEnd, highsEnd);
+      energy = clamp(bass * 0.5 + mids * 0.32 + highs * 0.18, 0, 1);
+
+      getBars(this.frequencyData, DEFAULT_BAR_COUNT, this.barBuffer);
+      getWaveform(this.timeDomainData, DEFAULT_WAVEFORM_POINTS, this.waveformBuffer);
+      beatDetected = this.detectBeat(bass, now);
+      this.handleManualBeat(audio.currentTime, now);
+    } else {
+      const idleTime = now * 0.001;
+      bass = 0.14 + Math.sin(idleTime * 1.1) * 0.04;
+      mids = 0.12 + Math.sin(idleTime * 1.7 + 1.6) * 0.05;
+      highs = 0.1 + Math.cos(idleTime * 2.4 + 0.4) * 0.05;
+      energy = clamp(bass * 0.48 + mids * 0.32 + highs * 0.2, 0, 1);
+      for (let i = 0; i < this.barBuffer.length; i += 1) {
+        const swing = Math.sin(idleTime * (1.2 + i * 0.035) + i * 0.42) * 0.5 + 0.5;
+        this.barBuffer[i] = clamp(0.08 + swing * (0.18 + bass * 0.22), 0, 1);
+      }
+      for (let i = 0; i < this.waveformBuffer.length; i += 1) {
+        this.waveformBuffer[i] = Math.sin(idleTime * 1.8 + i * 0.26) * (0.08 + highs * 0.14);
+      }
+    }
+
+    const smoothAlpha = clamp(0.18 / dtNorm, 0.08, 0.26);
+    this.smoothedBass = lerp(this.smoothedBass, bass, smoothAlpha);
+    this.smoothedMids = lerp(this.smoothedMids, mids, smoothAlpha * 0.92);
+    this.smoothedHighs = lerp(this.smoothedHighs, highs, smoothAlpha * 0.88);
+    this.smoothedEnergy = lerp(this.smoothedEnergy, energy, smoothAlpha * 0.85);
+
+    for (let i = 0; i < this.smoothedBars.length; i += 1) {
+      this.smoothedBars[i] = lerp(this.smoothedBars[i], this.barBuffer[i] ?? 0, 0.22);
+    }
+    for (let i = 0; i < this.smoothedWaveform.length; i += 1) {
+      this.smoothedWaveform[i] = lerp(this.smoothedWaveform[i], this.waveformBuffer[i] ?? 0, 0.28);
+    }
+
+    this.beatPulse = Math.max(0, this.beatPulse - 0.042 * dtNorm);
+    this.downbeatPulse = Math.max(0, this.downbeatPulse - 0.03 * dtNorm);
+    this.manualBeatPulse = Math.max(0, this.manualBeatPulse - 0.05 * dtNorm);
+
     const currentTime = this.getCurrentTime();
-    const duration = TRACK_DURATION_SECONDS;
-    const progress = duration > 0 ? currentTime / duration : 0;
-    const sectionData = this.getSectionForTime(currentTime);
-    const beatProgress = this.getBeatProgress(currentTime);
-    const barProgress = this.getBarProgress(currentTime);
-    const pulseBase = Math.max(0, Math.cos(beatProgress * Math.PI * 2));
-    const beatPhase = 1 - Math.min(1, beatProgress);
-    const sharpBeat = Math.pow(Math.max(0, 1 - beatProgress * 1.8), 2.6);
-    const downbeatProgress = Math.min(barProgress, 1 - barProgress) * 2;
-    const downbeatPulse = Math.pow(Math.max(0, 1 - downbeatProgress * 1.35), 3.2);
-    const beatPulse = this.clamp(sectionData.energy * 0.35 + pulseBase * 0.28 + sharpBeat * 0.52 + downbeatPulse * 0.24, 0, 1.35);
-    const bars = Array.from({ length: 28 }, (_, index) => {
-      const lanePhase = currentTime * (2.2 + (index % 5) * 0.19) + index * 0.53;
-      const groove = Math.sin(lanePhase) * 0.22 + Math.cos(lanePhase * 0.52 + beatProgress * Math.PI * 2) * 0.12;
-      const beatLaneOffset = ((index % 4) / 4) * 0.18;
-      const beatAccent = Math.max(0, sharpBeat - beatLaneOffset) * (index % 2 === 0 ? 0.5 : 0.34);
-      const barAccent = index % 4 === 0 ? downbeatPulse * 0.48 : index % 2 === 0 ? downbeatPulse * 0.18 : 0;
-      const lift = sectionData.energy * (0.52 + (index % 6) * 0.04);
-      const sweep = Math.max(0, Math.sin(barProgress * Math.PI * 2 + index * 0.41)) * 0.18;
-      return this.clamp(0.09 + lift + groove + beatAccent + barAccent + sweep, 0.06, 1.12);
-    });
+    const duration = this.getDuration();
+    const progress = duration > 0 ? clamp(currentTime / duration, 0, 1) : 0;
+    const sectionData = detectSection(progress, this.smoothedBass, this.smoothedEnergy);
+    const downbeat = clamp(this.downbeatPulse + this.manualBeatPulse * 0.35, 0, 1.5);
+    const reactorPulse = clamp(this.smoothedBass * 0.72 + this.beatPulse * 0.8 + this.manualBeatPulse * 0.95, 0, 1.6);
+    const logoPulse = clamp(this.smoothedBass * 0.42 + this.beatPulse * 0.45 + this.manualBeatPulse * 0.55, 0, 1.3);
+    const backgroundGlow = clamp(this.smoothedBass * 0.34 + this.smoothedMids * 0.22 + reactorPulse * 0.24, 0, 1.2);
+    const bloom = clamp(this.smoothedBass * 0.28 + this.smoothedHighs * 0.16 + this.manualBeatPulse * 0.5, 0, 1.3);
+    const particleBurst = clamp(this.smoothedMids * 0.46 + this.manualBeatPulse * 0.75 + this.beatPulse * 0.28, 0, 1.4);
+    const uiFlicker = clamp(this.smoothedMids * 0.4 + this.smoothedHighs * 0.22, 0, 1);
+    const scanlineIntensity = clamp(this.smoothedHighs * 0.7 + this.beatPulse * 0.15, 0, 1.1);
+    const glitchIntensity = clamp(this.smoothedHighs * 0.42 + this.manualBeatPulse * 0.58, 0, 1.15);
 
     return {
-      bars,
-      beatPulse,
-      beatPhase,
-      downbeatPulse,
+      bars: [...this.smoothedBars],
+      waveform: [...this.smoothedWaveform],
+      beatPulse: clamp(this.beatPulse + this.manualBeatPulse * 0.55, 0, 1.5),
+      beatPhase: clamp(1 - reactorPulse * 0.6, 0, 1),
+      downbeatPulse: downbeat,
+      beatDetected,
+      manualBeatPulse: this.manualBeatPulse,
+      bass: this.smoothedBass,
+      mids: this.smoothedMids,
+      highs: this.smoothedHighs,
+      energy: this.smoothedEnergy,
+      reactorPulse,
+      logoPulse,
+      backgroundGlow,
+      bloom,
+      particleBurst,
+      uiFlicker,
+      scanlineIntensity,
+      glitchIntensity,
       currentTime,
       duration,
       progress,
       section: sectionData.key,
       sectionLabel: sectionData.label,
-      breakActive: this.inRefreshBreak,
-      breakRemaining: this.getBreakRemaining(),
-      loopCount: this.completedLoops,
-      formattedCurrentTime: this.formatTime(currentTime),
-      formattedDuration: this.formatTime(duration),
+      breakActive: false,
+      breakRemaining: 0,
+      loopCount: this.loopCount,
+      formattedCurrentTime: formatTime(currentTime),
+      formattedDuration: formatTime(duration),
+      paused: !isAudioActive,
+      volume: this.currentGain,
     };
   }
+
+  private ensureAudioGraph(): void {
+    if (!this.audio) return;
+    if (this.audioContext && this.sourceNode && this.analyserNode && this.gainNode) return;
+
+    const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    const context = this.audioContext ?? new AudioContextCtor();
+    const source = this.sourceNode ?? context.createMediaElementSource(this.audio);
+    const analyser = this.analyserNode ?? context.createAnalyser();
+    const gainNode = this.gainNode ?? context.createGain();
+
+    analyser.fftSize = FFT_SIZE;
+    analyser.smoothingTimeConstant = SMOOTHING_TIME_CONSTANT;
+    gainNode.gain.value = this.currentGain;
+
+    source.disconnect();
+    analyser.disconnect();
+    gainNode.disconnect();
+
+    source.connect(analyser);
+    analyser.connect(gainNode);
+    gainNode.connect(context.destination);
+
+    this.audioContext = context;
+    this.sourceNode = source;
+    this.analyserNode = analyser;
+    this.gainNode = gainNode;
+    this.frequencyData = new Uint8Array(analyser.frequencyBinCount);
+    this.timeDomainData = new Uint8Array(analyser.fftSize);
+  }
+
+  private detectBeat(bassPower: number, nowMs: number): boolean {
+    const delta = bassPower - this.prevBass;
+    const relativeThreshold = Math.max(this.prevBass * 0.14, BEAT_SPIKE_THRESHOLD);
+    const ready = nowMs - this.lastBeatAt > BEAT_COOLDOWN_MS;
+    const isBeat = ready && bassPower > 0.18 && delta > relativeThreshold;
+
+    this.prevBass = lerp(this.prevBass, bassPower, 0.48);
+    this.lastBeatDetected = isBeat;
+
+    if (isBeat) {
+      this.lastBeatAt = nowMs;
+      this.beatPulse = 1;
+      if (bassPower > 0.42 || delta > relativeThreshold * 1.35) {
+        this.downbeatPulse = 1;
+      }
+    }
+
+    return isBeat;
+  }
+
+  private handleManualBeat(currentTime: number, nowMs: number): void {
+    if (MENU_BEAT_MAP_SECONDS.length === 0) return;
+
+    while (this.manualBeatCursor < MENU_BEAT_MAP_SECONDS.length) {
+      const target = MENU_BEAT_MAP_SECONDS[this.manualBeatCursor];
+      if (currentTime + MANUAL_BEAT_WINDOW < target) break;
+      if (Math.abs(currentTime - target) <= MANUAL_BEAT_WINDOW) {
+        this.manualBeatPulse = 1;
+        this.beatPulse = Math.max(this.beatPulse, 0.9);
+        this.downbeatPulse = Math.max(this.downbeatPulse, 0.82);
+        this.lastBeatAt = nowMs;
+      }
+      this.manualBeatCursor += 1;
+    }
+  }
+
+  private readonly handleEnded = (): void => {
+    this.loopCount += 1;
+    this.manualBeatCursor = 0;
+  };
 
   private getCurrentTime(): number {
-    return this.clamp(this.audio?.currentTime ?? 0, 0, TRACK_DURATION_SECONDS);
-  }
-
-  private getSectionForTime(time: number) {
-    return SECTION_TIMELINE.find((section) => time >= section.start && time < section.end) ?? SECTION_TIMELINE[SECTION_TIMELINE.length - 1];
-  }
-
-  private getBeatProgress(time: number): number {
-    const beats = time / (60 / BPM);
-    return beats - Math.floor(beats);
-  }
-
-  private getBarProgress(time: number): number {
-    const bars = time / ((60 / BPM) * BEATS_PER_BAR);
-    return bars - Math.floor(bars);
-  }
-
-  private getBreakRemaining(): number {
-    if (!this.inRefreshBreak) return 0;
-    return Math.max(0, (this.refreshBreakEndsAt - performance.now()) / 1000);
-  }
-
-  private formatTime(totalSeconds: number): string {
-    const clamped = Math.max(0, Math.floor(totalSeconds));
-    const minutes = Math.floor(clamped / 60);
-    const seconds = clamped % 60;
-    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-
-  private ensureMonitorLoop(): void {
-    if (this.monitorRafId != null) return;
-
-    const tick = () => {
-      if (!this.audio) {
-        this.monitorRafId = null;
-        return;
-      }
-
-      if (this.state === 'playing' && !this.inRefreshBreak && this.audio.currentTime >= TRACK_DURATION_SECONDS - 0.04) {
-        void this.handleTrackBoundary();
-      }
-
-      this.monitorRafId = window.requestAnimationFrame(tick);
-    };
-
-    this.monitorRafId = window.requestAnimationFrame(tick);
-  }
-
-  private stopMonitorLoop(): void {
-    if (this.monitorRafId != null) {
-      window.cancelAnimationFrame(this.monitorRafId);
-      this.monitorRafId = null;
+    const current = this.audio?.currentTime ?? 0;
+    if (current + 0.25 < this.lastCurrentTime) {
+      this.loopCount += 1;
+      this.manualBeatCursor = 0;
     }
+    this.lastCurrentTime = current;
+    return clamp(current, 0, this.getDuration());
   }
 
-  private async handleTrackBoundary(): Promise<void> {
-    if (!this.audio || this.trackBoundaryPending) return;
-    this.trackBoundaryPending = true;
+  private getDuration(): number {
+    const duration = this.audio?.duration;
+    return Number.isFinite(duration) && duration && duration > 0 ? duration : FALLBACK_DURATION_SECONDS;
+  }
 
-    try {
-      this.completedLoops += 1;
-      if (!this.wantsPlayback) {
-        this.audio.pause();
-        return;
-      }
-
-      if (this.completedLoops >= REFRESH_BREAK_AFTER_LOOPS) {
-        await this.fadeTo(0, FADE_OUT_MS);
-        if (!this.audio) return;
-        this.audio.pause();
-        this.audio.currentTime = 0;
-        this.inRefreshBreak = true;
-        this.refreshBreakEndsAt = performance.now() + REFRESH_BREAK_MS;
-        this.state = 'paused';
-        this.refreshBreakTimeoutId = window.setTimeout(() => {
-          this.refreshBreakTimeoutId = null;
-          this.inRefreshBreak = false;
-          this.refreshBreakEndsAt = 0;
-          this.completedLoops = 0;
-          if (!this.wantsPlayback || !this.audio) return;
-          void this.resume();
-        }, REFRESH_BREAK_MS);
-        return;
-      }
-
-      this.audio.currentTime = 0;
-      this.audio.volume = Math.min(this.audio.volume, this.volume * 0.35);
-      if (this.audio.paused) {
-        try {
-          await this.audio.play();
-        } catch {
-          return;
-        }
-      }
-      this.state = 'playing';
-      await this.fadeTo(this.volume, LOOP_RESET_FADE_MS);
-    } finally {
-      this.trackBoundaryPending = false;
+  private fadeAudio(targetVolume: number, durationMs: number, token = ++this.fadeToken): Promise<void> {
+    if (!this.gainNode) {
+      this.currentGain = clamp(targetVolume, 0, 1);
+      return Promise.resolve();
     }
-  }
-
-  private clearRefreshBreak(): void {
-    if (this.refreshBreakTimeoutId != null) {
-      window.clearTimeout(this.refreshBreakTimeoutId);
-      this.refreshBreakTimeoutId = null;
-    }
-  }
-
-  private cancelFade(): void {
-    this.fadeToken += 1;
-    if (this.fadeRafId != null) {
-      window.cancelAnimationFrame(this.fadeRafId);
-      this.fadeRafId = null;
-    }
-  }
-
-  private fadeTo(targetVolume: number, durationMs: number, token = this.fadeToken): Promise<void> {
-    const audio = this.audio;
-    if (!audio) return Promise.resolve();
-
     if (durationMs <= 0) {
-      audio.volume = this.clamp(targetVolume, 0, 1);
+      this.currentGain = clamp(targetVolume, 0, 1);
+      this.gainNode.gain.value = this.currentGain;
       return Promise.resolve();
     }
 
-    const startVolume = audio.volume;
-    const delta = this.clamp(targetVolume, 0, 1) - startVolume;
+    const startGain = this.gainNode.gain.value;
+    const delta = clamp(targetVolume, 0, 1) - startGain;
     const startedAt = performance.now();
 
     return new Promise((resolve) => {
       const step = (now: number) => {
-        if (!this.audio || token !== this.fadeToken) {
+        if (!this.gainNode || token !== this.fadeToken) {
           resolve();
           return;
         }
 
-        const progress = this.clamp((now - startedAt) / durationMs, 0, 1);
+        const progress = clamp((now - startedAt) / durationMs, 0, 1);
         const eased = 1 - Math.pow(1 - progress, 3);
-        this.audio.volume = this.clamp(startVolume + delta * eased, 0, 1);
+        this.currentGain = clamp(startGain + delta * eased, 0, 1);
+        this.gainNode.gain.value = this.currentGain;
 
         if (progress >= 1) {
           this.fadeRafId = null;
@@ -411,7 +529,11 @@ export class BackgroundMusic {
     });
   }
 
-  private clamp(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value));
+  private cancelFade(): void {
+    this.fadeToken += 1;
+    if (this.fadeRafId != null) {
+      window.cancelAnimationFrame(this.fadeRafId);
+      this.fadeRafId = null;
+    }
   }
 }

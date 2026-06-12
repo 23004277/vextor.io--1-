@@ -21,8 +21,6 @@ import { BackgroundMusic, BackgroundMusicVisualizerFrame } from './Background Mu
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
 
-const OWNER_TOOLS_KEY = 'vextor_owner_tools';
-
 const SUPPORT_RANK_META: Record<User['supporterRank'], { label: string; accent: string; glow: string; tone: string }> = {
   standard: { label: 'Standard', accent: '#67e8f9', glow: 'rgba(103,232,249,0.16)', tone: 'Field access' },
   rank1: { label: 'Sovereign', accent: '#fbbf24', glow: 'rgba(251,191,36,0.2)', tone: 'Primary resonance' },
@@ -106,11 +104,6 @@ const App: React.FC = () => {
   const [showUpdateHistory, setShowUpdateHistory] = useState(false);
   const [selectedUpdateId, setSelectedUpdateId] = useState<string>(UPDATE_LOG[0]?.id ?? '');
   const [updateSearch, setUpdateSearch] = useState('');
-  const [expandedUpdate, setExpandedUpdate] = useState<string | null>(null);
-  const [ownerToolsEnabled, setOwnerToolsEnabled] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return window.localStorage.getItem(OWNER_TOOLS_KEY) === '1';
-  });
   const [ownerCopyStatus, setOwnerCopyStatus] = useState<string>('');
   const archiveCopyFallbackRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedReleaseExportRef = useRef<HTMLTextAreaElement | null>(null);
@@ -130,6 +123,9 @@ const App: React.FC = () => {
   const [selectedTeam, setSelectedTeam] = useState<Team>(Team.BLUE);
   const [isSpectating, setIsSpectating] = useState(false);
   const [menuMusicSnapshot, setMenuMusicSnapshot] = useState<BackgroundMusicVisualizerFrame | null>(null);
+  const [menuBootUnlocked, setMenuBootUnlocked] = useState(false);
+  const [menuBootOverlayVisible, setMenuBootOverlayVisible] = useState(true);
+  const [menuBootUnlocking, setMenuBootUnlocking] = useState(false);
   const [menuMousePos, setMenuMousePos] = useState({ x: 0, y: 0 });
   const lastUnmutedVolumesRef = useRef<{ volume: number; musicVolume: number }>({
     volume: DEFAULT_SETTINGS.volume,
@@ -137,6 +133,7 @@ const App: React.FC = () => {
   });
   const menuMusicRef = useRef<BackgroundMusic | null>(null);
   const isPlayingRef = useRef(false);
+  const menuBootFadeTimeoutRef = useRef<number | null>(null);
   const previousCurrencyRef = useRef<number | null>(null);
   const currencyHydratedRef = useRef(false);
 
@@ -150,6 +147,34 @@ const App: React.FC = () => {
     music.pauseImmediately();
     setMenuMusicSnapshot(music.getVisualizerFrame());
   }, []);
+
+  const unlockMenuBoot = useCallback(async () => {
+    if (menuBootUnlocked || menuBootUnlocking || isPlayingRef.current) return;
+
+    setMenuBootUnlocking(true);
+    try {
+      engine?.sound.enable();
+      const music = menuMusicRef.current;
+      if (music) {
+        try {
+          await music.resume();
+        } catch {
+          // Fail silently so the menu never gets stuck behind the unlock gate.
+        }
+        setMenuMusicSnapshot(music.getVisualizerFrame());
+      }
+    } finally {
+      setMenuBootUnlocked(true);
+      if (menuBootFadeTimeoutRef.current != null) {
+        window.clearTimeout(menuBootFadeTimeoutRef.current);
+      }
+      menuBootFadeTimeoutRef.current = window.setTimeout(() => {
+        setMenuBootOverlayVisible(false);
+        menuBootFadeTimeoutRef.current = null;
+      }, 420);
+      setMenuBootUnlocking(false);
+    }
+  }, [engine, menuBootUnlocked, menuBootUnlocking]);
 
   // Tooltip State
   const [tooltip, setTooltip] = useState<{ label: string; desc?: string; visible: boolean }>({
@@ -171,9 +196,29 @@ const App: React.FC = () => {
       return COLORS.player;
   }, [user]);
 
-  const selectedUpdate = useMemo<UpdateLogEntry>(() => {
-    return UPDATE_LOG.find((entry) => entry.id === selectedUpdateId) ?? UPDATE_LOG[0];
-  }, [selectedUpdateId]);
+  const filteredUpdateLog = useMemo(() => {
+    const query = updateSearch.trim().toLowerCase();
+    if (!query) return UPDATE_LOG;
+    return UPDATE_LOG.filter((entry) => {
+      const haystack = [
+        entry.id,
+        entry.title,
+        entry.date,
+        entry.theme,
+        entry.content,
+        ...(entry.tags ?? []),
+        ...(entry.sections ?? []).flatMap((section) => [section.label, ...section.items]),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [updateSearch]);
+
+  const selectedUpdate = useMemo<UpdateLogEntry | undefined>(() => {
+    return filteredUpdateLog.find((entry) => entry.id === selectedUpdateId) ?? filteredUpdateLog[0];
+  }, [filteredUpdateLog, selectedUpdateId]);
 
   const supportRankMeta = useMemo(() => {
     const rank = user?.supporterRank || 'standard';
@@ -256,27 +301,6 @@ const App: React.FC = () => {
   }, [engine]);
 
   useEffect(() => {
-    if (!engine) return;
-
-    const unlockMainMenuAudio = () => {
-      if (isPlayingRef.current) {
-        silenceMenuMusic();
-        return;
-      }
-      engine.sound.enable();
-      menuMusicRef.current?.resume().catch(() => undefined);
-    };
-
-    window.addEventListener('pointerdown', unlockMainMenuAudio, { once: true });
-    window.addEventListener('keydown', unlockMainMenuAudio, { once: true });
-
-    return () => {
-      window.removeEventListener('pointerdown', unlockMainMenuAudio);
-      window.removeEventListener('keydown', unlockMainMenuAudio);
-    };
-  }, [engine, silenceMenuMusic]);
-
-  useEffect(() => {
     const music = new BackgroundMusic();
     music.setVolume(settings.musicVolume);
     menuMusicRef.current = music;
@@ -288,7 +312,7 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || isPlaying) return;
+    if (typeof window === 'undefined' || isPlaying || !menuBootUnlocked) return;
     let rafId = 0;
     const tick = () => {
       const music = menuMusicRef.current;
@@ -299,7 +323,7 @@ const App: React.FC = () => {
     };
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, [isPlaying]);
+  }, [isPlaying, menuBootUnlocked]);
 
   useEffect(() => {
     const music = menuMusicRef.current;
@@ -311,13 +335,21 @@ const App: React.FC = () => {
     const music = menuMusicRef.current;
     if (!music) return;
 
-    if (isPlaying) {
+    if (isPlaying || !menuBootUnlocked) {
       silenceMenuMusic();
       return;
     }
 
     music.resume().catch(() => undefined);
-  }, [isPlaying, silenceMenuMusic]);
+  }, [isPlaying, menuBootUnlocked, silenceMenuMusic]);
+
+  useEffect(() => {
+    return () => {
+      if (menuBootFadeTimeoutRef.current != null) {
+        window.clearTimeout(menuBootFadeTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (playerName) localStorage.setItem('vextor_pilot_name', playerName);
@@ -395,6 +427,14 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!creditToast) setCreditCopiedId(null);
   }, [creditToast]);
+
+  useEffect(() => {
+    if (!showUpdateHistory) return;
+    if (filteredUpdateLog.length === 0) return;
+    if (!filteredUpdateLog.some((entry) => entry.id === selectedUpdateId)) {
+      setSelectedUpdateId(filteredUpdateLog[0].id);
+    }
+  }, [filteredUpdateLog, selectedUpdateId, showUpdateHistory]);
 
   const handleCreditToastClick = async (t: { id: number; amount: number; total: number }) => {
     try {
@@ -749,7 +789,7 @@ const App: React.FC = () => {
                 <div className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200/70">Credit Uplink</div>
                 <motion.div className="mt-1 flex items-baseline gap-3" initial={{ scale: 0.96 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }}>
                   <div className="text-2xl font-black tracking-tight text-amber-300">+{creditToast.amount.toLocaleString()} Credits</div>
-                  <div className="text-sm font-black text-white/60">•</div>
+                  <div className="text-sm font-black text-white/60">-</div>
                   <div className="text-sm font-black text-white/80">{creditToast.total.toLocaleString()}</div>
                 </motion.div>
               </div>
@@ -774,7 +814,7 @@ const App: React.FC = () => {
       
       {isPlaying && gameState && !isSpectating && (
         <OverlayErrorBoundary onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }}>
-          <UIOverlay gameState={gameState} onUpgradeStat={(s) => engine?.upgradeStat(engine.player, s)} onUpgradeClass={(c) => engine?.upgradeClass(c)} onRestart={() => { setLastDeathReport(null); engine?.resetPlayer(true); }} onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }} highScores={displayHighScores} playHover={playHover} engine={engine} settings={settings} deathReport={lastDeathReport} />
+          <UIOverlay gameState={gameState} onUpgradeStat={(s) => engine?.upgradeStat(engine.player, s)} onUpgradeClass={(c) => engine?.upgradeClass(c)} onUpgradeSector={(sector) => engine?.upgradeSecondarySector(sector)} onRestart={() => { setLastDeathReport(null); engine?.resetPlayer(true); }} onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }} highScores={displayHighScores} playHover={playHover} engine={engine} settings={settings} deathReport={lastDeathReport} />
         </OverlayErrorBoundary>
       )}
 
@@ -840,7 +880,7 @@ const App: React.FC = () => {
       )}
 
       {/* Main Menu Tooltip Layer */}
-      {!isPlaying && (
+      {!isPlaying && menuBootUnlocked && (
           <TacticalTooltip 
             label={tooltip.label} 
             desc={tooltip.desc} 
@@ -852,6 +892,7 @@ const App: React.FC = () => {
 
       <MainMenu 
         isPlaying={isPlaying}
+        bootUnlocked={menuBootUnlocked}
         playerName={playerName}
         setPlayerName={setPlayerName}
         user={user}
@@ -884,6 +925,112 @@ const App: React.FC = () => {
         canJoinTeam={(t) => engine?.canJoinTeam(t) ?? true}
       />
 
+      {!isPlaying && menuBootOverlayVisible && (
+        <motion.button
+          type="button"
+          initial={{ opacity: 1, backdropFilter: 'blur(18px)' }}
+          animate={{
+            opacity: menuBootUnlocked ? 0 : 1,
+            backdropFilter: menuBootUnlocked ? 'blur(0px)' : 'blur(16px)',
+          }}
+          transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+          onClick={() => { void unlockMenuBoot(); }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              void unlockMenuBoot();
+            }
+          }}
+          aria-label="Click to activate VEXTOR audio and enter the main menu"
+          className="absolute inset-0 z-[120] flex cursor-pointer items-center justify-center bg-slate-950/58 px-6 text-left outline-none"
+        >
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgba(34,211,238,0.14),transparent_35%),linear-gradient(180deg,rgba(2,6,23,0.14),rgba(2,6,23,0.72))]" />
+          <motion.div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[420px] w-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/12"
+            animate={{
+              scale: menuBootUnlocking ? 1.08 : [1, 1.035, 1],
+              opacity: menuBootUnlocking ? 0.18 : [0.16, 0.28, 0.16],
+            }}
+            transition={menuBootUnlocking ? { duration: 0.34 } : { duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+          />
+          <motion.div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[560px] w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(34,211,238,0.08), transparent 68%)' }}
+            animate={{
+              scale: menuBootUnlocking ? 1.12 : [0.98, 1.03, 0.98],
+              opacity: menuBootUnlocking ? 0.22 : [0.14, 0.24, 0.14],
+            }}
+            transition={menuBootUnlocking ? { duration: 0.34 } : { duration: 3.8, repeat: Infinity, ease: 'easeInOut' }}
+          />
+          <motion.div
+            animate={{
+              opacity: menuBootUnlocked ? 0 : 1,
+              scale: menuBootUnlocking ? 0.985 : 1,
+              y: menuBootUnlocking ? 8 : 0,
+            }}
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-[700px] overflow-hidden rounded-[34px] border border-cyan-300/18 bg-slate-950/74 p-0 shadow-[0_30px_90px_rgba(0,0,0,0.58)] backdrop-blur-2xl"
+          >
+            <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(34,211,238,0.08),transparent_38%,transparent_62%,rgba(96,165,250,0.06))]" />
+            <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent" />
+            <div className="relative px-8 py-8 md:px-10 md:py-9">
+              <div className="flex items-start justify-between gap-6">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200/72">VEXTOR // LIVE SIGNAL</div>
+                  <div className="mt-4 text-4xl font-black uppercase tracking-[0.08em] text-white md:text-5xl">
+                    Enter The Arena
+                  </div>
+                  <div className="mt-3 max-w-[34rem] text-sm font-bold uppercase tracking-[0.16em] text-cyan-100/58 md:text-[15px]">
+                    Grid online. Command deck standing by. Tap to begin the live uplink.
+                  </div>
+                </div>
+                <motion.div
+                  aria-hidden="true"
+                  className="hidden shrink-0 md:block"
+                  animate={{
+                    rotate: menuBootUnlocking ? 90 : [0, 8, -6, 0],
+                    scale: menuBootUnlocking ? 1.08 : [1, 1.03, 1],
+                  }}
+                  transition={menuBootUnlocking ? { duration: 0.34 } : { duration: 4.4, repeat: Infinity, ease: 'easeInOut' }}
+                >
+                  <div className="relative flex h-20 w-20 items-center justify-center rounded-[28px] border border-cyan-300/24 bg-cyan-400/8 shadow-[0_0_34px_rgba(34,211,238,0.12)]">
+                    <div className="absolute inset-3 rounded-[22px] border border-cyan-200/14" />
+                    <div className="h-4 w-4 rounded-full bg-cyan-300 shadow-[0_0_22px_rgba(103,232,249,0.98)]" />
+                  </div>
+                </motion.div>
+              </div>
+
+              <div className="mt-7 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <div className="rounded-[24px] border border-white/8 bg-white/[0.035] px-5 py-4">
+                  <div className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200/58">Launch Sequence</div>
+                  <div className="mt-2 text-sm leading-relaxed text-white/72">
+                    Fade in, lock on, and bring the VEXTOR interface online in one clean transition.
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 self-stretch md:self-auto">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/38">
+                    {menuBootUnlocking ? 'Initializing uplink...' : 'Ready for deployment'}
+                  </div>
+                  <motion.div
+                    animate={{
+                      boxShadow: menuBootUnlocking
+                        ? '0 0 0 rgba(34,211,238,0)'
+                        : ['0 0 0 rgba(34,211,238,0)', '0 0 24px rgba(34,211,238,0.22)', '0 0 0 rgba(34,211,238,0)'],
+                    }}
+                    transition={menuBootUnlocking ? { duration: 0.2 } : { duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+                    className="rounded-full border border-cyan-300/24 bg-cyan-400/10 px-5 py-2.5 text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200"
+                  >
+                    {menuBootUnlocking ? 'Linking' : 'Begin'}
+                  </motion.div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </motion.button>
+      )}
+
         {/* Modals */}
         {showLogin && <LoginModal onClose={() => setShowLogin(false)} onLoginSuccess={(u) => {
           hydrateSupportRank(u).then(setUser).catch(() => setUser(u));
@@ -900,271 +1047,219 @@ const App: React.FC = () => {
         
         {showUpdateHistory && (
             <div
-              className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 backdrop-blur-[28px] animate-in fade-in duration-200 p-4 md:p-8"
+              className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/88 p-6 backdrop-blur-[24px] animate-in fade-in duration-200"
               onClick={() => setShowUpdateHistory(false)}
             >
                 <div
-                  className="w-full max-w-6xl h-[min(88vh,960px)] flex flex-col rounded-[2rem] bg-[#040812] border border-cyan-400/20 shadow-[0_24px_100px_rgba(0,0,0,0.88)] relative overflow-hidden animate-in zoom-in-95 duration-200"
+                  className="relative flex h-[88vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-[2rem] border border-cyan-400/18 bg-[linear-gradient(180deg,#07111d,#040913)] shadow-[0_30px_120px_rgba(0,0,0,0.82)] animate-in zoom-in-95 duration-200"
                   onClick={e => e.stopPropagation()}
                 >
-                    <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/60 to-transparent" />
-                    <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] h-full min-h-0">
-                        <aside className="border-b lg:border-b-0 lg:border-r border-white/10 bg-[linear-gradient(180deg,rgba(6,12,24,0.94),rgba(2,5,12,0.98))] p-5 md:p-6 flex flex-col min-h-0">
-                            <div className="shrink-0">
-                                <span className="text-[10px] font-black text-cyan-300/80 uppercase tracking-[0.34em]">Update Archive</span>
-                                <h2 className="mt-2 text-2xl font-black text-white uppercase tracking-tight">Patch Notes</h2>
-                                <p className="mt-2 text-[11px] text-white/45 uppercase tracking-wider leading-relaxed">
-                                  Structured release archive for systems, balance, interface, and live service changes.
-                                </p>
+                    <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/55 to-transparent" />
+                    <textarea
+                      ref={archiveCopyFallbackRef}
+                      readOnly
+                      value={fullArchiveClipboardText}
+                      aria-hidden="true"
+                      tabIndex={-1}
+                      className="pointer-events-none absolute left-[-9999px] top-0 h-px w-px opacity-0"
+                    />
+                    <textarea
+                      ref={selectedReleaseExportRef}
+                      readOnly
+                      value={selectedUpdateClipboardText}
+                      aria-hidden="true"
+                      tabIndex={-1}
+                      className="pointer-events-none absolute left-[-9999px] top-0 h-px w-px opacity-0"
+                    />
+                    <textarea
+                      ref={fullArchiveExportRef}
+                      readOnly
+                      value={fullArchiveClipboardText}
+                      aria-hidden="true"
+                      tabIndex={-1}
+                      className="pointer-events-none absolute left-[-9999px] top-0 h-px w-px opacity-0"
+                    />
+
+                    <div className="flex items-start justify-between gap-6 border-b border-white/8 bg-[linear-gradient(180deg,rgba(9,18,30,0.94),rgba(6,12,22,0.9))] px-8 py-7">
+                        <div className="min-w-0">
+                            <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/76">Update Log</div>
+                            <h2 className="mt-2 text-3xl font-black tracking-tight text-white">Latest VEXTOR Changes</h2>
+                            <p className="mt-3 max-w-2xl text-[15px] leading-7 text-white/56">
+                              Straight patch notes, less noise. Pick a release on the left, read the full briefing on the right, and copy the context when you want to post it somewhere else.
+                            </p>
+                        </div>
+                        <button
+                          onClick={() => setShowUpdateHistory(false)}
+                          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-white/62 transition hover:bg-white/[0.1] hover:text-white"
+                          aria-label="Close update log"
+                        >
+                          <span className="text-lg font-black leading-none">×</span>
+                        </button>
+                    </div>
+
+                    <div className="flex items-center gap-3 border-b border-white/8 bg-white/[0.02] px-8 py-4">
+                        <div className="min-w-0 flex-1">
+                            <input
+                              value={updateSearch}
+                              onChange={(event) => setUpdateSearch(event.target.value)}
+                              placeholder="Search version, title, feature, or tag..."
+                              className="w-full rounded-2xl border border-white/10 bg-[#06101b] px-4 py-3 text-[14px] font-semibold text-white outline-none placeholder:text-white/28 focus:border-cyan-300/35"
+                            />
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              onClick={() => handleCopyUpdateLog(selectedUpdateClipboardText, 'Selected release', selectedReleaseExportRef)}
+                              className="rounded-xl border border-amber-300/24 bg-amber-400/12 px-4 py-2.5 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-400/18"
+                            >
+                              Copy Selected
+                            </button>
+                            <button
+                              onClick={() => handleCopyUpdateLog(fullArchiveClipboardText, 'Full update log', fullArchiveExportRef)}
+                              className="rounded-xl border border-cyan-300/22 bg-cyan-400/10 px-4 py-2.5 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/16"
+                            >
+                              Copy Full Log
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)]">
+                        <aside className="custom-scrollbar min-h-0 overflow-y-auto border-r border-white/8 bg-[linear-gradient(180deg,rgba(5,11,20,0.94),rgba(4,8,16,0.98))] p-5">
+                            <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                                <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/42">
+                                  {filteredUpdateLog.length} release{filteredUpdateLog.length === 1 ? '' : 's'}
+                                </div>
+                                <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-200/48">
+                                  Desktop archive
+                                </div>
                             </div>
 
-                            <div className="mt-5 grid grid-cols-2 gap-2 shrink-0 sm:grid-cols-3">
-                                <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
-                                    <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Releases</div>
-                                    <div className="mt-1 text-lg font-black text-cyan-300">{UPDATE_LOG.length}</div>
-                                </div>
-                                <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
-                                    <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Latest</div>
-                                    <div className="mt-1 break-words text-sm font-black leading-tight text-white">{UPDATE_LOG[0]?.id ?? '--'}</div>
-                                </div>
-                                <div className="col-span-2 min-w-0 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 sm:col-span-1">
-                                    <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/35">Focus</div>
-                                    <div className="mt-1 break-words text-xs font-black leading-tight text-emerald-300 sm:text-sm">{selectedUpdate?.theme ?? 'Live'}</div>
-                                </div>
-                            </div>
-
-                            <div className="mt-5 flex-1 min-h-0 overflow-y-auto pr-1 custom-scrollbar space-y-2">
-                                {UPDATE_LOG.map((item, idx) => {
+                            <div className="space-y-2.5">
+                                {filteredUpdateLog.length > 0 ? filteredUpdateLog.map((item, idx) => {
                                   const active = item.id === selectedUpdate?.id;
                                   return (
                                     <button
                                       key={`nav-${item.id}`}
                                       onClick={() => setSelectedUpdateId(item.id)}
-                                      className={`w-full text-left rounded-2xl border px-4 py-3 transition-all ${
+                                      className={`w-full rounded-[1.2rem] border px-4 py-3.5 text-left transition-all ${
                                         active
-                                          ? 'border-cyan-400/45 bg-cyan-500/[0.08] shadow-[0_0_0_1px_rgba(34,211,238,0.12)]'
-                                          : 'border-white/8 bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]'
+                                          ? 'border-cyan-400/38 bg-cyan-500/[0.09] shadow-[0_0_0_1px_rgba(34,211,238,0.08)]'
+                                          : 'border-white/8 bg-white/[0.025] hover:border-white/14 hover:bg-white/[0.05]'
                                       }`}
                                     >
-                                      <div className="flex items-center justify-between gap-3">
-                                        <span className={`text-[10px] font-black uppercase tracking-[0.22em] ${active ? 'text-cyan-300' : 'text-white/40'}`}>{item.id}</span>
-                                        <span className={`text-[9px] font-bold uppercase tracking-[0.16em] ${active ? 'text-emerald-300/90' : 'text-white/25'}`}>{item.theme ?? 'Update'}</span>
-                                      </div>
-                                      <div className={`mt-2 text-[11px] font-black uppercase tracking-[0.08em] ${active ? 'text-white' : 'text-white/72'}`}>{item.title}</div>
-                                      <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.15em] text-white/32">{item.date}</div>
-                                      <div className="mt-3 flex flex-wrap gap-1.5">
-                                        {(item.tags ?? []).slice(0, 3).map((tag) => (
-                                          <span key={`${item.id}-${tag}`} className={`rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] ${active ? 'border-cyan-300/20 bg-cyan-400/10 text-cyan-200' : 'border-white/10 bg-white/[0.03] text-white/45'}`}>
-                                            {tag}
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] ${
+                                          active ? 'border-cyan-300/22 bg-cyan-400/10 text-cyan-200' : 'border-white/10 bg-white/[0.03] text-white/46'
+                                        }`}>
+                                          {item.id}
+                                        </span>
+                                        {idx === 0 && (
+                                          <span className="rounded-full border border-amber-300/18 bg-amber-400/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-amber-200">
+                                            Latest
                                           </span>
-                                        ))}
+                                        )}
                                       </div>
-                                      {idx === 0 && (
-                                        <div className="mt-3 text-[9px] font-black uppercase tracking-[0.18em] text-amber-300/85">Newest deployment</div>
-                                      )}
+                                      <div className={`mt-3 text-[15px] font-black leading-6 ${active ? 'text-white' : 'text-white/84'}`}>
+                                        {item.title}
+                                      </div>
+                                      <div className="mt-2 text-[11px] font-bold uppercase tracking-[0.14em] text-white/34">
+                                        {item.date}
+                                      </div>
                                     </button>
                                   );
-                                })}
+                                }) : (
+                                  <div className="rounded-[1.2rem] border border-white/8 bg-white/[0.025] px-4 py-5 text-sm leading-6 text-white/54">
+                                    Nothing matched this search. Try a release id, title, feature, or tag.
+                                  </div>
+                                )}
                             </div>
-
-                            <button
-                              onClick={() => setShowUpdateHistory(false)}
-                              className="mt-5 shrink-0 w-full py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 text-[11px] font-black uppercase tracking-[0.2em] transition"
-                            >
-                                Close Terminal
-                            </button>
                         </aside>
 
-                        <section className="flex flex-col min-h-0 bg-[linear-gradient(180deg,rgba(4,10,18,0.88),rgba(2,4,10,0.98))]">
-                            <div className="px-5 md:px-8 py-5 border-b border-white/10 bg-cyan-500/[0.04] flex flex-col gap-4 shrink-0">
-                                <div className="flex items-center justify-between gap-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-                                        <span className="text-[10px] font-black text-cyan-300 uppercase tracking-[0.3em]">Release Briefing</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        onClick={() => handleCopyUpdateLog(fullArchiveClipboardText, 'Full update log', archiveCopyFallbackRef)}
-                                        className="rounded-full border border-cyan-300/24 bg-cyan-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18"
-                                      >
-                                        Copy Full Log
-                                      </button>
-                                      {ownerToolsEnabled && (
-                                        <span className="rounded-full border border-amber-300/28 bg-amber-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-amber-200">
-                                          Owner Tools Enabled
-                                        </span>
-                                      )}
-                                      <span className="text-[10px] text-white/35 font-bold uppercase tracking-[0.2em]">{UPDATE_LOG.length} entries indexed</span>
-                                    </div>
-                                </div>
-
-                                {selectedUpdate && (
-                                  <div className="rounded-[1.45rem] border border-cyan-400/16 bg-[linear-gradient(180deg,rgba(7,14,24,0.96),rgba(5,10,18,0.9))] px-5 py-5 md:px-6 md:py-6">
-                                      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-                                          <div className="max-w-3xl">
-                                              <div className="flex flex-wrap items-center gap-2">
-                                                  <span className="rounded-full border border-cyan-400/25 bg-cyan-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300">{selectedUpdate.id}</span>
-                                                  <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-white/72">{selectedUpdate.theme ?? 'Update'}</span>
-                                                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/38">{selectedUpdate.date}</span>
-                                              </div>
-                                              <h3 className="mt-4 text-2xl md:text-[2rem] font-black text-white uppercase tracking-tight">{selectedUpdate.title}</h3>
-                                              <p className="mt-3 max-w-3xl text-sm leading-7 text-white/70 md:text-[15px]">{selectedUpdate.content}</p>
-                                          </div>
-                                          <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4 lg:min-w-[260px]">
-                                              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300/70">Release Snapshot</div>
-                                              <div className="mt-3 grid grid-cols-3 gap-3">
-                                                  <div>
-                                                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/34">Sections</div>
-                                                      <div className="mt-1 text-lg font-black text-white">{selectedUpdate.sections?.length ?? 0}</div>
-                                                  </div>
-                                                  <div>
-                                                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/34">Notes</div>
-                                                      <div className="mt-1 text-lg font-black text-cyan-300">
-                                                        {(selectedUpdate.sections ?? []).reduce((sum, section) => sum + section.items.length, 0)}
-                                                      </div>
-                                                  </div>
-                                                  <div>
-                                                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/34">Tags</div>
-                                                      <div className="mt-1 text-lg font-black text-white">{selectedUpdate.tags?.length ?? 0}</div>
-                                                  </div>
-                                              </div>
-                                              <div className="mt-3 text-[11px] leading-5 text-white/52">
-                                                Every section below is grouped for quick reading and clean manual posting.
-                                              </div>
-                                          </div>
+                        <section className="custom-scrollbar min-h-0 overflow-y-auto px-8 py-7">
+                            {selectedUpdate ? (
+                              <div className="mx-auto max-w-[720px]">
+                                  <div className="border-b border-white/8 pb-6">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                          <span className="rounded-full border border-cyan-300/22 bg-cyan-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-200">
+                                            {selectedUpdate.id}
+                                          </span>
+                                          <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-white/68">
+                                            {selectedUpdate.theme ?? 'Update'}
+                                          </span>
+                                          <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-white/38">
+                                            {selectedUpdate.date}
+                                          </span>
                                       </div>
-
-                                      <div className="mt-4 flex flex-wrap gap-2">
+                                      <h3 className="mt-4 text-[2.35rem] font-black leading-[1.05] tracking-tight text-white">
+                                        {selectedUpdate.title}
+                                      </h3>
+                                      <p className="mt-4 text-[15px] leading-8 text-white/70">
+                                        {selectedUpdate.content}
+                                      </p>
+                                      {(selectedUpdate.tags?.length ?? 0) > 0 && (
+                                        <div className="mt-5 flex flex-wrap gap-2">
                                           {(selectedUpdate.tags ?? []).map((tag) => (
-                                            <span key={`${selectedUpdate.id}-tag-${tag}`} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-white/68">
+                                            <span
+                                              key={`${selectedUpdate.id}-tag-${tag}`}
+                                              className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/58"
+                                            >
                                               {tag}
                                             </span>
                                           ))}
-                                      </div>
-
-                                      <div className="mt-5 rounded-[1.35rem] border border-cyan-300/16 bg-[linear-gradient(180deg,rgba(8,18,30,0.88),rgba(6,12,22,0.76))] px-4 py-4 md:px-5">
-                                          <div className="flex flex-col gap-4">
-                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                              <div>
-                                                <div className="text-[10px] font-black uppercase tracking-[0.26em] text-cyan-200/78">Archive Export</div>
-                                                <div className="mt-1 text-xs leading-5 text-white/58">Full-context copy tools for manual posting, backup, or patch-note sharing. Nothing gets trimmed here.</div>
-                                              </div>
-                                              {ownerToolsEnabled && (
-                                                <div className="rounded-full border border-amber-300/18 bg-amber-400/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
-                                                  Owner mode unlocked
-                                                </div>
-                                              )}
-                                            </div>
-
-                                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                                              <div className="rounded-xl border border-cyan-300/14 bg-cyan-400/[0.05] px-4 py-3">
-                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Selected Release Export</div>
-                                                <div className="mt-1 text-xs leading-5 text-white/66">Copies the active release with its summary, tags, and every section note intact.</div>
-                                              </div>
-                                              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-                                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Export</div>
-                                                <div className="mt-1 text-xs leading-5 text-white/66">Copies the entire release archive with every entry preserved, ready for paste anywhere you need it.</div>
-                                              </div>
-                                            </div>
-
-                                            <div className="flex flex-wrap gap-2">
-                                              <button
-                                                onClick={() => handleCopyUpdateLog(selectedUpdateClipboardText, 'Selected release', selectedReleaseExportRef)}
-                                                className="rounded-xl border border-amber-300/28 bg-amber-400/14 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-400/20"
-                                              >
-                                                Copy Selected Release
-                                              </button>
-                                              <button
-                                                onClick={() => handleCopyUpdateLog(fullArchiveClipboardText, 'Full archive', fullArchiveExportRef)}
-                                                className="rounded-xl border border-cyan-300/24 bg-cyan-400/12 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/18"
-                                              >
-                                                Copy Full Archive
-                                              </button>
-                                            </div>
-
-                                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                                              <label className="flex flex-col gap-1">
-                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Selected Release Preview</span>
-                                                <textarea
-                                                  ref={selectedReleaseExportRef}
-                                                  readOnly
-                                                  value={selectedUpdateClipboardText}
-                                                  className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
-                                                />
-                                              </label>
-                                              <label className="flex flex-col gap-1">
-                                                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/42">Full Archive Preview</span>
-                                                <textarea
-                                                  ref={fullArchiveExportRef}
-                                                  readOnly
-                                                  value={fullArchiveClipboardText}
-                                                  className="min-h-[180px] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-5 text-white/78 outline-none"
-                                                />
-                                              </label>
-                                            </div>
-
-                                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Copy Status</div>
-                                              <div className="mt-1 text-xs leading-5 text-white/72">
-                                                {ownerCopyStatus || 'Ready. Copy the selected release or the full archive and paste it wherever you need the complete update context.'}
-                                              </div>
-                                            </div>
-                                          </div>
-                                      </div>
+                                        </div>
+                                      )}
                                   </div>
-                                )}
-                            </div>
 
-                            <div className="flex-1 overflow-y-auto p-5 md:p-8 custom-scrollbar">
-                                <textarea
-                                  ref={archiveCopyFallbackRef}
-                                  readOnly
-                                  value={fullArchiveClipboardText}
-                                  aria-hidden="true"
-                                  tabIndex={-1}
-                                  className="pointer-events-none absolute left-[-9999px] top-0 h-px w-px opacity-0"
-                                />
-                                {selectedUpdate ? (
-                                  <div className="space-y-4">
+                                  <div className="mt-6 space-y-4">
                                       {(selectedUpdate.sections ?? []).map((section, index) => (
                                         <article
                                           key={`${selectedUpdate.id}-${section.label}`}
-                                          className="overflow-hidden rounded-[1.35rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.01))]"
+                                          className="rounded-[1.35rem] border border-white/8 bg-white/[0.025] px-5 py-5"
                                         >
-                                            <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-white/[0.02] px-5 py-4 md:px-6">
+                                            <div className="flex items-center justify-between gap-3 border-b border-white/7 pb-3">
                                                 <div className="flex items-center gap-3">
-                                                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-cyan-400/25 bg-cyan-400/10 text-[10px] font-black text-cyan-300">
+                                                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-cyan-300/22 bg-cyan-400/10 text-[10px] font-black text-cyan-200">
                                                       {index + 1}
                                                     </span>
-                                                    <h4 className="text-sm md:text-base font-black uppercase tracking-[0.08em] text-white">{section.label}</h4>
+                                                    <h4 className="text-[16px] font-black uppercase tracking-[0.06em] text-white">
+                                                      {section.label}
+                                                    </h4>
                                                 </div>
-                                                <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/32">{section.items.length} notes</span>
+                                                <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/32">
+                                                  {section.items.length} notes
+                                                </span>
                                             </div>
-                                            <div className="px-5 py-5 md:px-6">
-                                                <ul className="space-y-2.5">
-                                                    {section.items.map((line) => (
-                                                      <li key={line} className="flex items-start gap-3 rounded-xl border border-white/8 bg-black/18 px-4 py-3 text-sm leading-6 text-white/72 md:text-[15px]">
-                                                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_12px_rgba(103,232,249,0.45)]" />
-                                                          <span>{line}</span>
-                                                      </li>
-                                                    ))}
-                                                </ul>
-                                            </div>
+                                            <ul className="mt-4 space-y-3">
+                                                {section.items.map((line) => (
+                                                  <li key={line} className="flex items-start gap-3 text-[15px] leading-7 text-white/74">
+                                                      <span className="mt-[11px] h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_10px_rgba(103,232,249,0.4)]" />
+                                                      <span>{line}</span>
+                                                  </li>
+                                                ))}
+                                            </ul>
                                         </article>
                                       ))}
                                   </div>
-                                ) : (
-                                  <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-8 text-center text-white/55">
-                                      No release notes available.
+
+                                  <div className="mt-6 rounded-[1.2rem] border border-white/8 bg-black/18 px-4 py-3 text-sm leading-6 text-white/68">
+                                    {ownerCopyStatus || 'Copy the selected release or the full log whenever you want the full patch-note context ready to paste.'}
                                   </div>
-                                )}
-                            </div>
+                              </div>
+                            ) : (
+                              <div className="mx-auto flex h-full max-w-[620px] items-center justify-center">
+                                  <div className="w-full rounded-[1.5rem] border border-white/8 bg-white/[0.025] px-6 py-8 text-center">
+                                      <div className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-200/58">No Release Loaded</div>
+                                      <div className="mt-3 text-2xl font-black text-white">Nothing to show right now.</div>
+                                      <p className="mt-3 text-[15px] leading-7 text-white/56">
+                                        Try a different search or clear the current filter to bring the archive back.
+                                      </p>
+                                  </div>
+                              </div>
+                            )}
                         </section>
                     </div>
                 </div>
             </div>
         )}
-
         {showSupport && (
             <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 backdrop-blur-[28px] animate-in fade-in duration-300 p-4" onClick={() => setShowSupport(false)}>
                 <div

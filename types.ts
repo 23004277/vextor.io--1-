@@ -61,8 +61,11 @@ export enum GameMode {
 export enum PlayerState {
   ACTIVE = 'ACTIVE',
   EVOLVING = 'EVOLVING',
+  SECTOR_SELECTION = 'SECTOR_SELECTION',
   BOSS_SELECTION = 'BOSS_SELECTION',
 }
+
+export type SecondarySector = 'none' | 'restoration' | 'blood';
 
 export enum AIState {
   IDLE = 'IDLE',
@@ -135,6 +138,10 @@ export enum TankClass {
   TRI_ANGLE = 'Tri-Angle',
   HUNTER = 'Hunter',
   TRAPPER = 'Trapper',
+  DUAL_TRAPPER = 'Dual Trapper',
+  MACHINE_GUN_TRAPPER = 'Machine Gun Trapper',
+  OCTO_TRAPPER = 'Octo Trapper',
+  TRIPLE_TRAPPER = 'Triple Trapper',
   GUNNER = 'Gunner',
   DOCTOR = 'Doctor',
   OVERSEER = 'Overseer',
@@ -338,7 +345,9 @@ export interface GameState {
   stats: Record<StatType, number>;
   statRevision?: number;
   availableStatPoints: number;
+  mainClass: TankClass;
   currentClass: TankClass;
+  secondarySector: SecondarySector;
   isDead: boolean;
   fps: number;
   killFeed: KillFeedEntry[];

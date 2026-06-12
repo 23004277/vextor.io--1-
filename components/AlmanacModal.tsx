@@ -227,7 +227,7 @@ const CLASS_ROLES: Record<string, ClassRole> = {
     TACTICAL: {
         label: 'Advanced Command',
         desc: 'Control-oriented classes built around drones, turrets, and map ownership.',
-        classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.TRAPPER, TankClass.AUTO_GUNNER],
+        classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.TRAPPER, TankClass.DUAL_TRAPPER, TankClass.MACHINE_GUN_TRAPPER, TankClass.OCTO_TRAPPER, TankClass.TRIPLE_TRAPPER, TankClass.AUTO_GUNNER],
         icon: Cpu,
     },
 };
@@ -262,6 +262,10 @@ const RARITY_STYLE: Partial<Record<ShapeRarity, { text: string; bg: string; bord
 };
 
 const VOID_PORTAL_PREVIEW = ((ShapeType as unknown as Record<string, ShapeType>).VOID_PORTAL ?? ShapeType.OCTAGON) as ShapeType;
+const SHAPE_LIST = Object.values(ShapeType) as ShapeType[];
+const RARITY_LIST = Object.values(ShapeRarity) as ShapeRarity[];
+const CLASS_ROLE_ENTRIES = Object.entries(CLASS_ROLES);
+const BOSS_ROLE_ENTRIES = Object.entries(BOSS_TANK_DATA);
 
 const formatLabel = (value: string) => value.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 const formatTankName = (tankClass: TankClass) => String(tankClass).replace(/ Tank$/i, '').replace(/_/g, ' ');
@@ -286,6 +290,19 @@ const getTankComplexity = (tankClass: TankClass) => {
 };
 
 const countClasses = (roles: Record<string, ClassRole>) => Object.values(roles).reduce((total, role) => total + role.classes.length, 0);
+const TOTAL_KNOWN_CLASS_COUNT = countClasses(CLASS_ROLES) + countClasses(BOSS_TANK_DATA);
+const BOSS_LIST: BossStatView[] = Object.entries(BOSS_STATS).map(([id, raw]) => {
+    const boss = raw as Partial<BossStatView> & Record<string, unknown>;
+    return {
+        id,
+        name: String(boss.name ?? formatLabel(id)),
+        description: String(boss.description ?? 'Boss-tier entity with high durability and high reward value.'),
+        health: Number(boss.health ?? 0),
+        xp: Number(boss.xp ?? 0),
+        damage: typeof boss.damage === 'number' ? boss.damage : undefined,
+        radius: typeof boss.radius === 'number' ? boss.radius : undefined,
+    };
+});
 
 const getClassBrief = (tankClass: TankClass) => {
     switch (tankClass) {
@@ -314,6 +331,14 @@ const getClassBrief = (tankClass: TankClass) => {
         case TankClass.TRAPPER:
         case TankClass.AUTO_GUNNER:
             return 'Space control';
+        case TankClass.DUAL_TRAPPER:
+            return 'Wider trap walls';
+        case TankClass.MACHINE_GUN_TRAPPER:
+            return 'Rapid trap swarm';
+        case TankClass.OCTO_TRAPPER:
+            return '360 trap fortress';
+        case TankClass.TRIPLE_TRAPPER:
+            return 'Forward trap lanes';
         case TankClass.COLOSSAL:
             return 'Siege wall';
         case TankClass.LEVIATHAN:
@@ -428,7 +453,7 @@ const StatPanel: React.FC<{
     <div className={`min-w-0 rounded-lg border p-3 ${darkMode ? 'border-white/8 bg-black/30' : 'border-slate-200 bg-slate-50'}`}>
         <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
             {Icon && <Icon className={`h-3.5 w-3.5 shrink-0 ${tone.text}`} />}
-            <span className={`vx-mono truncate text-[9px] font-bold uppercase tracking-[0.22em] ${darkMode ? 'text-white/35' : 'text-slate-400'}`}>{label}</span>
+            <span className={`vx-mono break-words text-[9px] font-bold uppercase leading-snug tracking-[0.18em] ${darkMode ? 'text-white/35' : 'text-slate-400'}`}>{label}</span>
         </div>
         <div className={`vx-mono min-w-0 break-words text-lg font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{value}</div>
     </div>
@@ -487,8 +512,8 @@ const CategoryButton: React.FC<{
                 <Icon className={`h-4 w-4 ${isActive ? tone.text : 'text-current'}`} />
             </span>
             <span className="hidden min-w-0 flex-1 xl:block">
-                <span className={`block truncate text-[11px] font-bold uppercase tracking-[0.2em] ${isActive ? tone.text : ''}`}>{category.shortLabel}</span>
-                <span className={`mt-0.5 block truncate text-[9px] font-semibold ${darkMode ? 'text-white/24' : 'text-slate-400'}`}>{category.subtitle}</span>
+                <span className={`block break-words text-[11px] font-bold uppercase leading-snug tracking-[0.16em] ${isActive ? tone.text : ''}`}>{category.shortLabel}</span>
+                <span className={`mt-0.5 block break-words text-[9px] font-semibold leading-snug ${darkMode ? 'text-white/24' : 'text-slate-400'}`}>{category.subtitle}</span>
             </span>
             <ChevronRight className={`hidden h-3.5 w-3.5 shrink-0 xl:block ${isActive ? tone.text : 'opacity-25'}`} />
         </button>
@@ -509,7 +534,7 @@ const NoResults: React.FC<{
             <div>
                 <h3 className={`text-2xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>No Intel Found</h3>
                 <p className={`mt-2 text-sm font-medium leading-6 ${darkMode ? 'text-white/48' : 'text-slate-500'}`}>
-                    Nothing matched <span className={tone.text}>“{query}”</span>. Try a tank, rarity, boss, shape, trait, or ability name.
+                    Nothing matched <span className={tone.text}>"{query}"</span>. Try a tank, rarity, boss, shape, trait, or ability name.
                 </p>
             </div>
             <button
@@ -562,23 +587,9 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
     const activeTone = TONE[activeMeta.tone];
     const ActiveIcon = activeMeta.icon;
 
-    const shapes = useMemo(() => Object.values(ShapeType) as ShapeType[], []);
-    const rarities = useMemo(() => Object.values(ShapeRarity) as ShapeRarity[], []);
-
-    const bosses = useMemo<BossStatView[]>(() => {
-        return Object.entries(BOSS_STATS).map(([id, raw]) => {
-            const boss = raw as Partial<BossStatView> & Record<string, unknown>;
-            return {
-                id,
-                name: String(boss.name ?? formatLabel(id)),
-                description: String(boss.description ?? 'Boss-tier entity with high durability and high reward value.'),
-                health: Number(boss.health ?? 0),
-                xp: Number(boss.xp ?? 0),
-                damage: typeof boss.damage === 'number' ? boss.damage : undefined,
-                radius: typeof boss.radius === 'number' ? boss.radius : undefined,
-            };
-        });
-    }, []);
+    const shapes = SHAPE_LIST;
+    const rarities = RARITY_LIST;
+    const bosses = BOSS_LIST;
 
     const filteredShapes = useMemo(() => {
         const results = shapes.filter(shape => {
@@ -594,7 +605,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
     }, [normalizedQuery, shapeSort, shapes]);
 
     const filteredClassRoles = useMemo(() => {
-        return Object.entries(CLASS_ROLES)
+        return CLASS_ROLE_ENTRIES
             .map(([role, data]) => ({
                 role,
                 data: {
@@ -606,7 +617,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
     }, [normalizedQuery]);
 
     const filteredBossRoles = useMemo(() => {
-        return Object.entries(BOSS_TANK_DATA)
+        return BOSS_ROLE_ENTRIES
             .map(([role, data]) => ({
                 role,
                 data: {
@@ -636,6 +647,15 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
             default: return 0;
         }
     }, [activeCategory, filteredBossRoles, filteredBosses.length, filteredClassRoles, filteredShapes.length, filteredTraits.length, rarities.length]);
+
+    const selectedShapeData = useMemo(() => {
+        const visibleShape = filteredShapes.includes(selectedShape) ? selectedShape : (filteredShapes[0] ?? selectedShape);
+        return {
+            visibleShape,
+            base: SHAPE_STATS[visibleShape],
+            strategies: getShapeStrategy(visibleShape),
+        };
+    }, [filteredShapes, selectedShape]);
 
     useEffect(() => {
         window.localStorage.setItem('vextor_almanac_density', density);
@@ -693,7 +713,8 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
 
         scrollFrameRef.current = window.requestAnimationFrame(() => {
             const max = element.scrollHeight - element.clientHeight;
-            setScrollProgress(max <= 0 ? 0 : clamp(element.scrollTop / max));
+            const nextProgress = max <= 0 ? 0 : clamp(element.scrollTop / max);
+            setScrollProgress(previous => Math.abs(previous - nextProgress) > 0.008 ? nextProgress : previous);
             scrollFrameRef.current = null;
         });
     }, []);
@@ -713,7 +734,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                     </div>
                     <div className="grid grid-cols-3 gap-2 sm:min-w-[340px]">
                         <StatPanel label="Shapes" value={shapes.length} darkMode={darkMode} tone={activeTone} icon={Box} />
-                        <StatPanel label="Classes" value={countClasses(CLASS_ROLES) + countClasses(BOSS_TANK_DATA)} darkMode={darkMode} tone={activeTone} icon={Shield} />
+                        <StatPanel label="Classes" value={TOTAL_KNOWN_CLASS_COUNT} darkMode={darkMode} tone={activeTone} icon={Shield} />
                         <StatPanel label="Visible" value={visibleEntryCount} darkMode={darkMode} tone={activeTone} icon={Eye} />
                     </div>
                 </div>
@@ -755,9 +776,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
             return <NoResults query={debouncedSearch} darkMode={darkMode} tone={activeTone} onClear={clearSearch} />;
         }
 
-        const visibleShape = filteredShapes.includes(selectedShape) ? selectedShape : (filteredShapes[0] ?? selectedShape);
-        const base = SHAPE_STATS[visibleShape];
-        const strategies = getShapeStrategy(visibleShape);
+        const { visibleShape, base, strategies } = selectedShapeData;
 
         return (
             <div className="space-y-4">
@@ -789,8 +808,8 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                     onClick={() => { playSound?.(); setSelectedShape(shape); }}
                                     className={`vx-card-hover min-w-0 rounded-lg border p-3 text-left ${active ? `${activeTone.bg} ${activeTone.borderStrong}` : darkMode ? 'border-white/8 bg-white/[0.03] text-white/60 hover:text-white' : 'border-slate-200 bg-white text-slate-600 hover:text-slate-950'}`}
                                 >
-                                    <p className={`truncate text-sm font-bold uppercase tracking-[0.14em] ${active ? activeTone.text : ''}`}>{formatLabel(String(shape))}</p>
-                                    <p className={`mt-1 truncate text-[11px] font-semibold ${darkMode ? 'text-white/32' : 'text-slate-400'}`}>{shapeStats?.xp?.toLocaleString() ?? 0} XP</p>
+                                    <p className={`break-words text-sm font-bold uppercase leading-snug tracking-[0.12em] ${active ? activeTone.text : ''}`}>{formatLabel(String(shape))}</p>
+                                    <p className={`mt-1 break-words text-[11px] font-semibold leading-snug ${darkMode ? 'text-white/32' : 'text-slate-400'}`}>{shapeStats?.xp?.toLocaleString() ?? 0} XP</p>
                                 </button>
                             );
                         })}
@@ -805,7 +824,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                             </div>
                             <div className="min-w-0">
                                 <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${activeTone.softText}`}>Selected Resource</p>
-                                <h3 className={`truncate text-2xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatLabel(String(visibleShape))}</h3>
+                                <h3 className={`break-words text-2xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatLabel(String(visibleShape))}</h3>
                             </div>
                         </div>
 
@@ -915,7 +934,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                         <div className="flex items-center justify-between gap-3">
                                             <div className="min-w-0">
                                                 <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${activeTone.softText}`}>Titan Class</p>
-                                                <h4 className={`truncate text-xl font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatTankName(tankClass)}</h4>
+                                                <h4 className={`break-words text-xl font-bold uppercase italic leading-tight tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>{formatTankName(tankClass)}</h4>
                                             </div>
                                             <Crown className={`h-5 w-5 shrink-0 ${activeTone.text}`} />
                                         </div>
@@ -956,7 +975,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                             {filteredBosses.map(boss => (
                                 <div key={boss.id} className={`grid grid-cols-[1fr_.8fr_.7fr_1.8fr] gap-3 border-b px-4 py-3 text-sm last:border-b-0 ${darkMode ? 'border-white/6 text-white/70' : 'border-slate-200 text-slate-700'}`}>
                                     <div className="min-w-0">
-                                        <p className={`truncate font-bold uppercase tracking-[0.12em] ${darkMode ? 'text-white' : 'text-slate-950'}`}>{boss.name}</p>
+                                        <p className={`break-words font-bold uppercase leading-snug tracking-[0.12em] ${darkMode ? 'text-white' : 'text-slate-950'}`}>{boss.name}</p>
                                         <p className={`mt-1 text-[10px] font-bold uppercase tracking-[0.16em] ${activeTone.text}`}>{formatLabel(boss.id)}</p>
                                     </div>
                                     <span className="vx-mono">{boss.health.toLocaleString()} HP</span>
@@ -1088,6 +1107,37 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
         }
     };
 
+    const overviewContent = useMemo(() => renderOverview(), [
+        activeMeta.label,
+        activeTone,
+        compactMode,
+        darkMode,
+        performanceMode,
+        rarities.length,
+        shapes.length,
+        visibleEntryCount,
+    ]);
+
+    const categoryContent = useMemo(() => renderContent(), [
+        activeCategory,
+        activeMeta,
+        activeTone,
+        compactMode,
+        darkMode,
+        debouncedSearch,
+        filteredBossRoles,
+        filteredBosses,
+        filteredClassRoles,
+        filteredShapes,
+        filteredTraits,
+        lowMotion,
+        normalizedQuery,
+        performanceMode,
+        searchQuery,
+        selectedShapeData,
+        shapeSort,
+    ]);
+
     return (
         <>
             <style dangerouslySetInnerHTML={{ __html: ALMANAC_STYLES }} />
@@ -1123,8 +1173,8 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                 <Database className="h-5 w-5 text-amber-400" />
                             </div>
                             <div className="hidden min-w-0 xl:block">
-                                <h2 className={`vx-mono truncate text-base font-bold uppercase italic tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>VEXTOR_OS</h2>
-                                <p className="vx-mono truncate text-[9px] font-bold uppercase tracking-[0.3em] text-amber-400/60">Tactical Database</p>
+                                <h2 className={`vx-mono break-words text-base font-bold uppercase italic leading-snug tracking-tight ${darkMode ? 'text-white' : 'text-slate-950'}`}>VEXTOR_OS</h2>
+                                <p className="vx-mono break-words text-[9px] font-bold uppercase leading-snug tracking-[0.22em] text-amber-400/60">Tactical Database</p>
                             </div>
                         </div>
 
@@ -1286,7 +1336,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                 </div>
                                 </div>
 
-                                {renderOverview()}
+                                {overviewContent}
 
                                 <AnimatePresence mode="wait">
                                     <motion.div
@@ -1297,7 +1347,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                                         transition={lowMotion ? { duration: 0 } : { duration: .16, ease: 'easeOut' }}
                                         className="min-w-0"
                                     >
-                                        {renderContent()}
+                                        {categoryContent}
                                     </motion.div>
                                 </AnimatePresence>
                             </div>
@@ -1316,9 +1366,9 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                         <footer className={`hidden shrink-0 items-center justify-between gap-4 border-t px-6 py-3 md:flex ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white/55'}`}>
                             <div className="flex min-w-0 items-center gap-3">
                                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${performanceMode ? 'bg-emerald-400' : activeTone.bgStrong} ${performanceMode ? '' : 'vx-pulse-dot'}`} />
-                                <span className={`vx-mono truncate text-[9px] font-bold uppercase tracking-[0.24em] ${darkMode ? 'text-white/22' : 'text-slate-400'}`}>Terminal Active</span>
+                                <span className={`vx-mono break-words text-[9px] font-bold uppercase leading-snug tracking-[0.18em] ${darkMode ? 'text-white/22' : 'text-slate-400'}`}>Terminal Active</span>
                                 <span className={darkMode ? 'text-white/10' : 'text-slate-300'}>/</span>
-                                <span className={`vx-mono truncate text-[9px] font-bold italic ${darkMode ? 'text-white/16' : 'text-slate-300'}`}>ALT + 1-6 categories · CTRL + K search</span>
+                                <span className={`vx-mono break-words text-[9px] font-bold italic leading-snug ${darkMode ? 'text-white/16' : 'text-slate-300'}`}>ALT + 1-6 categories · CTRL + K search</span>
                             </div>
                             <div className={`flex shrink-0 items-center gap-2 vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${darkMode ? 'text-white/22' : 'text-slate-400'}`}>
                                 <Eye className="h-3 w-3" />
@@ -1332,3 +1382,4 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
         </>
     );
 };
+
