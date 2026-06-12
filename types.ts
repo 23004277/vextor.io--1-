@@ -308,6 +308,40 @@ export interface EntityStatusFlags {
   fxAbilityActive: boolean;
 }
 
+export type BotChatCategory =
+  | 'death_taunt'
+  | 'healing_request'
+  | 'panic'
+  | 'victory'
+  | 'rare_random'
+  | 'low_health';
+
+export interface BotChatBubble {
+  id: string;
+  botId: number;
+  name: string;
+  classType: TankClass;
+  team: Team;
+  category: BotChatCategory;
+  text: string;
+  displayText: string;
+  typing: boolean;
+  opacity: number;
+  worldPos: Vector2;
+  accentColor: string;
+}
+
+export interface DeathPresentationState {
+  mode: 'instant' | 'taunt';
+  delayActive: boolean;
+  cardVisible: boolean;
+  fadeProgress: number;
+  dimOpacity: number;
+  blurPx: number;
+  delayRemainingMs: number;
+  killerBotId?: number | null;
+}
+
 export interface SandboxConfig {
   invincible: boolean;
   infiniteAmmo: boolean;
@@ -351,6 +385,7 @@ export interface GameState {
   isDead: boolean;
   fps: number;
   killFeed: KillFeedEntry[];
+  botChatBubbles?: BotChatBubble[];
   leaderboard: LeaderboardEntry[];
   notifications: UINotification[];
   health: number;
@@ -395,6 +430,7 @@ export interface GameState {
   dominionOwnedCount?: Partial<Record<Team, number>>;
   dominionTimeRemaining?: number;
   dominionZones?: DominionZoneState[];
+  deathPresentation?: DeathPresentationState;
 }
 
 // --- Shop Types ---

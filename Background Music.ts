@@ -9,8 +9,8 @@ export type BackgroundMusicSection =
   | 'finale';
 
 export type BackgroundMusicVisualizerFrame = {
-  bars: number[];
-  waveform: number[];
+  bars: ReadonlyArray<number>;
+  waveform: ReadonlyArray<number>;
   beatPulse: number;
   beatPhase: number;
   downbeatPulse: number;
@@ -42,7 +42,12 @@ export type BackgroundMusicVisualizerFrame = {
   volume: number;
 };
 
-const MENU_TRACK_URL = new URL('./musicasset/Button_Mash_Glory.mp3', import.meta.url).href;
+type AudioByteBuffer = Uint8Array<ArrayBuffer>;
+
+const MENU_TRACK_URLS = [
+  new URL('./musicasset/Button_Mash_Glory.mp3', import.meta.url).href,
+  new URL('./musicasset/Final_Sector_Charge.mp3', import.meta.url).href,
+] as const;
 const FALLBACK_DURATION_SECONDS = 180;
 const FADE_IN_MS = 1400;
 const FADE_OUT_MS = 900;
@@ -61,7 +66,7 @@ const MENU_BEAT_MAP_SECONDS: number[] = [
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const lerp = (from: number, to: number, alpha: number) => from + (to - from) * alpha;
 
-const averageRange = (data: Uint8Array, start: number, end: number): number => {
+const averageRange = (data: ArrayLike<number>, start: number, end: number): number => {
   const safeStart = clamp(Math.floor(start), 0, data.length);
   const safeEnd = clamp(Math.floor(end), safeStart + 1, data.length);
   let total = 0;
@@ -77,8 +82,10 @@ const formatTime = (totalSeconds: number): string => {
 };
 
 const createZeroBars = (count: number) => Array.from({ length: count }, () => 0);
+const EMPTY_BARS = Object.freeze(createZeroBars(DEFAULT_BAR_COUNT));
+const EMPTY_WAVEFORM = Object.freeze(createZeroBars(DEFAULT_WAVEFORM_POINTS));
 
-const getBars = (data: Uint8Array, barCount: number, output: number[]): number[] => {
+const getBars = (data: ArrayLike<number>, barCount: number, output: number[]): number[] => {
   const usableBins = Math.max(1, Math.floor(data.length * 0.92));
   const binsPerBar = usableBins / barCount;
   if (output.length !== barCount) output.length = barCount;
@@ -103,7 +110,7 @@ const getBars = (data: Uint8Array, barCount: number, output: number[]): number[]
   return output;
 };
 
-const getWaveform = (data: Uint8Array, pointCount: number, output: number[]): number[] => {
+const getWaveform = (data: ArrayLike<number>, pointCount: number, output: number[]): number[] => {
   const step = Math.max(1, Math.floor(data.length / pointCount));
   if (output.length !== pointCount) output.length = pointCount;
   for (let i = 0; i < pointCount; i += 1) {
@@ -137,8 +144,8 @@ export class BackgroundMusic {
   private analyserNode: AnalyserNode | null = null;
   private gainNode: GainNode | null = null;
 
-  private frequencyData: Uint8Array | null = null;
-  private timeDomainData: Uint8Array | null = null;
+  private frequencyData: AudioByteBuffer | null = null;
+  private timeDomainData: AudioByteBuffer | null = null;
   private barBuffer = createZeroBars(DEFAULT_BAR_COUNT);
   private waveformBuffer = createZeroBars(DEFAULT_WAVEFORM_POINTS);
 
@@ -157,12 +164,46 @@ export class BackgroundMusic {
   private lastFrameAt = 0;
   private lastBeatDetected = false;
   private currentGain = 0;
+  private trackIndex = 0;
+  private frameCache: BackgroundMusicVisualizerFrame = {
+    bars: EMPTY_BARS,
+    waveform: EMPTY_WAVEFORM,
+    beatPulse: 0,
+    beatPhase: 1,
+    downbeatPulse: 0,
+    beatDetected: false,
+    manualBeatPulse: 0,
+    bass: 0,
+    mids: 0,
+    highs: 0,
+    energy: 0,
+    reactorPulse: 0,
+    logoPulse: 0,
+    backgroundGlow: 0,
+    bloom: 0,
+    particleBurst: 0,
+    uiFlicker: 0,
+    scanlineIntensity: 0,
+    glitchIntensity: 0,
+    currentTime: 0,
+    duration: FALLBACK_DURATION_SECONDS,
+    progress: 0,
+    section: 'idle',
+    sectionLabel: 'Signal Idle',
+    breakActive: false,
+    breakRemaining: 0,
+    loopCount: 0,
+    formattedCurrentTime: '00:00',
+    formattedDuration: formatTime(FALLBACK_DURATION_SECONDS),
+    paused: true,
+    volume: 0,
+  };
 
   init(): void {
     if (this.audio) return;
 
-    const audio = new Audio(MENU_TRACK_URL);
-    audio.loop = true;
+    const audio = new Audio(MENU_TRACK_URLS[this.trackIndex]);
+    audio.loop = false;
     audio.preload = 'auto';
     audio.currentTime = 0;
     audio.crossOrigin = 'anonymous';
@@ -265,6 +306,7 @@ export class BackgroundMusic {
     this.waveformBuffer = createZeroBars(DEFAULT_WAVEFORM_POINTS);
     this.smoothedBars = createZeroBars(DEFAULT_BAR_COUNT);
     this.smoothedWaveform = createZeroBars(DEFAULT_WAVEFORM_POINTS);
+    this.trackIndex = 0;
     this.prevBass = 0;
     this.beatPulse = 0;
     this.downbeatPulse = 0;
@@ -303,7 +345,7 @@ export class BackgroundMusic {
     let energy = 0;
     let beatDetected = false;
 
-    if (isAudioActive && this.frequencyData && this.timeDomainData) {
+    if (audio && analyser && !audio.paused && this.state === 'playing' && this.frequencyData && this.timeDomainData) {
       analyser.getByteFrequencyData(this.frequencyData);
       analyser.getByteTimeDomainData(this.timeDomainData);
 
@@ -366,9 +408,9 @@ export class BackgroundMusic {
     const scanlineIntensity = clamp(this.smoothedHighs * 0.7 + this.beatPulse * 0.15, 0, 1.1);
     const glitchIntensity = clamp(this.smoothedHighs * 0.42 + this.manualBeatPulse * 0.58, 0, 1.15);
 
-    return {
-      bars: [...this.smoothedBars],
-      waveform: [...this.smoothedWaveform],
+    this.frameCache = {
+      bars: this.smoothedBars,
+      waveform: this.smoothedWaveform,
       beatPulse: clamp(this.beatPulse + this.manualBeatPulse * 0.55, 0, 1.5),
       beatPhase: clamp(1 - reactorPulse * 0.6, 0, 1),
       downbeatPulse: downbeat,
@@ -399,6 +441,7 @@ export class BackgroundMusic {
       paused: !isAudioActive,
       volume: this.currentGain,
     };
+    return this.frameCache;
   }
 
   private ensureAudioGraph(): void {
@@ -470,9 +513,48 @@ export class BackgroundMusic {
   }
 
   private readonly handleEnded = (): void => {
-    this.loopCount += 1;
-    this.manualBeatCursor = 0;
+    void this.advanceTrack();
   };
+
+  private async advanceTrack(): Promise<void> {
+    const audio = this.audio;
+    if (!audio) return;
+
+    const nextIndex = (this.trackIndex + 1) % MENU_TRACK_URLS.length;
+    const wrappedPlaylist = nextIndex === 0 && MENU_TRACK_URLS.length > 0;
+
+    this.trackIndex = nextIndex;
+    if (wrappedPlaylist) {
+      this.loopCount += 1;
+    }
+
+    this.manualBeatCursor = 0;
+    this.lastCurrentTime = 0;
+    this.prevBass = 0;
+    this.beatPulse = 0;
+    this.downbeatPulse = 0;
+    this.manualBeatPulse = 0;
+
+    audio.src = MENU_TRACK_URLS[this.trackIndex];
+    audio.currentTime = 0;
+    audio.load();
+
+    if (!this.wantsPlayback) {
+      this.state = 'paused';
+      return;
+    }
+
+    try {
+      await audio.play();
+      this.state = 'playing';
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'NotAllowedError') {
+        this.state = 'paused';
+        return;
+      }
+      throw error;
+    }
+  }
 
   private getCurrentTime(): number {
     const current = this.audio?.currentTime ?? 0;

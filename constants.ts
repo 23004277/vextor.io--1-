@@ -1126,9 +1126,9 @@ export const UPDATE_LOG = [
         id: 'v1.9.2',
         title: "SECTOR SYSTEMS AND MENU SYNC",
         date: "12/06/26",
-        content: "Blood and Restoration now act as secondary sectors instead of full class branches, letting your main chassis progression continue cleanly while the latest menu, sandbox, HUD, AI, and combat polish lands around that rework.",
+        content: "Blood and Restoration now function as secondary sectors instead of full class branches, while the menu intro, audio flow, aura visuals, and Dominion balance all received a cleanup pass around that rework.",
         theme: "Sectors / Sandbox / Audio / UI / AI",
-        tags: ["Sectors", "Blood", "Restoration", "Sandbox", "UI", "AI"],
+        tags: ["Sectors", "Blood", "Restoration", "Audio", "UI", "Dominion", "AI"],
         sections: [
             {
                 label: "Sector Rework",
@@ -1139,18 +1139,19 @@ export const UPDATE_LOG = [
                 ],
             },
             {
-                label: "Game And UI",
+                label: "Menu And Presentation",
                 items: [
-                    "Updated HUD and ability logic to read active sectors instead of legacy Blood and Restoration class branches.",
-                    "Continued sandbox, preview, and main menu cleanup for better organisation, cleaner visuals, and safer control flow.",
-                    "Refined the menu audio visualizer, UI spacing, and related presentation passes around the current build.",
+                    "Simplified the click-to-play screen so the menu handoff is cleaner and no longer fights the layout.",
+                    "Fixed menu spacing, scrolling, and visualizer presentation issues across the updated intro flow.",
+                    "Menu music now rotates between both tracks correctly instead of stalling on a single song end.",
                 ],
             },
             {
-                label: "AI And Combat Polish",
+                label: "Gameplay Fixes And Dominion",
                 items: [
-                    "Continued trap, aura, and combat cleanup so the new progression model plays more consistently in live matches.",
-                    "Improved several AI and sandbox-side behaviors during the same pass to reduce odd class and objective interactions.",
+                    "Restoration and Blood selections now show their aura visuals correctly in live play.",
+                    "Removed pentagon nest pressure from Dominion to cut down on objective-side imbalance.",
+                    "Dominion bots now route around objectives more intelligently, regroup more often, and stop feeding into bad fights as easily.",
                     "This release log stays short for webhook safety. For the fuller archive, open the in-game update log.",
                 ],
             },

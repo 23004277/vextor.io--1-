@@ -1,4 +1,4 @@
-import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector } from '../types';
+import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector, BotChatBubble, BotChatCategory, DeathPresentationState } from '../types';
 import { BASE_STATS, BOSS_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG, SHOP_ITEMS, getShapeRarityTable, SECONDARY_SECTOR_OPTIONS } from '../constants';
 import * as Vector from './MathUtils';
 import { SoundEngine } from './SoundEngine';
@@ -39,6 +39,30 @@ type DominionZoneDef = {
 };
 
 type DominionWeaponProfile = 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE';
+type ActiveBotChat = {
+    id: string;
+    botId: number;
+    name: string;
+    classType: TankClass;
+    team: Team;
+    category: BotChatCategory;
+    text: string;
+    createdAt: number;
+    typingUntil: number;
+    visibleUntil: number;
+    expiresAt: number;
+    worldPos: Vector2;
+    accentColor: string;
+    persistAfterDeath: boolean;
+};
+type PlayerDeathPresentation = {
+    mode: 'instant' | 'taunt';
+    startedAt: number;
+    overlayAt: number;
+    completeAt: number;
+    fadeSeconds: number;
+    killerBotId: number | null;
+};
 
 const DOMINION_TANK_MAX_HEALTH = 30000;
 const DOMINION_TANK_RADIUS = 62;
@@ -46,6 +70,166 @@ const ELITE_TANK_HEALTH_BASE = 22000;
 const ELITE_TANK_HEALTH_PER_LEVEL = 190;
 const ELITE_TANK_SHIELD_BASE = 320;
 const ELITE_TANK_SPEED_CAP = 0.92;
+const MAX_ACTIVE_BOT_CHATS = 4;
+const BOT_CHAT_BASE_COOLDOWN_MS = 12000;
+const BOT_RARE_CHAT_COOLDOWN_MS = 18000;
+const BOT_DEATH_TAUNT_GLOBAL_COOLDOWN_MS = 14000;
+const BOT_DEATH_TAUNT_TYPING_MS = 1750;
+const BOT_DEATH_TAUNT_VISIBLE_MS = 1000;
+const BOT_DEATH_TAUNT_DELAY_MS = 3000;
+const BOT_DEATH_TAUNT_FADE_MS = 450;
+
+const BOT_CHAT_LINES: Record<BotChatCategory, string[]> = {
+    death_taunt: [
+        'ez',
+        'sit down',
+        'bro got recycled',
+        'skill issue detected',
+        'back to the menu you go',
+        'was that your plan?',
+        'target deleted',
+        'nice try lil bro',
+        'you good?',
+        'that was personal',
+        'command grid says no',
+        'arena privileges revoked',
+        'respawn and pretend that never happened',
+        'bro entered the wrong postcode',
+        'your tank warranty just expired',
+    ],
+    healing_request: [
+        'need heals',
+        'restore me pls',
+        'low hp!',
+        'healer, over here',
+        "i'm one shot",
+        'save me bro',
+        'my health bar is cooked',
+        'restoration needed',
+        "i'm getting folded",
+        'heal aura pls',
+    ],
+    panic: [
+        'nah im out',
+        'too many angles',
+        'abort abort',
+        'this lane is cursed',
+        'im getting farmed',
+    ],
+    victory: [
+        'clean pick',
+        'target folded',
+        'thats one less problem',
+        'grid secured',
+    ],
+    rare_random: [
+        'systems nominal',
+        'who parked that crasher there',
+        'this lobby smells like tilt',
+        'holding the lane',
+        'vextor is watching',
+    ],
+    low_health: [
+        'barely alive',
+        'hull critical',
+        'one pixel left',
+        'not like this',
+    ],
+};
+
+const BOT_CLASS_CHAT_LINES: Partial<Record<BotChatCategory, Partial<Record<string, string[]>>>> = {
+    death_taunt: {
+        sniper: [
+            'cross-map receipt delivered',
+            'held that angle for you',
+            'range diff',
+            'you walked into the lane',
+        ],
+        rusher: [
+            'ran you down',
+            'full send worked',
+            'bonk confirmed',
+            'too slow',
+        ],
+        support: [
+            'diagnosis complete',
+            'support still clears',
+            'prescription: respawn',
+            'healing denied',
+        ],
+        boss: [
+            'kneel before the grid',
+            'your resistance was decorative',
+            'the arena chose me',
+            'a predictable collapse',
+        ],
+    },
+    healing_request: {
+        support: [
+            'support needs support',
+            'patch me up',
+            'restoration on me',
+        ],
+        sniper: [
+            'need heals on backline',
+            'cover me, low hull',
+        ],
+        rusher: [
+            'heals now bro',
+            'i sent too hard',
+        ],
+    },
+    panic: {
+        sniper: [
+            'theyre diving backline',
+            'too close too close',
+        ],
+        rusher: [
+            'nah this push is cursed',
+            'reverse reverse',
+        ],
+        support: [
+            'team where are you',
+            'need peel right now',
+        ],
+    },
+    victory: {
+        sniper: [
+            'clean angle',
+            'picked from downtown',
+        ],
+        rusher: [
+            'ran the lobby',
+            'thats another one',
+        ],
+        support: [
+            'support diff',
+            'stabilised and secured',
+        ],
+        boss: [
+            'your struggle amused me',
+            'the grid remains mine',
+        ],
+    },
+    rare_random: {
+        sniper: [
+            'holding long sightlines',
+            'angle secured',
+        ],
+        rusher: [
+            'brain empty throttle full',
+            'looking for chaos',
+        ],
+        support: [
+            'staying near the wounded',
+            'watching ally vitals',
+        ],
+        boss: [
+            'the arena hums for me',
+            'all signals bow inward',
+        ],
+    },
+};
 
 const SKIN_APPLICATION = {
     clamp: {
@@ -1813,14 +1997,14 @@ class Tank extends Entity {
   drawAuras(ctx: CanvasRenderingContext2D) {
       const isBoss = this.isBossClass(this.classType);
       const isEliteVisual = this.isTransformed;
-      const isPacifist = this.isPacifist(this.classType);
-      const isDraining = this.isDraining(this.classType);
+      const hasRestorationSector = this.hasRestorationSector();
+      const hasBloodSector = this.hasBloodSector();
 
       if (this.classType === TankClass.CELESTIAL && isBoss) {
         this.drawCelestialBossAura(ctx);
       }
 
-      if (isPacifist) {
+      if (hasRestorationSector && this.healingAuraRadius > 0) {
         const t = Date.now() / 1000;
         ctx.save();
         const auraRadius = this.healingAuraRadius * (1.0 + Math.sin(t * 2.3) * 0.035);
@@ -1874,7 +2058,7 @@ class Tank extends Entity {
 
       const isColossalBloodCore = this.classType === TankClass.COLOSSAL && this.isBossClass(this.classType);
       const drainingAuraRadius = this.drainAuraRadius || 0;
-      if ((isDraining || isColossalBloodCore) && drainingAuraRadius > 0) {
+      if ((hasBloodSector || isColossalBloodCore) && drainingAuraRadius > 0) {
         const t = Date.now() / 1000;
         ctx.save();
         const auraRadius = drainingAuraRadius * (1.0 + Math.sin(t * (isColossalBloodCore ? 2.4 : 4)) * 0.03);
@@ -7736,6 +7920,12 @@ export class GameEngine {
     commonShapeCooldown: number = 0;
     commonShapeMaxActive: number = 180;
   killFeed: KillFeedEntry[] = [];
+  botChats: ActiveBotChat[] = [];
+  private readonly botChatCooldowns = new Map<number, number>();
+  private readonly botChatLastLine = new Map<number, string>();
+  private botDeathTauntGlobalCooldownUntil = 0;
+  private playerDeathPresentation: PlayerDeathPresentation | null = null;
+  private elapsedMs = 0;
   attractMode: boolean = true;
   spectateTarget: Tank | null = null;
   manualSpectateMode: boolean = false;
@@ -8481,7 +8671,6 @@ export class GameEngine {
         const purplePressure = this.zoneTeamPressurePurple[i] || 0;
         const teamSpread = Math.max(bluePressure, redPressure, greenPressure, purplePressure) - Math.min(bluePressure, redPressure, greenPressure, purplePressure);
         score += midBias * 1.9;
-        score += nestBias * 2.8;
         score += quietBias * 1.2;
         score += Math.max(0, 2 - teamSpread) * 0.85;
       } else if (this.gameMode === GameMode.TEAMS) {
@@ -8524,7 +8713,32 @@ export class GameEngine {
     const nestBias = Math.max(0, 1 - distNorm / 0.26);
     const roll = Math.random();
 
-    if (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) {
+    if (this.gameMode === GameMode.DOMINION) {
+      const midBias = 1 - distNorm;
+      const dodecThresh = Math.max(0.00006, 0.0001 + midBias * 0.00045);
+      const decThresh = dodecThresh + Math.max(0.00016, 0.00028 + midBias * 0.0009);
+      const nonThresh = decThresh + Math.max(0.00034, 0.00062 + midBias * 0.0015);
+      const octThresh = nonThresh + Math.max(0.0009, 0.0019 + midBias * 0.0038 - commonBias * 0.0008);
+      const hexThresh = octThresh + Math.max(0.0032, 0.0064 + midBias * 0.0082 - commonBias * 0.0038);
+      const heptThresh = hexThresh + Math.max(0.0068, 0.011 + midBias * 0.0115 - commonBias * 0.0052);
+      const pentThresh = heptThresh + Math.max(0.014, 0.022 + midBias * 0.016 - commonBias * 0.0075);
+      const starThresh = Math.min(0.56, pentThresh + 0.13 + commonBias * 0.04);
+      const triThresh = Math.min(0.89, starThresh + 0.29 + commonBias * 0.05);
+      const diaThresh = Math.min(0.976, triThresh + 0.13 + commonBias * 0.04);
+      if (roll < dodecThresh) return ShapeType.DODECAGON;
+      if (roll < decThresh) return ShapeType.DECAGON;
+      if (roll < nonThresh) return ShapeType.NONAGON;
+      if (roll < octThresh) return ShapeType.OCTAGON;
+      if (roll < hexThresh) return ShapeType.HEXAGON;
+      if (roll < heptThresh) return ShapeType.HEPTAGON;
+      if (roll < pentThresh) return ShapeType.PENTAGON;
+      if (roll < starThresh) return ShapeType.STAR;
+      if (roll < triThresh) return ShapeType.TRIANGLE;
+      if (roll < diaThresh) return ShapeType.DIAMOND;
+      return ShapeType.SQUARE;
+    }
+
+    if (this.gameMode === GameMode.TEAMS) {
       const midBias = 1 - distNorm;
       const dodecThresh = Math.max(0.00008, 0.00012 + midBias * 0.00075 + nestBias * 0.0004);
       const decThresh = dodecThresh + Math.max(0.00018, 0.00034 + midBias * 0.0013 + nestBias * 0.00085);
@@ -9117,6 +9331,9 @@ export class GameEngine {
     this.player.shouldRemove = false;
     this.player.lastDamageSourceId = null;
     this.gameOverSignaled = false; 
+    this.playerDeathPresentation = null;
+    this.botChats = [];
+    this.botDeathTauntGlobalCooldownUntil = 0;
     this.player.invulnerableTime = 3000; // 3 seconds spawn protection
     this.kills = 0;
     this.eliteKills = 0;
@@ -9870,6 +10087,7 @@ export class GameEngine {
 
   update(dt: number) {
     this.simulationTick++;
+    this.elapsedMs += dt * 1000;
     this.aiSystem.beginTick(this.simulationTick);
     const updateStart = performance.now();
     this.updateViewportCache();
@@ -9905,6 +10123,7 @@ export class GameEngine {
     for (const t of aliveCombatTanks) {
       drainTargets.push(t);
     }
+
     this.updatePlayerSocialSignals(dt, aliveCombatTanks);
     const bucketBuildMs = performance.now() - bucketStart;
     this.updateAdaptiveTickRates(dt, this.entities.length);
@@ -10044,6 +10263,12 @@ export class GameEngine {
         });
     }
 
+    if (runAmbientTick) {
+        this.maybeTriggerHealingRequests(aliveCombatTanks, aliveRestorationTanks);
+        this.maybeTriggerAmbientBotFlavor(aliveCombatTanks);
+    }
+    this.updateBotChats();
+
     if (this.playerState === PlayerState.SECTOR_SELECTION) {
         this.player.vel = { x: 0, y: 0 };
     } else if (this.playerState === PlayerState.EVOLVING) {
@@ -10165,6 +10390,7 @@ export class GameEngine {
 
     if (!this.attractMode && this.player.isDead && !this.gameOverSignaled) { 
         this.gameOverSignaled = true; 
+        this.beginPlayerDeathPresentation(this.resolveKillerForVictim(this.player));
         this.sound.playDeath();
         this.onGameOver({
             score: this.player.score,
@@ -10502,6 +10728,7 @@ export class GameEngine {
           isDead: this.player.isDead, 
         fps: Math.round(1/dt), 
         killFeed: this.killFeed, 
+        botChatBubbles: this.getRenderedBotChats(),
         leaderboard: leaderboard, 
         notifications: this.uiNotifications, 
         health: this.player.displayHealth, 
@@ -10539,7 +10766,8 @@ export class GameEngine {
         dominionScores: this.gameMode === GameMode.DOMINION ? { ...this.dominionScores } : undefined,
         dominionOwnedCount: this.gameMode === GameMode.DOMINION ? { ...this.dominionOwnedCount } : undefined,
         dominionTimeRemaining: this.gameMode === GameMode.DOMINION ? this.dominionMatchTimer : undefined,
-        dominionZones: this.gameMode === GameMode.DOMINION ? this.getDominionZoneStates() : undefined
+        dominionZones: this.gameMode === GameMode.DOMINION ? this.getDominionZoneStates() : undefined,
+        deathPresentation: this.getDeathPresentationState(),
       });
     }
 
@@ -12942,6 +13170,299 @@ export class GameEngine {
     return { onScreen, distanceNorm, pan, important };
   }
 
+  private getBotChatAccent(team: Team, category: BotChatCategory): string {
+    if (category === 'death_taunt') return '#f97316';
+    if (category === 'healing_request' || category === 'low_health') return '#4ade80';
+    if (category === 'panic') return '#facc15';
+    return getTeamColor(team);
+  }
+
+  private getBotChatVoiceKey(bot: Tank): string {
+    if (bot.isTransformed || this.isBossClass(bot.classType)) return 'boss';
+    if (bot.secondarySector === 'restoration' || this.isPacifist(bot.classType)) return 'support';
+    if (
+      bot.classType === TankClass.SNIPER ||
+      bot.classType === TankClass.RANGER ||
+      bot.classType === TankClass.ASSASSIN ||
+      bot.classType === TankClass.STALKER ||
+      bot.classType === TankClass.HUNTER ||
+      bot.classType === TankClass.X_HUNTER
+    ) return 'sniper';
+    if (
+      bot.classType === TankClass.BOOSTER ||
+      bot.classType === TankClass.TRI_ANGLE ||
+      bot.classType === TankClass.FIGHTER
+    ) return 'rusher';
+    return 'default';
+  }
+
+  private resolveBotChatLine(category: BotChatCategory, bot: Tank): string {
+    const voiceKey = this.getBotChatVoiceKey(bot);
+    const classPool = BOT_CLASS_CHAT_LINES[category]?.[voiceKey];
+    const pool = classPool && classPool.length > 0 ? classPool : BOT_CHAT_LINES[category];
+    if (!pool || pool.length === 0) return '...';
+    const lastLine = this.botChatLastLine.get(bot.id);
+    const choices = pool.length > 1 ? pool.filter((line) => line !== lastLine) : pool;
+    const picked = choices[Math.floor(Math.random() * choices.length)] ?? pool[0];
+    this.botChatLastLine.set(bot.id, picked);
+    return picked;
+  }
+
+  private canBotSpeak(botId: number, cooldownMs: number): boolean {
+    return (this.botChatCooldowns.get(botId) ?? 0) <= this.elapsedMs;
+  }
+
+  private queueBotChat(
+    bot: Tank,
+    category: BotChatCategory,
+    options?: {
+      text?: string;
+      typingMs?: number;
+      visibleMs?: number;
+      cooldownMs?: number;
+      persistAfterDeath?: boolean;
+    }
+  ): string | null {
+    if (bot.isDead) return null;
+    if (this.botChats.some((entry) => entry.botId === bot.id)) return null;
+    if (this.botChats.length >= MAX_ACTIVE_BOT_CHATS) {
+      this.botChats.sort((a, b) => a.expiresAt - b.expiresAt);
+      this.botChats.shift();
+    }
+
+    const cooldownMs = options?.cooldownMs ?? BOT_CHAT_BASE_COOLDOWN_MS;
+    if (!this.canBotSpeak(bot.id, cooldownMs)) return null;
+
+    const text = options?.text ?? this.resolveBotChatLine(category, bot);
+    const typingMs = Math.max(650, options?.typingMs ?? 1100);
+    const visibleMs = Math.max(700, options?.visibleMs ?? 1700);
+    const createdAt = this.elapsedMs;
+    const typingUntil = createdAt + typingMs;
+    const visibleUntil = typingUntil + visibleMs;
+    const expiresAt = visibleUntil + 260;
+    const chat: ActiveBotChat = {
+      id: `${bot.id}-${category}-${Math.floor(createdAt)}-${Math.random().toString(36).slice(2, 7)}`,
+      botId: bot.id,
+      name: bot.name || 'BOT',
+      classType: bot.classType,
+      team: bot.team,
+      category,
+      text,
+      createdAt,
+      typingUntil,
+      visibleUntil,
+      expiresAt,
+      worldPos: { x: bot.pos.x, y: bot.pos.y - bot.radius - 34 },
+      accentColor: this.getBotChatAccent(bot.team, category),
+      persistAfterDeath: !!options?.persistAfterDeath,
+    };
+
+    this.botChats.push(chat);
+    this.botChatCooldowns.set(bot.id, createdAt + cooldownMs);
+    return chat.id;
+  }
+
+  private getRenderedBotChats(): BotChatBubble[] {
+    return this.botChats.map((chat) => {
+      const typing = this.elapsedMs < chat.typingUntil;
+      const revealProgress = typing
+        ? Math.max(0, Math.min(1, (this.elapsedMs - chat.createdAt) / Math.max(1, chat.typingUntil - chat.createdAt)))
+        : 1;
+      const revealChars = Math.max(0, Math.floor(chat.text.length * revealProgress));
+      const displayText = typing
+        ? `${chat.text.slice(0, revealChars)}${(Math.floor(this.elapsedMs / 180) % 2) === 0 ? '_' : ''}`
+        : chat.text;
+      const fadeIn = Math.max(0, Math.min(1, (this.elapsedMs - chat.createdAt) / 180));
+      const fadeOut = chat.visibleUntil < this.elapsedMs
+        ? 1 - Math.max(0, Math.min(1, (this.elapsedMs - chat.visibleUntil) / Math.max(1, chat.expiresAt - chat.visibleUntil)))
+        : 1;
+
+      return {
+        id: chat.id,
+        botId: chat.botId,
+        name: chat.name,
+        classType: chat.classType,
+        team: chat.team,
+        category: chat.category,
+        text: chat.text,
+        displayText,
+        typing,
+        opacity: Math.max(0, Math.min(1, fadeIn * fadeOut)),
+        worldPos: chat.worldPos,
+        accentColor: chat.accentColor,
+      };
+    });
+  }
+
+  private updateBotChats(): void {
+    const next: ActiveBotChat[] = [];
+    for (let i = 0; i < this.botChats.length; i++) {
+      const chat = this.botChats[i];
+      if (chat.expiresAt <= this.elapsedMs) continue;
+      const speaker = this.entities.find((entity) => entity.id === chat.botId) as Tank | undefined;
+      if (speaker && !speaker.isDead) {
+        chat.worldPos = { x: speaker.pos.x, y: speaker.pos.y - speaker.radius - 34 };
+      } else if (!chat.persistAfterDeath) {
+        continue;
+      }
+      if (!chat.persistAfterDeath && !this.isOnScreen(chat.worldPos, 220)) continue;
+      next.push(chat);
+    }
+    this.botChats = next;
+  }
+
+  private findFriendlyRestorationSupporters(bot: Tank, healers: Tank[]): Tank[] {
+    return healers.filter((healer) =>
+      healer.id !== bot.id &&
+      !healer.isDead &&
+      healer.team === bot.team &&
+      Vector.dist(healer.pos, bot.pos) <= Math.max(healer.healingAuraRadius * 1.12, 250)
+    );
+  }
+
+  private isCurrentlyReceivingHealing(bot: Tank): boolean {
+    return bot.statusHealingUntil > Date.now() + 300;
+  }
+
+  private maybeTriggerHealingRequests(aliveCombatTanks: Tank[], aliveRestorationTanks: Tank[]): void {
+    const activeHealingBubbles = this.botChats.filter((entry) => entry.category === 'healing_request').length;
+    if (activeHealingBubbles >= 2) return;
+
+    for (let i = 0; i < aliveCombatTanks.length; i++) {
+      const bot = aliveCombatTanks[i];
+      if (!bot.isBot || bot.isDead) continue;
+      const hpRatio = bot.health / Math.max(1, bot.maxHealth);
+      if (hpRatio >= 0.35 || hpRatio <= 0) continue;
+      if (this.isCurrentlyReceivingHealing(bot)) continue;
+      const nearbyHealers = this.findFriendlyRestorationSupporters(bot, aliveRestorationTanks);
+      if (nearbyHealers.length === 0) continue;
+      if (!this.canBotSpeak(bot.id, 12000)) continue;
+      if (Math.random() > 0.12) continue;
+      this.queueBotChat(bot, 'healing_request', { cooldownMs: 12000, visibleMs: 1600 });
+      break;
+    }
+  }
+
+  private hasNearbyHostile(bot: Tank, radius: number): boolean {
+    const neighbors = this.spatialGrid.query(bot.pos, radius);
+    for (let i = 0; i < neighbors.length; i++) {
+      const entity = neighbors[i];
+      if (!entity || entity.id === bot.id || entity.isDead) continue;
+      const tankLike = entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY || entity.type === EntityType.ELITE_TANK;
+      if (!tankLike) continue;
+      if (entity.team === bot.team && entity.team !== Team.NONE) continue;
+      return true;
+    }
+    return false;
+  }
+
+  private maybeTriggerAmbientBotFlavor(aliveCombatTanks: Tank[]): void {
+    for (let i = 0; i < aliveCombatTanks.length; i++) {
+      const bot = aliveCombatTanks[i];
+      if (!bot.isBot || bot.isDead || !this.canBotSpeak(bot.id, BOT_RARE_CHAT_COOLDOWN_MS)) continue;
+      const hpRatio = bot.health / Math.max(1, bot.maxHealth);
+      const nearbyHostile = this.hasNearbyHostile(bot, 460);
+
+      if (hpRatio < 0.24 && nearbyHostile && Math.random() < 0.055) {
+        this.queueBotChat(bot, 'panic', { cooldownMs: BOT_RARE_CHAT_COOLDOWN_MS, visibleMs: 1400 });
+        continue;
+      }
+
+      if (hpRatio < 0.18 && Math.random() < 0.03) {
+        this.queueBotChat(bot, 'low_health', { cooldownMs: BOT_RARE_CHAT_COOLDOWN_MS, visibleMs: 1300 });
+        continue;
+      }
+
+      if (!nearbyHostile && Math.random() < 0.004 && this.isOnScreen(bot.pos, 220)) {
+        this.queueBotChat(bot, 'rare_random', { cooldownMs: BOT_RARE_CHAT_COOLDOWN_MS, visibleMs: 1500 });
+      }
+    }
+  }
+
+  private resolveTankOwner(source: Entity | null | undefined): Tank | null {
+    if (!source) return null;
+    if (source.type === EntityType.PLAYER || source.type === EntityType.ENEMY) return source as Tank;
+    if (source.type === EntityType.BULLET) {
+      const ownerId = (source as Bullet).ownerId;
+      const owner = this.entities.find((entity) => entity.id === ownerId);
+      return owner && (owner.type === EntityType.PLAYER || owner.type === EntityType.ENEMY) ? owner as Tank : null;
+    }
+    if (source.type === EntityType.DRONE || source.type === EntityType.MINI_TANK) {
+      const owner = (source as Drone | MiniTank).owner;
+      return owner && (owner.type === EntityType.PLAYER || owner.type === EntityType.ENEMY) ? owner : null;
+    }
+    return null;
+  }
+
+  private beginPlayerDeathPresentation(killer: Entity | null): void {
+    const killerTank = this.resolveTankOwner(killer);
+    const killerIsBot = !!killerTank && killerTank.isBot;
+    const killerIsEliteStyle = !!killerTank && (killerTank.isTransformed || this.isBossClass(killerTank.classType));
+    const canTaunt =
+      killerIsBot &&
+      this.elapsedMs >= this.botDeathTauntGlobalCooldownUntil &&
+      Math.random() < (killerIsEliteStyle ? 0.35 : 0.2);
+
+    if (killerTank && canTaunt) {
+      const bubbleId = this.queueBotChat(killerTank, 'death_taunt', {
+        cooldownMs: Math.max(BOT_DEATH_TAUNT_GLOBAL_COOLDOWN_MS, BOT_CHAT_BASE_COOLDOWN_MS),
+        typingMs: BOT_DEATH_TAUNT_TYPING_MS,
+        visibleMs: BOT_DEATH_TAUNT_VISIBLE_MS,
+        persistAfterDeath: true,
+      });
+      if (!bubbleId) {
+        this.playerDeathPresentation = {
+          mode: 'instant',
+          startedAt: this.elapsedMs,
+          overlayAt: this.elapsedMs,
+          completeAt: this.elapsedMs,
+          fadeSeconds: 0.18,
+          killerBotId: killerTank.id,
+        };
+        return;
+      }
+      this.botDeathTauntGlobalCooldownUntil = this.elapsedMs + BOT_DEATH_TAUNT_GLOBAL_COOLDOWN_MS;
+      this.playerDeathPresentation = {
+        mode: 'taunt',
+        startedAt: this.elapsedMs,
+        overlayAt: this.elapsedMs + BOT_DEATH_TAUNT_DELAY_MS - BOT_DEATH_TAUNT_FADE_MS,
+        completeAt: this.elapsedMs + BOT_DEATH_TAUNT_DELAY_MS,
+        fadeSeconds: BOT_DEATH_TAUNT_FADE_MS / 1000,
+        killerBotId: killerTank.id,
+      };
+      return;
+    }
+
+    this.playerDeathPresentation = {
+      mode: 'instant',
+      startedAt: this.elapsedMs,
+      overlayAt: this.elapsedMs,
+      completeAt: this.elapsedMs,
+      fadeSeconds: 0.18,
+      killerBotId: killerTank?.id ?? null,
+    };
+  }
+
+  private getDeathPresentationState(): DeathPresentationState | undefined {
+    if (!this.player.isDead || !this.playerDeathPresentation) return undefined;
+    const delayRemainingMs = Math.max(0, this.playerDeathPresentation.completeAt - this.elapsedMs);
+    const fadeWindow = Math.max(1, this.playerDeathPresentation.completeAt - this.playerDeathPresentation.overlayAt);
+    const fadeProgress = this.playerDeathPresentation.mode === 'instant'
+      ? 1
+      : Math.max(0, Math.min(1, (this.elapsedMs - this.playerDeathPresentation.overlayAt) / fadeWindow));
+
+    return {
+      mode: this.playerDeathPresentation.mode,
+      delayActive: this.playerDeathPresentation.mode === 'taunt' && delayRemainingMs > 0,
+      cardVisible: this.playerDeathPresentation.mode === 'instant' || this.elapsedMs >= this.playerDeathPresentation.completeAt,
+      fadeProgress,
+      dimOpacity: this.playerDeathPresentation.mode === 'taunt' ? 0.18 + fadeProgress * 0.52 : 0.7,
+      blurPx: this.playerDeathPresentation.mode === 'taunt' ? fadeProgress * 12 : 12,
+      delayRemainingMs,
+      killerBotId: this.playerDeathPresentation.killerBotId,
+    };
+  }
+
   private getSpawnPos(team: Team): Vector2 {
     const rect = this.getSafeZoneRect(team);
     if (rect) {
@@ -13037,10 +13558,10 @@ export class GameEngine {
     } else if (this.gameMode !== GameMode.SANDBOX) {
         const zoneIndex = this.pickSpawnZoneIndex();
         const useNestCluster =
-          (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) &&
+          this.gameMode === GameMode.TEAMS &&
           this.isPentagonNestZone(zoneIndex) &&
           Math.random() < 0.72;
-        spawnInNestCore = this.isPentagonNestZone(zoneIndex);
+        spawnInNestCore = this.gameMode === GameMode.TEAMS && this.isPentagonNestZone(zoneIndex);
         nestClusterSpawn = useNestCluster;
         pos = useNestCluster ? this.getPentagonNestSpawnPosition() : this.getSpawnPositionInZone(zoneIndex);
         type = this.pickShapeTypeForSpawn(zoneIndex);
@@ -13836,10 +14357,21 @@ export class GameEngine {
             }
 
             let killerName = killer.name;
-            if (killer.type === EntityType.BULLET) { const owner = this.entities?.find(e => e.id === (killer as Bullet).ownerId); killerName = owner ? owner.name : "Unknown"; }
-            else if (killer.type === EntityType.DRONE) killerName = (killer as Drone).owner.name;
-            else if (killer.type === EntityType.MINI_TANK) killerName = `${(killer as MiniTank).owner.name}'s Unit`;
-            this.addToKillFeed(killerName || 'Unknown', victim.name || 'Unknown');
+             if (killer.type === EntityType.BULLET) { const owner = this.entities?.find(e => e.id === (killer as Bullet).ownerId); killerName = owner ? owner.name : "Unknown"; }
+             else if (killer.type === EntityType.DRONE) killerName = (killer as Drone).owner.name;
+             else if (killer.type === EntityType.MINI_TANK) killerName = `${(killer as MiniTank).owner.name}'s Unit`;
+             this.addToKillFeed(killerName || 'Unknown', victim.name || 'Unknown');
+
+             if (
+                killerOwner &&
+                killerOwner.isBot &&
+                victim.id !== killerOwner.id &&
+                victim !== this.player &&
+                !isFriendlySummonKill &&
+                Math.random() < 0.04
+             ) {
+                this.queueBotChat(killerOwner, 'victory', { cooldownMs: BOT_RARE_CHAT_COOLDOWN_MS, visibleMs: 1200 });
+             }
       }
       if (victim.type === EntityType.SHAPE || victim.type === EntityType.BOSS || victim.type === EntityType.CRASHER) {
           const v = victim as (Shape | Boss | Crasher);

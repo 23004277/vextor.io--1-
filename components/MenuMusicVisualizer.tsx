@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+ï»¿import React, { useMemo } from 'react';
 import { BackgroundMusicVisualizerFrame } from '../Background Music';
 
 interface MenuMusicVisualizerProps {
@@ -9,8 +9,20 @@ interface MenuMusicVisualizerProps {
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const formatBreak = (seconds: number) => `${Math.max(0, Math.ceil(seconds))}s`;
 const BAR_CAPS = { hero: 36, panel: 28 } as const;
+const ZERO_HERO_BARS = Object.freeze(new Array(BAR_CAPS.hero).fill(0));
+const ZERO_PANEL_BARS = Object.freeze(new Array(BAR_CAPS.panel).fill(0));
+const ZERO_WAVEFORM = Object.freeze(new Array(80).fill(0));
+const HERO_PARTICLE_SEEDS = Object.freeze(
+  Array.from({ length: 14 }, (_, index) => ({
+    angle: index * 1.73,
+    ringOffset: (index + 1) / 14,
+    scaleBand: (index % 3) + 1,
+    even: index % 2 === 0,
+    mod3: index % 3,
+  })),
+);
 
-const buildWavePath = (waveform: number[], width: number, height: number, baseline: number, amplitude: number) => {
+const buildWavePath = (waveform: ReadonlyArray<number>, width: number, height: number, baseline: number, amplitude: number) => {
   if (!waveform.length) return '';
   return waveform
     .map((sample, index) => {
@@ -49,13 +61,17 @@ const getBarPalette = (index: number, bass: number, mids: number, highs: number,
   };
 };
 
-export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapshot, variant = 'panel' }) => {
+export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = React.memo(({ snapshot, variant = 'panel' }) => {
   const bars = useMemo(() => {
-    const source = snapshot?.bars?.length ? snapshot.bars : new Array(BAR_CAPS[variant]).fill(0);
+    const source = snapshot?.bars?.length
+      ? snapshot.bars
+      : variant === 'hero'
+        ? ZERO_HERO_BARS
+        : ZERO_PANEL_BARS;
     return source.slice(0, BAR_CAPS[variant]);
   }, [snapshot?.bars, variant]);
 
-  const waveform = useMemo(() => snapshot?.waveform ?? new Array(80).fill(0), [snapshot?.waveform]);
+  const waveform = useMemo(() => snapshot?.waveform ?? ZERO_WAVEFORM, [snapshot?.waveform]);
 
   if (!snapshot) return null;
 
@@ -80,18 +96,20 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
   if (variant === 'hero') {
     const heroWavePath = buildWavePath(waveform, 960, 220, 110, 48 + mids * 28 + highs * 12);
     const mirroredBars = bars.slice(0, 18);
-    const particles = Array.from({ length: 14 }, (_, index) => {
-      const t = (index + 1) / 14;
+    const particles = HERO_PARTICLE_SEEDS.map((seed) => {
+      const t = seed.ringOffset;
       return {
-        x: 50 + Math.cos(index * 1.73) * (22 + particleBurst * 12 + t * 16),
-        y: 50 + Math.sin(index * 1.73) * (18 + particleBurst * 10 + t * 14),
-        size: 2 + ((index % 3) + 1) * (0.8 + highs * 1.5),
-        opacity: 0.14 + highs * 0.18 + (index % 2 === 0 ? particleBurst * 0.14 : mids * 0.08),
+        x: 50 + Math.cos(seed.angle) * (22 + particleBurst * 12 + t * 16),
+        y: 50 + Math.sin(seed.angle) * (18 + particleBurst * 10 + t * 14),
+        size: 2 + seed.scaleBand * (0.8 + highs * 1.5),
+        opacity: 0.14 + highs * 0.18 + (seed.even ? particleBurst * 0.14 : mids * 0.08),
+        mod3: seed.mod3,
+        even: seed.even,
       };
     });
 
     return (
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" style={{ contain: 'layout paint style', transform: 'translateZ(0)' }}>
         <div
           className="absolute inset-0"
           style={{
@@ -101,7 +119,8 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
               radial-gradient(circle at 50% 84%, rgba(10,145,132,${0.06 + mids * 0.12}), transparent 36%),
               linear-gradient(180deg, rgba(2,10,22,0.02), rgba(2,10,22,0.42))
             `,
-            filter: `saturate(${1 + bloom * 0.28})`,
+            filter: `saturate(${1 + bloom * 0.18})`,
+            willChange: 'transform, opacity',
           }}
         />
 
@@ -113,7 +132,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
               repeating-linear-gradient(90deg, rgba(148,163,184,${0.03 + scanlineIntensity * 0.025}) 0 1px, transparent 1px 54px),
               repeating-linear-gradient(0deg, rgba(148,163,184,${0.028 + scanlineIntensity * 0.03}) 0 1px, transparent 1px 42px)
             `,
-            boxShadow: `inset 0 0 ${48 + bloom * 34}px rgba(8,145,178,${0.05 + backgroundGlow * 0.08})`,
+            boxShadow: `inset 0 0 ${34 + bloom * 20}px rgba(8,145,178,${0.04 + backgroundGlow * 0.05})`,
           }}
         />
 
@@ -134,7 +153,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
               stroke="url(#menu-wave)"
               strokeWidth={2.4 + highs * 1.8}
               strokeLinecap="round"
-              style={{ filter: `drop-shadow(0 0 ${10 + highs * 12}px rgba(34,230,255,0.32))` }}
+              style={{ filter: `drop-shadow(0 0 ${8 + highs * 8}px rgba(34,230,255,0.24))` }}
             />
             <path
               d={heroWavePath}
@@ -163,7 +182,8 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
                         opacity: breakActive ? 0.18 : clamp(0.28 + bar * 0.58 + bass * 0.12, 0.26, 0.98),
                         transform: `scaleX(${1 + beat * 0.07 + (index % 3 === 0 ? bass * 0.08 : 0)})`,
                         background: palette.fill,
-                        boxShadow: breakActive ? 'none' : `0 0 ${10 + bass * 14 + highs * 12}px ${palette.glow}`,
+                        boxShadow: breakActive ? 'none' : `0 0 ${8 + bass * 8 + highs * 6}px ${palette.glow}`,
+                        willChange: 'transform, opacity, width',
                       }}
                     >
                       <div className="absolute inset-y-[18%] right-0 w-[24%] rounded-full bg-white/24 blur-[4px]" />
@@ -181,7 +201,8 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
             style={{
               background: `radial-gradient(circle, rgba(255,213,79,${0.08 + bass * 0.22}), rgba(34,230,255,${0.08 + reactorPulse * 0.16}) 34%, rgba(0,0,0,0) 70%)`,
               transform: `scale(${1 + reactorPulse * 0.14 + downbeat * 0.08})`,
-              filter: `blur(${14 + bloom * 14}px)`,
+              filter: `blur(${10 + bloom * 8}px)`,
+              willChange: 'transform, opacity',
             }}
           />
           {[0, 1, 2].map((ring) => (
@@ -194,7 +215,8 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
                 marginLeft: `${-(92 + ring * 34 + reactorPulse * 28) / 2}px`,
                 marginTop: `${-(92 + ring * 34 + reactorPulse * 28) / 2}px`,
                 borderColor: ring === 0 ? `rgba(255,213,79,${0.2 + bass * 0.3})` : `rgba(34,230,255,${0.08 + backgroundGlow * 0.18 - ring * 0.03})`,
-                boxShadow: `0 0 ${14 + bass * 14 + ring * 4}px rgba(34,230,255,${0.06 + bloom * 0.08})`,
+                boxShadow: `0 0 ${10 + bass * 8 + ring * 3}px rgba(34,230,255,${0.05 + bloom * 0.05})`,
+                willChange: 'transform, opacity',
                 transform: `scale(${1 + ring * 0.02 + downbeat * 0.05})`,
               }}
             />
@@ -205,7 +227,8 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
               style={{
                 background: `radial-gradient(circle, rgba(255,248,220,${0.28 + bass * 0.3}), rgba(255,213,79,${0.18 + bass * 0.3}) 22%, rgba(34,230,255,${0.16 + reactorPulse * 0.22}) 52%, rgba(0,0,0,0) 78%)`,
                 transform: `scale(${1 + reactorPulse * 0.16 + downbeat * 0.06})`,
-                boxShadow: `0 0 ${18 + bass * 16}px rgba(255,213,79,${0.22 + bass * 0.2})`,
+                boxShadow: `0 0 ${12 + bass * 10}px rgba(255,213,79,${0.18 + bass * 0.16})`,
+                willChange: 'transform, opacity',
               }}
             />
             {particles.map((particle, index) => (
@@ -218,9 +241,10 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
                   width: particle.size,
                   height: particle.size,
                   opacity: particle.opacity,
-                  background: index % 3 === 0 ? 'rgba(255,213,79,0.95)' : index % 2 === 0 ? 'rgba(34,230,255,0.92)' : 'rgba(255,255,255,0.86)',
-                  boxShadow: `0 0 ${5 + highs * 10}px currentColor`,
+                  background: particle.mod3 === 0 ? 'rgba(255,213,79,0.95)' : particle.even ? 'rgba(34,230,255,0.92)' : 'rgba(255,255,255,0.86)',
+                  boxShadow: `0 0 ${4 + highs * 6}px currentColor`,
                   transform: `translate(-50%, -50%) scale(${1 + particleBurst * 0.25})`,
+                  willChange: 'transform, opacity',
                 }}
               />
             ))}
@@ -246,7 +270,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
         />
 
         <div className="absolute inset-x-4 bottom-3 z-10 sm:inset-x-5">
-          <div className="rounded-[1.5rem] border border-cyan-300/12 bg-slate-950/68 px-3.5 py-2.5 shadow-[0_18px_52px_rgba(0,0,0,0.32)] backdrop-blur-[8px] sm:px-4">
+          <div className="rounded-[1.5rem] border border-cyan-300/12 bg-slate-950/68 px-3.5 py-2.5 shadow-[0_18px_52px_rgba(0,0,0,0.32)] backdrop-blur-[6px] sm:px-4">
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
               <div className="min-w-0">
                 <div className="menu-audio-copy text-[8.5px] font-black uppercase leading-[1.25] tracking-[0.20em] text-cyan-300/78">Reactor Audio Core</div>
@@ -277,7 +301,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
                   style={{
                     background: breakActive ? 'rgba(255,255,255,0.34)' : '#20e6ff',
                     transform: `scale(${0.84 + reactorPulse * 0.26 + downbeat * 0.16})`,
-                    boxShadow: breakActive ? 'none' : `0 0 ${12 + bass * 16 + highs * 10}px rgba(32,230,255,0.58)`,
+                    boxShadow: breakActive ? 'none' : `0 0 ${8 + bass * 10 + highs * 6}px rgba(32,230,255,0.48)`,
                     transition: 'transform 80ms linear, box-shadow 80ms linear',
                   }}
                 />
@@ -295,7 +319,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
                   />
                 </div>
                 <div className="mt-2 flex min-w-0 items-center justify-between gap-2 text-[8px] font-black uppercase tracking-[0.12em]">
-                  <span className="menu-audio-copy text-white/38">Bass {Math.round(bass * 100)} · Mid {Math.round(mids * 100)} · High {Math.round(highs * 100)}</span>
+                  <span className="menu-audio-copy text-white/38">Bass {Math.round(bass * 100)} Â· Mid {Math.round(mids * 100)} Â· High {Math.round(highs * 100)}</span>
                   <span className="menu-audio-copy text-right text-cyan-200/76">{section}</span>
                 </div>
               </div>
@@ -318,7 +342,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
 
   return (
     <div className="pointer-events-none w-full">
-      <div className="relative w-full overflow-hidden rounded-[24px] border border-cyan-400/15 bg-[linear-gradient(180deg,rgba(2,8,16,0.76),rgba(1,4,10,0.92))] px-4 py-4 shadow-[0_20px_70px_rgba(0,0,0,0.42)] backdrop-blur-md">
+      <div className="relative w-full overflow-hidden rounded-[24px] border border-cyan-400/15 bg-[linear-gradient(180deg,rgba(2,8,16,0.76),rgba(1,4,10,0.92))] px-4 py-4 shadow-[0_20px_70px_rgba(0,0,0,0.42)] backdrop-blur-[6px]" style={{ contain: 'layout paint style', transform: 'translateZ(0)' }}>
         <div
           className="absolute inset-0 opacity-70"
           style={{
@@ -383,7 +407,8 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
                       opacity: breakActive ? 0.26 : clamp(0.44 + bar * 0.3 + uiFlicker * 0.08, 0.4, 0.95),
                       transform: `translateY(${breakActive ? 12 : 0}px) scaleY(${breakActive ? 0.42 : 1 + beat * 0.04})`,
                       background: palette.fill,
-                      boxShadow: breakActive ? 'none' : `0 0 ${8 + bass * 10 + highs * 8}px ${palette.glow}`,
+                      boxShadow: breakActive ? 'none' : `0 0 ${6 + bass * 7 + highs * 5}px ${palette.glow}`,
+                      willChange: 'transform, opacity, height',
                     }}
                   >
                     <div className="absolute inset-x-[22%] top-0 h-[22%] rounded-b-full bg-white/15 blur-[5px]" />
@@ -411,7 +436,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
               style={{
                 background: breakActive ? 'rgba(255,255,255,0.35)' : '#00d2ff',
                 transform: `scale(${0.82 + reactorPulse * 0.24})`,
-                boxShadow: breakActive ? 'none' : `0 0 ${10 + bass * 14}px rgba(0,210,255,0.5)`,
+                boxShadow: breakActive ? 'none' : `0 0 ${8 + bass * 8}px rgba(0,210,255,0.42)`,
                 transition: 'transform 80ms linear, box-shadow 80ms linear',
               }}
             />
@@ -429,7 +454,7 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
               />
             </div>
             <div className="mt-2 flex min-w-0 items-center justify-between gap-2 text-[8px] font-black uppercase tracking-[0.14em]">
-              <span className="menu-audio-copy text-white/38">Bass {Math.round(bass * 100)} · Mid {Math.round(mids * 100)} · High {Math.round(highs * 100)}</span>
+              <span className="menu-audio-copy text-white/38">Bass {Math.round(bass * 100)} Â· Mid {Math.round(mids * 100)} Â· High {Math.round(highs * 100)}</span>
               <span className="menu-audio-copy text-right text-cyan-200/74">{section}</span>
             </div>
           </div>
@@ -445,5 +470,5 @@ export const MenuMusicVisualizer: React.FC<MenuMusicVisualizerProps> = ({ snapsh
       </div>
     </div>
   );
-};
+});
 

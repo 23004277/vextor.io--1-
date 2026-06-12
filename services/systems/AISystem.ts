@@ -1,4 +1,4 @@
-import { AIState, EntityType, GameMode, StatType, TankClass, Team, Vector2 } from '../../types';
+import { AIState, EntityType, GameMode, SecondarySector, StatType, TankClass, Team, Vector2 } from '../../types';
 import { BASE_ZONE_WIDTH, SAFE_ZONE_WARNING_RADIUS } from '../../constants';
 import * as Vector from '../MathUtils';
 import { MovementSystem } from './MovementSystem';
@@ -40,6 +40,8 @@ type TankLike = {
   availableStatPoints: number;
   isDead: boolean;
   lastDamageSourceId?: number | null;
+  secondarySector?: SecondarySector;
+  healingAuraRadius?: number;
 };
 
 type RecentContact = {
@@ -212,6 +214,12 @@ const AI_TUNING = {
   assistUrgencyTicks: 30,
   postKillPauseMinTicks: 5,
   postKillPauseMaxTicks: 15,
+  dominionDefenseUrgency: 1.2,
+  dominionNeutralUrgency: 0.98,
+  dominionCaptureUrgency: 0.86,
+  dominionPatrolUrgency: 0.2,
+  dominionObjectiveJoinRadius: 980,
+  dominionStagingPadding: 110,
 
   rareShapeXpThreshold: 2600,
   rareHuntTimerMs: 5200,
@@ -225,6 +233,10 @@ const AI_TUNING = {
   heavyMaxRange: 760,
   supportMinRange: 340,
   supportMaxRange: 650,
+  orbitTolerance: 34,
+  pursuitPredictionSeconds: 0.58,
+  evadePredictionSeconds: 0.5,
+  closeRetreatWeight: 1.15,
   farmMinRange: 260,
   farmMaxRange: 430,
   crasherRangeBonus: 80,
@@ -506,6 +518,7 @@ export class AISystem {
     const rare = this.resolveRareHuntTarget(bot, neighbors, engine);
     const hostile = this.pickBestHostile(bot, neighbors, engine.gameMode, projectilePressure, memory, world);
     const teamFightObjective = this.pickTeamFightObjective(bot, neighbors, engine.gameMode, memory);
+    const dominionObjective = this.pickDominionObjective(bot, engine, neighbors, hpRatio, projectilePressure);
     const portalIntent = this.pickPortalTransitTarget(bot, neighbors, engine, hpRatio, projectilePressure);
     const recentHostileTrail = !hostile ? this.pickRecentHostileTrail(bot, memory) : null;
 
@@ -562,6 +575,16 @@ export class AISystem {
       const transit = { state: AIState.PROXIMAL_PORTAL_TRANSIT, target: portalIntent, combatTarget: hostile && this.isShootableTarget(hostile) ? hostile : null };
       this.trackArchetypeReadability(bot, memory, transit, neighbors);
       return transit;
+    }
+
+    if (dominionObjective && !this.isUnderImmediateDanger(hpRatio, projectilePressure)) {
+      const objectivePush = {
+        state: AIState.HUNT,
+        target: dominionObjective,
+        combatTarget: hostile && this.isShootableTarget(hostile) ? hostile : null,
+      };
+      this.trackArchetypeReadability(bot, memory, objectivePush, neighbors);
+      return objectivePush;
     }
 
     if (recentHostileTrail && !this.isUnderImmediateDanger(hpRatio, projectilePressure)) {
@@ -639,19 +662,23 @@ export class AISystem {
     const pressureSafe = projectilePressure < AI_TUNING.pressureFleeThreshold || hpRatio > 0.5;
     const finisher = this.canLikelyFinish(bot, hostile) || targetHp <= AI_TUNING.finisherCommitHpRatio;
     const allyThreatBonus = this.getAllyUnderThreatBonus(bot, hostile, neighbors, mode);
+    const dominionBias = mode === GameMode.DOMINION ? this.getDominionEngagementBias(bot, hostile, neighbors) : 0;
     const aggressivePersonality = memory.aggressionBias > 0.18 || memory.sessionArchetype === 'RUSHER' || memory.sessionArchetype === 'BULLY';
 
     if (finisher && inWorkableRange && hpRatio > 0.24 && routePenalty < 1.02) return true;
     if (allyThreatBonus > 0 && hpRatio > 0.28 && pressureSafe && routePenalty < 0.96) return true;
+    if (mode === GameMode.DOMINION && dominionBias >= 0.48 && hpRatio > 0.28 && routePenalty < 1.02) return true;
 
     if (phase === 'PHASE_EARLY') {
       if (!pressureSafe || !lowThreatLane) return false;
+      if (mode === GameMode.DOMINION && dominionBias <= -0.28 && !finisher) return false;
       return hpRatio > 0.38 || (aggressivePersonality && hpRatio > 0.32 && targetHp < 0.68);
     }
 
     if (!pressureSafe && !finisher) return false;
     if (!lowThreatLane && !finisher && allyThreatBonus <= 0) return false;
-    return hpRatio > AI_TUNING.aggressiveCommitHpRatio || aggressivePersonality || targetHp < 0.68;
+    if (mode === GameMode.DOMINION && dominionBias <= -0.34 && !finisher && allyThreatBonus <= 0) return false;
+    return hpRatio > AI_TUNING.aggressiveCommitHpRatio || aggressivePersonality || targetHp < 0.68 || dominionBias > 0.34;
   }
 
   private isUnderImmediateDanger(hpRatio: number, projectilePressure: number): boolean {
@@ -790,6 +817,7 @@ export class AISystem {
       const routePenalty = this.getTargetRoutePenalty(bot, e, neighbors, mode);
       const shotLanePenalty = this.getTargetShotLanePenalty(bot, e, neighbors, mode);
       const allyUnderThreat = this.getAllyUnderThreatBonus(bot, e, neighbors, mode) * 0.45;
+      const dominionBias = this.getDominionTargetBias(bot, e, neighbors, mode);
       const preferredRange = this.getPreferredRange(bot, AIState.COMBAT, e);
       const idealRange = (preferredRange.min + preferredRange.max) * 0.5;
       const rangeFit = Math.max(0, 0.3 - Math.abs(distance - idealRange) / Math.max(idealRange, 1) * 0.18);
@@ -813,6 +841,7 @@ export class AISystem {
         isolationBonus +
         flankAffinity +
         allyUnderThreat +
+        dominionBias +
         rangeFit +
         soloPressure +
         routeClarity -
@@ -996,8 +1025,16 @@ export class AISystem {
     memory: BotMemory
   ): Vector2 {
     const neighbors = frame.neighbors;
-    const goal = this.computeGoalForce(bot, target, neighbors, state, mode, memory);
-    const squad = this.computeSquadForce(bot, neighbors, mode, state, target);
+    const auraContext = this.getFriendlyRestorationAuraContext(bot, neighbors, mode);
+    const rawGoal = this.computeGoalForce(bot, target, neighbors, state, mode, memory);
+    const goal = auraContext.seekingHealing || auraContext.insideFriendlyAura
+      ? this.movement.composeSteering(
+          [rawGoal, auraContext.force],
+          [1.0, auraContext.seekingHealing ? 0.92 : 0.28],
+          2.1
+        )
+      : rawGoal;
+    const squad = this.computeSquadForce(bot, neighbors, mode, state, target, auraContext);
     const avoid = this.computeAvoidanceForce(bot, mode, world);
     const farmAvoid = this.computeFarmShapeAvoidanceForce(bot, neighbors, state, target);
     const dodge = this.computeDodgeForce(bot, frame);
@@ -1047,22 +1084,43 @@ export class AISystem {
   private computeRangeControlForce(bot: TankLike, target: any, state: AIState, memory: BotMemory, neighbors: any[], mode: GameMode): Vector2 {
     const range = this.getDynamicPreferredRange(bot, state, target, neighbors, mode);
     const distanceSq = Vector.distSq(bot.pos, target.pos);
+    const targetVel = target.vel || ZERO;
     if (state === AIState.FARM && this.isFarmTarget(target)) {
       const targetRadius = typeof target.radius === 'number' ? target.radius : 18;
       const hardStop = bot.radius + targetRadius + AI_TUNING.farmEmergencyFleePadding;
       if (distanceSq < hardStop * hardStop) {
-        return this.movement.fleeForce(bot.pos, target.pos);
+        return this.movement.evadeForce(bot.pos, target.pos, targetVel, 0.28, 0.55);
       }
     }
 
     const anchor = this.computeEngageAnchor(bot, target, state, memory, neighbors, mode, range);
+    const predictedTarget = {
+      pos: {
+        x: target.pos.x + targetVel.x * AI_TUNING.pursuitPredictionSeconds,
+        y: target.pos.y + targetVel.y * AI_TUNING.pursuitPredictionSeconds,
+      },
+    };
 
     if (distanceSq > range.max * range.max) {
-      return this.movement.arriveForce(bot.pos, anchor, state === AIState.FARM ? 225 : 315);
+      return this.movement.composeSteering(
+        [
+          this.movement.arriveForce(bot.pos, anchor, state === AIState.FARM ? 225 : 315),
+          this.movement.pursuitForce(bot.pos, predictedTarget.pos, targetVel, 0.4, 0.8),
+        ],
+        [0.88, 0.54],
+        1.45
+      );
     }
 
     if (distanceSq < range.min * range.min) {
-      return this.movement.fleeForce(bot.pos, target.pos);
+      return this.movement.composeSteering(
+        [
+          this.movement.evadeForce(bot.pos, target.pos, targetVel, AI_TUNING.evadePredictionSeconds, 0.9),
+          this.movement.orbitForce(bot.pos, target.pos, targetVel, range.min + AI_TUNING.orbitTolerance, memory.strafeDir, 0.62, 0.78),
+        ],
+        [AI_TUNING.closeRetreatWeight, 0.42],
+        1.5
+      );
     }
 
     const toTarget = Vector.normalize(Vector.sub(target.pos, bot.pos));
@@ -1078,12 +1136,23 @@ export class AISystem {
     const hold = this.movement.arriveForce(bot.pos, anchor, state === AIState.FARM ? 220 : 265, range.min * 0.82);
     const dodgeBias = this.getSmallDodgeBias(bot, target, memory);
     const pressureBias = this.getPressureSidestep(bot, target, neighbors, mode);
-    const orbitBias = this.tick < memory.orbitUntilTick ? this.movement.composeSteering([strafe, pressureBias], [1.0, 0.5], 1.2) : ZERO;
+    const orbit = this.movement.orbitForce(
+      bot.pos,
+      target.pos,
+      targetVel,
+      (range.min + range.max) * 0.5,
+      memory.strafeDir,
+      0.74,
+      0.92
+    );
+    const orbitBias = this.tick < memory.orbitUntilTick
+      ? this.movement.composeSteering([orbit, pressureBias], [1.0, 0.5], 1.28)
+      : orbit;
 
     return this.movement.composeSteering(
-      [strafe, hold, dodgeBias, pressureBias, orbitBias],
-      [0.74 + (this.tick < memory.orbitUntilTick ? 0.18 : 0), 0.42, 0.18, 0.24, this.tick < memory.orbitUntilTick ? 0.36 : 0],
-      1.35
+      [strafe, hold, dodgeBias, pressureBias, orbitBias, this.movement.pursuitForce(bot.pos, predictedTarget.pos, targetVel, 0.32, 0.64)],
+      [0.46, 0.52, 0.2, 0.26, this.tick < memory.orbitUntilTick ? 0.54 : 0.36, 0.18],
+      1.5
     );
   }
 
@@ -1098,11 +1167,13 @@ export class AISystem {
     }
 
     if (this.cachedThreats.length <= 0) {
-      return this.applyPanicFleeOffset(this.movement.fleeForce(bot.pos, target.pos), memory.panicFleeAngleOffset);
+      return this.applyPanicFleeOffset(this.movement.evadeForce(bot.pos, target.pos, target.vel || ZERO, 0.4, 0.8), memory.panicFleeAngleOffset);
     }
 
     let fleeX = 0;
     let fleeY = 0;
+    let strafeX = 0;
+    let strafeY = 0;
 
     for (let i = 0; i < this.cachedThreats.length; i++) {
       const threat = this.cachedThreats[i];
@@ -1110,12 +1181,19 @@ export class AISystem {
       const dy = bot.pos.y - threat.pos.y;
       const distanceSq = Math.max(1, dx * dx + dy * dy);
       const threatWeight = 1 + this.classThreatScore(threat.classType);
+      const evade = this.movement.evadeForce(bot.pos, threat.pos, threat.vel || ZERO, AI_TUNING.evadePredictionSeconds, 0.9);
+      const tangent = Vector.normalize({ x: -evade.y * memory.strafeDir, y: evade.x * memory.strafeDir });
 
-      fleeX += (dx / distanceSq) * threatWeight;
-      fleeY += (dy / distanceSq) * threatWeight;
+      fleeX += (dx / distanceSq) * threatWeight + evade.x * 0.55 * threatWeight;
+      fleeY += (dy / distanceSq) * threatWeight + evade.y * 0.55 * threatWeight;
+      strafeX += tangent.x * 0.18 * threatWeight;
+      strafeY += tangent.y * 0.18 * threatWeight;
     }
 
-    return this.applyPanicFleeOffset(Vector.normalize({ x: fleeX, y: fleeY }), memory.panicFleeAngleOffset);
+    return this.applyPanicFleeOffset(
+      Vector.normalize({ x: fleeX + strafeX, y: fleeY + strafeY }),
+      memory.panicFleeAngleOffset
+    );
   }
 
   private computeEngageAnchor(
@@ -1132,7 +1210,7 @@ export class AISystem {
     const targetVelocity = target.vel || ZERO;
     const speedSq = Vector.magSq(targetVelocity);
     const targetDrift = speedSq > 0.01 ? Vector.limit(targetVelocity, 3.2) : ZERO;
-    const flankOffset = this.isSupportClass(bot.classType)
+    const flankOffset = this.isRestorationSupportTank(bot)
       ? AI_TUNING.flankOffset * 1.1
       : this.isHeavySniperClass(bot.classType)
         ? AI_TUNING.flankOffset * 0.72
@@ -1344,7 +1422,14 @@ export class AISystem {
     return this.computeWanderForce(bot, memory);
   }
 
-  private computeSquadForce(bot: TankLike, neighbors: any[], mode: GameMode, state: AIState, target: any | null): Vector2 {
+  private computeSquadForce(
+    bot: TankLike,
+    neighbors: any[],
+    mode: GameMode,
+    state: AIState,
+    target: any | null,
+    auraContext: { insideFriendlyAura: boolean; seekingHealing: boolean; force: Vector2 }
+  ): Vector2 {
     this.cachedAllies.length = 0;
     this.cachedAllyVels.length = 0;
 
@@ -1368,31 +1453,96 @@ export class AISystem {
       ? 64
       : mode === GameMode.FFA
         ? AI_TUNING.ffaSeparationRadius
-        : AI_TUNING.allySeparationRadius * 1.75;
+        : (auraContext.insideFriendlyAura ? AI_TUNING.allySeparationRadius * 1.22 : AI_TUNING.allySeparationRadius * 1.75);
 
     const sep = this.movement.separationForce(bot.pos, this.cachedAllies, separationRadius);
 
     // Farming, hunting and idle exploration should spread bots across resources instead of forming team blobs.
     if (state === AIState.IDLE || state === AIState.FARM || state === AIState.HUNT) {
-      return this.movement.composeSteering([sep], [1.8], 2.5);
+      return this.movement.composeSteering([sep, auraContext.force], [1.8, auraContext.seekingHealing ? 0.56 : 0.14], 2.5);
     }
 
     const coh = this.movement.cohesionForce(bot.pos, this.cachedAllies, inPortalTransit ? 520 : AI_TUNING.cohesionRadius);
     const align = this.movement.alignmentForce(bot.vel, this.cachedAllyVels);
 
     if (state === AIState.BODYGUARD) {
-      return this.movement.composeSteering([sep, coh, align], [1.25, 0.35, 0.2], 2.5);
+      return this.movement.composeSteering([sep, coh, align, auraContext.force], [1.25, 0.35, 0.2, auraContext.seekingHealing ? 0.35 : 0.1], 2.5);
     }
 
     if (state === AIState.COMBAT || state === AIState.FLEE) {
-      return this.movement.composeSteering([sep, coh, align], [1.55, 0.08, 0.12], 2.5);
+      const sepWeight = auraContext.insideFriendlyAura ? 1.02 : 1.55;
+      const auraWeight = auraContext.seekingHealing ? 0.56 : auraContext.insideFriendlyAura ? 0.1 : 0.02;
+      return this.movement.composeSteering([sep, coh, align, auraContext.force], [sepWeight, 0.08, 0.12, auraWeight], 2.5);
     }
 
     if (inPortalTransit) {
-      return this.movement.composeSteering([sep, coh, align], [0.74, 0.62, 0.28], 2.5);
+      return this.movement.composeSteering([sep, coh, align, auraContext.force], [0.74, 0.62, 0.28, 0.08], 2.5);
     }
 
-    return this.movement.composeSteering([sep], [1.6], 2.5);
+    return this.movement.composeSteering([sep, auraContext.force], [1.6, auraContext.seekingHealing ? 0.34 : 0.08], 2.5);
+  }
+
+  private getFriendlyRestorationAuraContext(
+    bot: TankLike,
+    neighbors: any[],
+    mode: GameMode
+  ): { insideFriendlyAura: boolean; seekingHealing: boolean; force: Vector2 } {
+    if (mode === GameMode.FFA || bot.team === Team.NONE) {
+      return { insideFriendlyAura: false, seekingHealing: false, force: ZERO };
+    }
+
+    const hpRatio = this.getHpRatio(bot);
+    let insideFriendlyAura = false;
+    let bestProvider: any | null = null;
+    let bestDistanceSq = Infinity;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const ally = neighbors[i];
+      if (!this.isValidEntity(ally) || ally.id === bot.id || !this.isTankLike(ally)) continue;
+      if (!this.isFriendly(bot, ally, mode)) continue;
+      if (!this.isRestorationAuraProvider(ally)) continue;
+
+      const auraRadius = Math.max(0, ally.healingAuraRadius || 0);
+      if (auraRadius <= 0) continue;
+      const distanceSq = Vector.distSq(bot.pos, ally.pos);
+
+      if (distanceSq <= auraRadius * auraRadius) insideFriendlyAura = true;
+      if (distanceSq <= Math.pow(auraRadius * 1.28, 2) && distanceSq < bestDistanceSq) {
+        bestProvider = ally;
+        bestDistanceSq = distanceSq;
+      }
+    }
+
+    if (!bestProvider) {
+      return { insideFriendlyAura, seekingHealing: false, force: ZERO };
+    }
+
+    const shouldSeekHealing = hpRatio < 0.55;
+    if (!shouldSeekHealing && !insideFriendlyAura) {
+      return { insideFriendlyAura: false, seekingHealing: false, force: ZERO };
+    }
+
+    const auraRadius = Math.max(1, bestProvider.healingAuraRadius || 1);
+    const distance = Math.sqrt(Math.max(1, bestDistanceSq));
+    const desiredRadius = hpRatio < 0.35 ? auraRadius * 0.34 : auraRadius * 0.52;
+
+    if (distance > desiredRadius + 28) {
+      return {
+        insideFriendlyAura,
+        seekingHealing: shouldSeekHealing,
+        force: this.movement.arriveForce(bot.pos, bestProvider.pos, auraRadius * 0.72, 18),
+      };
+    }
+
+    if (distance < Math.max(36, desiredRadius * 0.45)) {
+      return {
+        insideFriendlyAura,
+        seekingHealing: shouldSeekHealing,
+        force: this.movement.fleeForce(bot.pos, bestProvider.pos),
+      };
+    }
+
+    return { insideFriendlyAura: true, seekingHealing: shouldSeekHealing, force: ZERO };
   }
 
   private pickPortalTransitTarget(bot: TankLike, neighbors: any[], engine: EngineLike, hpRatio: number, projectilePressure: number): any | null {
@@ -1461,7 +1611,7 @@ export class AISystem {
       return { min: AI_TUNING.heavyMinRange, max: AI_TUNING.heavyMaxRange };
     }
 
-    if (this.isSupportClass(bot.classType)) {
+    if (this.isRestorationSupportTank(bot)) {
       return { min: AI_TUNING.supportMinRange, max: AI_TUNING.supportMaxRange };
     }
 
@@ -1478,7 +1628,7 @@ export class AISystem {
     const woundBoost = hpRatio < 0.55 ? (0.55 - hpRatio) * AI_TUNING.lowHealthRangeBoost / 0.55 : 0;
     const personalityOffset = this.isHeavySniperClass(bot.classType)
       ? 0.08
-      : this.isSupportClass(bot.classType)
+      : this.isRestorationSupportTank(bot)
         ? 0.06
         : this.isDroneClass(bot.classType)
           ? 0.04
@@ -1570,7 +1720,13 @@ export class AISystem {
 
   private smoothSteering(bot: TankLike, targetSteering: Vector2, state: AIState): Vector2 {
     const current = bot.lastSteering || ZERO;
-    const t = state === AIState.FLEE ? AI_TUNING.emergencySteeringSmoothing : AI_TUNING.steeringSmoothing;
+    const targetDir = Vector.magSq(targetSteering) > 0.0001 ? Vector.normalize(targetSteering) : ZERO;
+    const currentDir = Vector.magSq(current) > 0.0001 ? Vector.normalize(current) : ZERO;
+    const opposition = Vector.magSq(targetDir) > 0.0001 && Vector.magSq(currentDir) > 0.0001
+      ? Math.max(0, -Vector.dot(currentDir, targetDir))
+      : 0;
+    const baseT = state === AIState.FLEE ? AI_TUNING.emergencySteeringSmoothing : AI_TUNING.steeringSmoothing;
+    const t = Math.min(0.84, baseT + opposition * 0.18);
     return Vector.limit({
       x: current.x + (targetSteering.x - current.x) * t,
       y: current.y + (targetSteering.y - current.y) * t,
@@ -1591,6 +1747,14 @@ export class AISystem {
 
   private isSupportClass(cls?: TankClass): boolean {
     return cls === TankClass.NURSE || cls === TankClass.DOCTOR || cls === TankClass.PLAGUE_DOCTOR;
+  }
+
+  private isRestorationSupportTank(bot: TankLike): boolean {
+    return bot.secondarySector === 'restoration' || this.isSupportClass(bot.classType);
+  }
+
+  private isRestorationAuraProvider(entity: any): boolean {
+    return this.isTankLike(entity) && this.isRestorationSupportTank(entity) && typeof entity.healingAuraRadius === 'number' && entity.healingAuraRadius > 0;
   }
 
   private isDroneClass(cls?: TankClass): boolean {
@@ -1701,7 +1865,7 @@ export class AISystem {
     const range = this.getPreferredRange(bot, bot.aiState, target);
     const maxRange = target.type === EntityType.SHAPE || target.type === EntityType.BOSS || target.type === EntityType.CRASHER
       ? range.max * 1.05
-      : range.max * (this.isSupportClass(bot.classType) ? 1.2 : 1.35);
+      : range.max * (this.isRestorationSupportTank(bot) ? 1.2 : 1.35);
     if (distance > maxRange) return false;
     if (target.type === EntityType.CRASHER && distance < ((typeof target.radius === 'number' ? target.radius : 20) + bot.radius + 110)) return false;
     if (this.isShotLaneBlocked(bot, aimPos, neighbors)) return false;
@@ -1960,6 +2124,79 @@ export class AISystem {
       },
       vel: ZERO,
     };
+  }
+
+  private pickDominionObjective(bot: TankLike, engine: EngineLike, neighbors: any[], hpRatio: number, projectilePressure: number): any | null {
+    if (engine.gameMode !== GameMode.DOMINION || bot.team === Team.NONE) return null;
+    if (projectilePressure >= AI_TUNING.pressureFleeThreshold && hpRatio < 0.4) return null;
+
+    const objectiveTanks = engine.entities.filter((entity) =>
+      this.isValidEntity(entity) &&
+      entity.type === EntityType.DOMINION_TANK &&
+      !entity.isDead
+    );
+
+    let best: any | null = null;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < objectiveTanks.length; i++) {
+      const zoneTank = objectiveTanks[i];
+      const zoneRadius = Math.max(260, typeof zoneTank.zoneRadius === 'number' ? zoneTank.zoneRadius : 680);
+      const distanceSq = Vector.distSq(bot.pos, zoneTank.pos);
+      const distance = Math.sqrt(Math.max(1, distanceSq));
+      if (distance > AI_TUNING.dominionObjectiveJoinRadius * 1.85) continue;
+
+      let allySupport = 0;
+      let enemySupport = 0;
+      for (let j = 0; j < neighbors.length; j++) {
+        const entity = neighbors[j];
+        if (!this.isValidEntity(entity) || !this.isTankLike(entity) || entity.id === zoneTank.id) continue;
+        if (Vector.distSq(entity.pos, zoneTank.pos) > (zoneRadius + 180) * (zoneRadius + 180)) continue;
+        if (this.isFriendly(bot, entity, engine.gameMode)) allySupport++;
+        else enemySupport++;
+      }
+
+      const owner = zoneTank.team ?? Team.NONE;
+      const contested = enemySupport > 0 && (owner === bot.team || owner === Team.NONE);
+      const distanceScore = 240000 / Math.max(1, distanceSq);
+      const supportDelta = allySupport - enemySupport;
+      let urgency = 0;
+
+      if (owner === bot.team) {
+        if (contested) urgency = AI_TUNING.dominionDefenseUrgency + enemySupport * 0.22;
+        else urgency = AI_TUNING.dominionPatrolUrgency + Math.max(0, 1.1 - allySupport * 0.45);
+      } else if (owner === Team.NONE) {
+        urgency = AI_TUNING.dominionNeutralUrgency + Math.max(0, 1.2 - enemySupport * 0.16);
+      } else {
+        if (supportDelta + 1 < 0 && hpRatio < 0.62) continue;
+        urgency = AI_TUNING.dominionCaptureUrgency + Math.max(0, supportDelta) * 0.16 - Math.max(0, enemySupport - allySupport) * 0.08;
+      }
+
+      const lowHealthPenalty = hpRatio < 0.45 && owner !== bot.team ? (0.45 - hpRatio) * 1.9 : 0;
+      const score = urgency + distanceScore + Math.max(-0.28, supportDelta * 0.12) - lowHealthPenalty;
+
+      if (score <= bestScore) continue;
+
+      const toZone = Vector.normalize(Vector.sub(zoneTank.pos, bot.pos));
+      const stagingOffset = owner === bot.team
+        ? Math.min(zoneRadius * 0.18, 70)
+        : Math.min(zoneRadius * 0.42, AI_TUNING.dominionStagingPadding);
+
+      bestScore = score;
+      best = {
+        id: -20000 - (typeof zoneTank.zoneId === 'number' ? zoneTank.zoneId : i),
+        type: EntityType.DOMINION_TANK,
+        pos: Vector.magSq(toZone) > 0.0001
+          ? {
+              x: zoneTank.pos.x - toZone.x * stagingOffset,
+              y: zoneTank.pos.y - toZone.y * stagingOffset,
+            }
+          : { x: zoneTank.pos.x, y: zoneTank.pos.y },
+        vel: ZERO,
+      };
+    }
+
+    return best;
   }
 
   private getThreatLevel(bot: TankLike, frame: SensorFrame): ThreatLevel {
@@ -2312,6 +2549,52 @@ export class AISystem {
     return Math.max(0, Vector.dot(desiredSide, targetVel)) * 0.18;
   }
 
+  private getDominionTargetBias(bot: TankLike, target: any, neighbors: any[], mode: GameMode): number {
+    if (mode !== GameMode.DOMINION || bot.team === Team.NONE) return 0;
+
+    if (target.type === EntityType.DOMINION_TANK) {
+      if (target.team === bot.team) return -0.8;
+      return target.team === Team.NONE ? 0.82 : 0.68;
+    }
+
+    return this.getDominionEngagementBias(bot, target, neighbors);
+  }
+
+  private getDominionEngagementBias(bot: TankLike, target: any, neighbors: any[]): number {
+    let nearestZone: any | null = null;
+    let nearestZoneDistSq = Infinity;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const entity = neighbors[i];
+      if (!this.isValidEntity(entity) || entity.type !== EntityType.DOMINION_TANK) continue;
+      const zoneRadius = Math.max(260, typeof entity.zoneRadius === 'number' ? entity.zoneRadius : 680);
+      const maxDistSq = Math.pow(zoneRadius + 240, 2);
+      const distSq = Vector.distSq(target.pos, entity.pos);
+      if (distSq > maxDistSq || distSq >= nearestZoneDistSq) continue;
+      nearestZone = entity;
+      nearestZoneDistSq = distSq;
+    }
+
+    if (!nearestZone) return 0;
+
+    let allySupport = 0;
+    let enemySupport = 0;
+    const zoneRadius = Math.max(260, typeof nearestZone.zoneRadius === 'number' ? nearestZone.zoneRadius : 680);
+    const supportRadiusSq = Math.pow(zoneRadius + 180, 2);
+    for (let i = 0; i < neighbors.length; i++) {
+      const entity = neighbors[i];
+      if (!this.isValidEntity(entity) || !this.isTankLike(entity)) continue;
+      if (Vector.distSq(entity.pos, nearestZone.pos) > supportRadiusSq) continue;
+      if (this.isFriendly(bot, entity, GameMode.DOMINION)) allySupport++;
+      else enemySupport++;
+    }
+
+    if (nearestZone.team === bot.team) return 0.52 + Math.max(0, enemySupport - 1) * 0.06;
+    if (nearestZone.team === Team.NONE) return 0.32 + Math.max(0, allySupport - enemySupport) * 0.06;
+    if (enemySupport > allySupport + 1) return -0.42;
+    return 0.12 + Math.max(0, allySupport - enemySupport) * 0.04;
+  }
+
   private canLikelyFinish(bot: TankLike, target: any): boolean {
     const damageStat = bot.stats[StatType.BULLET_DAMAGE] || 0;
     const reloadStat = bot.stats[StatType.RELOAD] || 0;
@@ -2439,7 +2722,7 @@ export class AISystem {
   }
 
   private getArchetype(bot: TankLike): BotArchetype {
-    if (this.isSupportClass(bot.classType)) return 'SUPPORT';
+    if (this.isRestorationSupportTank(bot)) return 'SUPPORT';
     if (this.isHeavySniperClass(bot.classType)) return 'SNIPER';
     if (this.isDroneClass(bot.classType)) return 'DRONE_COMMANDER';
 

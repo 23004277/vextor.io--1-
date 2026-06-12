@@ -17,6 +17,7 @@ import { COLORS, SHOP_ITEMS, ACHIEVEMENTS, UPDATE_LOG } from './constants';
 import { TankPreview } from './components/TankPreview';
 import { TacticalTooltip } from './components/TacticalTooltip';
 import { MainMenu } from './components/MainMenu';
+import { ClickToPlayGate } from './components/ClickToPlayGate';
 import { BackgroundMusic, BackgroundMusicVisualizerFrame } from './Background Music';
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
@@ -176,6 +177,11 @@ const App: React.FC = () => {
     }
   }, [engine, menuBootUnlocked, menuBootUnlocking]);
 
+  const handleMenuBootOverlayActivate = useCallback(() => {
+    if (menuBootUnlocked || menuBootUnlocking || isPlayingRef.current) return;
+    void unlockMenuBoot();
+  }, [menuBootUnlocked, menuBootUnlocking, unlockMenuBoot]);
+
   // Tooltip State
   const [tooltip, setTooltip] = useState<{ label: string; desc?: string; visible: boolean }>({
     label: '',
@@ -314,10 +320,12 @@ const App: React.FC = () => {
   useEffect(() => {
     if (typeof window === 'undefined' || isPlaying || !menuBootUnlocked) return;
     let rafId = 0;
-    const tick = () => {
+    let lastVisualTick = 0;
+    const tick = (timestamp: number) => {
       const music = menuMusicRef.current;
-      if (music) {
+      if (music && timestamp - lastVisualTick >= 33) {
         setMenuMusicSnapshot(music.getVisualizerFrame());
+        lastVisualTick = timestamp;
       }
       rafId = window.requestAnimationFrame(tick);
     };
@@ -925,111 +933,11 @@ const App: React.FC = () => {
         canJoinTeam={(t) => engine?.canJoinTeam(t) ?? true}
       />
 
-      {!isPlaying && menuBootOverlayVisible && (
-        <motion.button
-          type="button"
-          initial={{ opacity: 1, backdropFilter: 'blur(18px)' }}
-          animate={{
-            opacity: menuBootUnlocked ? 0 : 1,
-            backdropFilter: menuBootUnlocked ? 'blur(0px)' : 'blur(16px)',
-          }}
-          transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
-          onClick={() => { void unlockMenuBoot(); }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              void unlockMenuBoot();
-            }
-          }}
-          aria-label="Click to activate VEXTOR audio and enter the main menu"
-          className="absolute inset-0 z-[120] flex cursor-pointer items-center justify-center bg-slate-950/58 px-6 text-left outline-none"
-        >
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgba(34,211,238,0.14),transparent_35%),linear-gradient(180deg,rgba(2,6,23,0.14),rgba(2,6,23,0.72))]" />
-          <motion.div
-            aria-hidden="true"
-            className="pointer-events-none absolute left-1/2 top-1/2 h-[420px] w-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/12"
-            animate={{
-              scale: menuBootUnlocking ? 1.08 : [1, 1.035, 1],
-              opacity: menuBootUnlocking ? 0.18 : [0.16, 0.28, 0.16],
-            }}
-            transition={menuBootUnlocking ? { duration: 0.34 } : { duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
-          />
-          <motion.div
-            aria-hidden="true"
-            className="pointer-events-none absolute left-1/2 top-1/2 h-[560px] w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{ background: 'radial-gradient(circle, rgba(34,211,238,0.08), transparent 68%)' }}
-            animate={{
-              scale: menuBootUnlocking ? 1.12 : [0.98, 1.03, 0.98],
-              opacity: menuBootUnlocking ? 0.22 : [0.14, 0.24, 0.14],
-            }}
-            transition={menuBootUnlocking ? { duration: 0.34 } : { duration: 3.8, repeat: Infinity, ease: 'easeInOut' }}
-          />
-          <motion.div
-            animate={{
-              opacity: menuBootUnlocked ? 0 : 1,
-              scale: menuBootUnlocking ? 0.985 : 1,
-              y: menuBootUnlocking ? 8 : 0,
-            }}
-            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-            className="relative w-full max-w-[700px] overflow-hidden rounded-[34px] border border-cyan-300/18 bg-slate-950/74 p-0 shadow-[0_30px_90px_rgba(0,0,0,0.58)] backdrop-blur-2xl"
-          >
-            <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(34,211,238,0.08),transparent_38%,transparent_62%,rgba(96,165,250,0.06))]" />
-            <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent" />
-            <div className="relative px-8 py-8 md:px-10 md:py-9">
-              <div className="flex items-start justify-between gap-6">
-                <div>
-                  <div className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200/72">VEXTOR // LIVE SIGNAL</div>
-                  <div className="mt-4 text-4xl font-black uppercase tracking-[0.08em] text-white md:text-5xl">
-                    Enter The Arena
-                  </div>
-                  <div className="mt-3 max-w-[34rem] text-sm font-bold uppercase tracking-[0.16em] text-cyan-100/58 md:text-[15px]">
-                    Grid online. Command deck standing by. Tap to begin the live uplink.
-                  </div>
-                </div>
-                <motion.div
-                  aria-hidden="true"
-                  className="hidden shrink-0 md:block"
-                  animate={{
-                    rotate: menuBootUnlocking ? 90 : [0, 8, -6, 0],
-                    scale: menuBootUnlocking ? 1.08 : [1, 1.03, 1],
-                  }}
-                  transition={menuBootUnlocking ? { duration: 0.34 } : { duration: 4.4, repeat: Infinity, ease: 'easeInOut' }}
-                >
-                  <div className="relative flex h-20 w-20 items-center justify-center rounded-[28px] border border-cyan-300/24 bg-cyan-400/8 shadow-[0_0_34px_rgba(34,211,238,0.12)]">
-                    <div className="absolute inset-3 rounded-[22px] border border-cyan-200/14" />
-                    <div className="h-4 w-4 rounded-full bg-cyan-300 shadow-[0_0_22px_rgba(103,232,249,0.98)]" />
-                  </div>
-                </motion.div>
-              </div>
-
-              <div className="mt-7 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-                <div className="rounded-[24px] border border-white/8 bg-white/[0.035] px-5 py-4">
-                  <div className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200/58">Launch Sequence</div>
-                  <div className="mt-2 text-sm leading-relaxed text-white/72">
-                    Fade in, lock on, and bring the VEXTOR interface online in one clean transition.
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 self-stretch md:self-auto">
-                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/38">
-                    {menuBootUnlocking ? 'Initializing uplink...' : 'Ready for deployment'}
-                  </div>
-                  <motion.div
-                    animate={{
-                      boxShadow: menuBootUnlocking
-                        ? '0 0 0 rgba(34,211,238,0)'
-                        : ['0 0 0 rgba(34,211,238,0)', '0 0 24px rgba(34,211,238,0.22)', '0 0 0 rgba(34,211,238,0)'],
-                    }}
-                    transition={menuBootUnlocking ? { duration: 0.2 } : { duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
-                    className="rounded-full border border-cyan-300/24 bg-cyan-400/10 px-5 py-2.5 text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200"
-                  >
-                    {menuBootUnlocking ? 'Linking' : 'Begin'}
-                  </motion.div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        </motion.button>
-      )}
+      <AnimatePresence>
+        {!isPlaying && menuBootOverlayVisible && (
+          <ClickToPlayGate activating={menuBootUnlocking} onActivate={handleMenuBootOverlayActivate} />
+        )}
+      </AnimatePresence>
 
         {/* Modals */}
         {showLogin && <LoginModal onClose={() => setShowLogin(false)} onLoginSuccess={(u) => {

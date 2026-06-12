@@ -7,7 +7,6 @@ import { COLORS } from '../constants';
 import { BackendService } from '../services/BackendService';
 import { GameMode, HighScoreEntry, TankClass, Team, User } from '../types';
 import { MenuMusicVisualizer } from './MenuMusicVisualizer';
-import { TankPreview } from './TankPreview';
 
 interface MainMenuProps {
   isPlaying: boolean;
@@ -640,7 +639,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           initial={bootUnlocked ? 'hidden' : false}
           animate={bootUnlocked ? 'visible' : undefined}
           exit="exit"
-          className={`vextor-menu absolute inset-0 z-50 h-[100dvh] max-h-[100dvh] overflow-hidden select-none transition-[filter,opacity,transform] duration-500 ${bootUnlocked ? 'pointer-events-auto opacity-100 blur-0 brightness-100 saturate-100 scale-100' : 'pointer-events-none opacity-90 blur-[10px] brightness-[0.62] saturate-[0.72] scale-[0.992]'}`}
+          className={`vextor-menu absolute inset-0 z-50 h-full max-h-full overflow-hidden select-none transition-[filter,opacity,transform] duration-500 ${bootUnlocked ? 'pointer-events-auto opacity-100 blur-0 brightness-100 saturate-100 scale-100' : 'pointer-events-none opacity-90 blur-[10px] brightness-[0.62] saturate-[0.72] scale-[0.992]'}`}
           style={{
             color: UI.ink,
             background:
@@ -657,6 +656,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50V18L28 2l28 16v32L28 66zm0 34L0 84V52l28-16 28 16v32L28 100z' fill='none' stroke='%2320e6ff' stroke-width='0.5'/%3E%3C/svg%3E\")",
                 backgroundSize: '56px 100px',
                 transform: `translate3d(${parallax.x * 0.01}px, ${parallax.y * 0.01}px, 0)`,
+                willChange: 'transform',
               }}
             />
             <div className="absolute left-1/2 top-1/2 h-[560px] w-[900px] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-55" style={{ background: 'radial-gradient(ellipse, rgba(8, 145, 178, 0.18), transparent 68%)' }} />
@@ -664,7 +664,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 50%, transparent 34%, rgba(2,6,23,0.88) 100%)' }} />
           </div>
 
-          <div className="vextor-menu relative z-10 mx-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-[1800px] flex-col gap-2.5 overflow-hidden px-3 py-3 lg:px-4">
+          <div className="vextor-menu relative z-10 mx-auto flex h-full max-h-full min-h-0 w-full max-w-[1800px] flex-col gap-2.5 overflow-hidden px-3 py-3 lg:px-4">
             <header className="grid shrink-0 grid-cols-1 gap-2 rounded-2xl border border-cyan-300/12 bg-slate-950/58 px-4 py-2.5 shadow-[0_12px_42px_rgba(0,0,0,0.24)] backdrop-blur-xl md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-teal-300 shadow-[0_0_14px_rgba(44,255,199,0.9)]" />
@@ -761,12 +761,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                         </div>
                         <div
                           className="vextor-logo-shell relative mt-2 max-w-full overflow-visible"
-                          style={{
-                            transform: `scale(${1 + logoPulse * 0.035})`,
-                            filter: `drop-shadow(0 0 ${20 + bloom * 18}px rgba(32,230,255,${0.14 + backgroundGlow * 0.12}))`,
-                            transition: 'transform 70ms linear, filter 90ms linear',
-                          }}
-                        >
+                           style={{
+                             transform: `scale(${1 + logoPulse * 0.035})`,
+                             filter: `drop-shadow(0 0 ${20 + bloom * 18}px rgba(32,230,255,${0.14 + backgroundGlow * 0.12}))`,
+                             transition: 'transform 70ms linear, filter 90ms linear',
+                             willChange: 'transform, filter',
+                           }}
+                         >
                           <h1
                             className="vextor-title"
                             style={{
@@ -850,6 +851,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                           radial-gradient(circle at 50% 56%, rgba(255,213,79,${0.02 + reactorPulse * 0.08}), transparent 22%)
                         `,
                         boxShadow: `inset 0 0 ${28 + bloom * 24}px rgba(32,230,255,${0.04 + backgroundGlow * 0.06})`,
+                        contain: 'layout paint style',
+                        transform: 'translateZ(0)',
                       }}
                     >
                       <MenuMusicVisualizer snapshot={musicSnapshot} variant="hero" />
@@ -861,9 +864,6 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                         className="absolute inset-y-8 left-1/2 w-px bg-gradient-to-b from-transparent via-teal-300/14 to-transparent"
                         style={{ opacity: 0.42 + reactorPulse * 0.18 }}
                       />
-                      <div className="relative z-10">
-                        <InteractiveTankPreview tankColor={tankColor} isTeamsMode={isTeamsMode} parallax={parallax} compact={compactHeight} musicSnapshot={musicSnapshot} />
-                      </div>
                     </div>
                   </Panel>
 
@@ -1135,7 +1135,6 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             }
 
             @media (max-width: 1023px) {
-              .vextor-menu { overflow-y: auto; }
               .vextor-menu .grid { min-height: auto; }
             }
 
@@ -1173,137 +1172,5 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         </motion.div>
       )}
     </AnimatePresence>
-  );
-};
-
-interface InteractiveTankPreviewProps {
-  tankColor: string;
-  isTeamsMode: boolean;
-  parallax: { x: number; y: number };
-  compact?: boolean;
-  musicSnapshot: BackgroundMusicVisualizerFrame | null;
-}
-
-const InteractiveTankPreview: React.FC<InteractiveTankPreviewProps> = ({ tankColor, isTeamsMode, parallax, compact = false, musicSnapshot }) => {
-  const frameRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef<number>(0);
-  const targetAngle = useRef(0);
-  const beatSwingRef = useRef(0);
-  const snapshotRef = useRef<BackgroundMusicVisualizerFrame | null>(musicSnapshot);
-  const [turretRotation, setTurretRotation] = useState(0);
-  const [chassisRotation, setChassisRotation] = useState(0);
-  const [pulse, setPulse] = useState(0);
-
-  useEffect(() => {
-    snapshotRef.current = musicSnapshot;
-  }, [musicSnapshot]);
-
-  useEffect(() => {
-    const tick = (time: number) => {
-      const snapshot = snapshotRef.current;
-      const beatPhase = snapshot?.beatPhase ?? 0;
-      const beatPulse = snapshot?.beatPulse ?? 0;
-      const downbeatPulse = snapshot?.downbeatPulse ?? 0;
-
-      setTurretRotation((prev) => {
-        const swingDirection = Math.sin((time / 1000) * Math.PI * 2 * (0.65 + beatPhase * 0.35));
-        beatSwingRef.current = swingDirection * (6 + beatPulse * 7 + downbeatPulse * 9);
-        const desiredAngle = targetAngle.current + beatSwingRef.current;
-        let delta = desiredAngle - prev;
-        while (delta < -180) delta += 360;
-        while (delta > 180) delta -= 360;
-        return prev + delta * (0.1 + downbeatPulse * 0.05);
-      });
-      setChassisRotation(Math.sin(time / 1800) * (4 + beatPulse * 2) + downbeatPulse * 2.5);
-      setPulse(Math.min(1, Math.sin(time / 800) * 0.28 + 0.42 + beatPulse * 0.38 + downbeatPulse * 0.18));
-      rafRef.current = requestAnimationFrame(tick);
-    };
-
-    const onMove = (event: MouseEvent) => {
-      if (!frameRef.current) return;
-      const bounds = frameRef.current.getBoundingClientRect();
-      targetAngle.current =
-        Math.atan2(event.clientY - (bounds.top + bounds.height / 2), event.clientX - (bounds.left + bounds.width / 2)) *
-        (180 / Math.PI);
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-    window.addEventListener('mousemove', onMove, { passive: true });
-
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener('mousemove', onMove);
-    };
-  }, []);
-
-  const previewSize = compact ? (isTeamsMode ? 102 : 124) : isTeamsMode ? 126 : 156;
-  const frameSize = compact ? 176 : 220;
-
-  return (
-    <div
-      className="relative flex shrink-0 items-center justify-center"
-      style={{
-        width: frameSize,
-        height: frameSize,
-        transform: `translate3d(${parallax.x * 0.007}px, ${parallax.y * 0.007}px, 0)`,
-      }}
-    >
-      {[0, 1, 2].map((index) => (
-        <div
-          key={index}
-          className="absolute rounded-full"
-          style={{
-            width: 148 + index * 38,
-            height: 148 + index * 38,
-            border: `1px solid rgba(32,230,255,${0.07 - index * 0.015})`,
-            animation: `spin${index % 2 === 0 ? 'CW' : 'CCW'} ${18 + index * 8}s linear infinite`,
-            borderStyle: index === 1 ? 'dashed' : 'solid',
-          }}
-        />
-      ))}
-
-      <div
-        className="absolute rounded-full"
-        style={{
-          width: 94 + pulse * 42,
-          height: 94 + pulse * 42,
-          border: `1px solid rgba(44,255,199,${0.18 * (1 - pulse)})`,
-        }}
-      />
-
-      <div
-        className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full"
-        style={{
-          width: 116,
-          height: 12,
-          background: 'radial-gradient(ellipse, rgba(0,0,0,0.66), transparent)',
-          filter: 'blur(6px)',
-        }}
-      />
-
-      <div ref={frameRef} className="relative z-10" style={{ filter: 'drop-shadow(0 0 24px rgba(32,230,255,0.18))' }}>
-        <TankPreview
-          tankClass={TankClass.BASIC}
-          color={tankColor}
-          size={previewSize}
-          turretRotation={turretRotation}
-          chassisRotation={chassisRotation}
-        />
-      </div>
-
-      {[0, 90, 180, 270].map((deg) => (
-        <div
-          key={deg}
-          className="absolute h-2.5 w-px origin-bottom"
-          style={{
-            background: 'rgba(44,255,199,0.30)',
-            left: '50%',
-            bottom: '50%',
-            transform: `rotate(${deg}deg) translateX(-50%)`,
-            transformOrigin: `50% ${compact ? 94 : 116}px`,
-          }}
-        />
-      ))}
-    </div>
   );
 };

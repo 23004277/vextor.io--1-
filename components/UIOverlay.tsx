@@ -190,6 +190,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     transformationReady, activeBuffs, minimapMarkers, sandboxConfig, primedSpawn, abilityHud,
     playerState, evolutionTransitionRemaining, bossChoices, enemyZoneWarningLevel, enemyZoneWarningText,
     bloodDrainLive, bloodDrainStacks, bloodDrainSession, rebirthEligible, dominionScores, dominionOwnedCount, dominionTimeRemaining, dominionZones,
+    botChatBubbles = [], deathPresentation,
     voidTransitStage, voidTransitProgress
   } = gameState;
 
@@ -203,6 +204,10 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   const [sandboxButtonPulse, setSandboxButtonPulse] = useState(false);
   const [displayHealthValue, setDisplayHealthValue] = useState(health);
   const [displayXpPercent, setDisplayXpPercent] = useState(0);
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1920,
+    height: typeof window !== 'undefined' ? window.innerHeight : 1080,
+  }));
   const healthTweenRef = useRef<number>(health);
   const xpTweenRef = useRef<number>(0);
 
@@ -298,6 +303,18 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     return () => window.cancelAnimationFrame(rafId);
   }, [health, xpPercent]);
 
+  useEffect(() => {
+    const handleResize = () => {
+      setViewportSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const topFiveLeaderboard = useMemo(() => leaderboard.slice(0, 5), [leaderboard]);
   const isTeamMode = gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION;
   const dominionScoreRows = useMemo(() => {
@@ -321,14 +338,100 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   const compactCurrentClass = String(mainClass || currentClass || 'Basic Tank').replace(/\s+Tank$/i, '').trim();
   const sectorLabel = secondarySector === 'restoration' ? 'Restoration Sector' : secondarySector === 'blood' ? 'Blood Sector' : 'No Sector';
   const contestedDominionCount = dominionZones?.filter((zone) => zone.contested).length ?? 0;
+  const deathCardVisible = deathPresentation?.cardVisible ?? isDead;
+  const deathFadeProgress = deathPresentation?.fadeProgress ?? 1;
+  const botBubbleRenderData = useMemo(() => {
+    return botChatBubbles
+      .map((bubble) => {
+        const x = (bubble.worldPos.x - camera.x) * camera.zoom + viewportSize.width * 0.5;
+        const y = (bubble.worldPos.y - camera.y) * camera.zoom + viewportSize.height * 0.5;
+        return { ...bubble, screenX: x, screenY: y };
+      })
+      .filter((bubble) => bubble.screenX > -260 && bubble.screenX < viewportSize.width + 260 && bubble.screenY > -160 && bubble.screenY < viewportSize.height + 220);
+  }, [botChatBubbles, camera.x, camera.y, camera.zoom, viewportSize.height, viewportSize.width]);
+  const botBubbleLayer = (
+    <div className="pointer-events-none absolute inset-0 z-[205] overflow-hidden">
+      {botBubbleRenderData.map((bubble) => (
+        <div
+          key={bubble.id}
+          className="absolute"
+          style={{
+            left: bubble.screenX,
+            top: bubble.screenY,
+            transform: 'translate(-50%, -100%)',
+            opacity: bubble.opacity,
+          }}
+        >
+          <div
+            className="min-w-[120px] max-w-[220px] rounded-[18px] border px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.34)] backdrop-blur-md"
+            style={{
+              borderColor: `${bubble.accentColor}66`,
+              background: 'linear-gradient(180deg, rgba(5,12,22,0.92), rgba(4,8,16,0.84))',
+              boxShadow: `0 14px 36px rgba(0,0,0,0.34), 0 0 0 1px ${bubble.accentColor}18`,
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: bubble.accentColor }} />
+              <span className="text-[9px] font-black uppercase tracking-[0.18em] text-white/52">{bubble.category.replace(/_/g, ' ')}</span>
+            </div>
+            <div className="mt-1.5 text-[13px] font-black leading-5 text-white">
+              {bubble.displayText}
+            </div>
+          </div>
+          <div
+            className="mx-auto h-3 w-3 -translate-y-[3px] rotate-45 rounded-[2px] border-r border-b"
+            style={{
+              borderColor: `${bubble.accentColor}66`,
+              background: 'rgba(5,12,22,0.88)',
+            }}
+          />
+        </div>
+      ))}
+    </div>
+  );
 
   if (isDead) {
+    if (!deathCardVisible) {
+      return (
+        <div className="absolute inset-0 z-[220] pointer-events-auto">
+          {botBubbleLayer}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: `rgba(2, 7, 16, ${deathPresentation?.dimOpacity ?? 0.28})`,
+              backdropFilter: `blur(${deathPresentation?.blurPx ?? 0}px)`,
+            }}
+          />
+          <div className="absolute inset-x-0 top-8 flex justify-center px-4">
+            <div className="rounded-full border border-cyan-300/20 bg-[#06111d]/88 px-4 py-2 text-[11px] font-black uppercase tracking-[0.2em] text-cyan-200/86 shadow-[0_10px_28px_rgba(0,0,0,0.34)]">
+              Killcam feed live • {Math.max(1, Math.ceil((deathPresentation?.delayRemainingMs ?? 0) / 1000))}s
+            </div>
+          </div>
+          <div className="absolute right-5 top-5 flex gap-2">
+            <button
+              onClick={onRestart}
+              className="rounded-xl border border-cyan-300/22 bg-cyan-400/12 px-4 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-cyan-100 transition hover:bg-cyan-400/20"
+            >
+              Respawn
+            </button>
+            <button
+              onClick={onExit}
+              className="rounded-xl border border-white/12 bg-white/5 px-4 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-white/86 transition hover:bg-white/10"
+            >
+              Main Menu
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="absolute inset-0 z-[220] flex items-center justify-center bg-black/70 backdrop-blur-md pointer-events-auto px-4">
+        {botBubbleLayer}
         <div className="relative w-full max-w-[560px] overflow-hidden rounded-2xl border border-white/15 bg-[#090d18] shadow-[0_30px_80px_rgba(0,0,0,0.75)] animate-in fade-in zoom-in-95 duration-300">
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/60 to-transparent" />
           <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse at top, rgba(56,189,248,0.12), transparent 60%)' }} />
-          <div className="relative px-8 pt-8 pb-7">
+          <div className="relative px-8 pt-8 pb-7" style={{ opacity: deathFadeProgress, transform: `translateY(${(1 - deathFadeProgress) * 12}px)` }}>
             <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/70 mb-2">Combat Report</div>
           <h1 className="text-[54px] leading-[0.95] font-black tracking-tight text-white mb-3">YOU DIED</h1>
           <div className="grid grid-cols-3 gap-3 mb-6">
@@ -416,6 +519,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
         className="absolute inset-0 pointer-events-none p-6 flex flex-col justify-between overflow-hidden font-sans select-none z-[100]"
         style={{ transform: `scale(${settings.uiScale})`, transformOrigin: 'center center' }}
     >
+      {botBubbleLayer}
       
       {/* Notifications Layer */}
       <div className="absolute top-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 w-full max-w-md pointer-events-none z-[110]">

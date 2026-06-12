@@ -45,6 +45,97 @@ export class MovementSystem {
     return this.safeNormalize(Vector.sub(this.cleanVector(from), this.cleanVector(threat)));
   }
 
+  pursuitForce(
+    from: Vector2,
+    targetPos: Vector2,
+    targetVel: Vector2,
+    predictionSeconds: number = 0.55,
+    maxPredictionSeconds: number = 0.95
+  ): Vector2 {
+    const start = this.cleanVector(from);
+    const target = this.cleanVector(targetPos);
+    const velocity = this.cleanVector(targetVel);
+    const distance = Math.sqrt(Math.max(this.tinyDistanceSq, Vector.distSq(start, target)));
+    const speed = Math.sqrt(Vector.magSq(velocity));
+    const prediction = this.clamp(
+      this.cleanNumber(predictionSeconds, 0.55) + Math.min(0.22, distance / 2400) + speed * 0.018,
+      0,
+      Math.max(0, this.cleanNumber(maxPredictionSeconds, 0.95))
+    );
+    const futureTarget = {
+      x: target.x + velocity.x * prediction,
+      y: target.y + velocity.y * prediction,
+    };
+    return this.seekForce(start, futureTarget);
+  }
+
+  evadeForce(
+    from: Vector2,
+    threatPos: Vector2,
+    threatVel: Vector2,
+    predictionSeconds: number = 0.45,
+    maxPredictionSeconds: number = 0.85
+  ): Vector2 {
+    const start = this.cleanVector(from);
+    const threat = this.cleanVector(threatPos);
+    const velocity = this.cleanVector(threatVel);
+    const distance = Math.sqrt(Math.max(this.tinyDistanceSq, Vector.distSq(start, threat)));
+    const speed = Math.sqrt(Vector.magSq(velocity));
+    const prediction = this.clamp(
+      this.cleanNumber(predictionSeconds, 0.45) + Math.min(0.18, distance / 2600) + speed * 0.016,
+      0,
+      Math.max(0, this.cleanNumber(maxPredictionSeconds, 0.85))
+    );
+    const futureThreat = {
+      x: threat.x + velocity.x * prediction,
+      y: threat.y + velocity.y * prediction,
+    };
+    return this.fleeForce(start, futureThreat);
+  }
+
+  maintainDistanceForce(from: Vector2, target: Vector2, desiredDistance: number, tolerance: number = 32): Vector2 {
+    const start = this.cleanVector(from);
+    const destination = this.cleanVector(target);
+    const desired = Math.max(1, this.cleanNumber(desiredDistance, 1));
+    const band = Math.max(0, this.cleanNumber(tolerance, 32));
+    const offset = Vector.sub(destination, start);
+    const distanceSq = Vector.magSq(offset);
+    if (distanceSq <= this.tinyDistanceSq) return this.zero();
+
+    const distance = Math.sqrt(distanceSq);
+    const dir = Vector.mult(offset, 1 / distance);
+    const delta = distance - desired;
+
+    if (Math.abs(delta) <= band) return this.zero();
+
+    const urgency = this.clamp((Math.abs(delta) - band) / Math.max(24, desired * 0.42), 0, 1);
+    const eased = urgency * urgency * (3 - 2 * urgency);
+    const sign = delta > 0 ? 1 : -1;
+    return this.capExtremeForce({ x: dir.x * eased * sign, y: dir.y * eased * sign });
+  }
+
+  orbitForce(
+    from: Vector2,
+    targetPos: Vector2,
+    targetVel: Vector2,
+    desiredDistance: number,
+    strafeDir: 1 | -1,
+    radialWeight: number = 0.78,
+    tangentWeight: number = 1
+  ): Vector2 {
+    const pursuit = this.pursuitForce(from, targetPos, targetVel, 0.42, 0.82);
+    const target = this.cleanVector(targetPos);
+    const toTarget = this.seekForce(from, target);
+    if (Vector.magSq(toTarget) <= this.epsilon) return pursuit;
+
+    const tangent = {
+      x: -toTarget.y * (strafeDir === -1 ? -1 : 1),
+      y: toTarget.x * (strafeDir === -1 ? -1 : 1),
+    };
+    const radial = this.maintainDistanceForce(from, target, desiredDistance, Math.max(20, desiredDistance * 0.12));
+    return this.composeSteering([tangent, radial, pursuit], [tangentWeight, radialWeight, 0.32], 1.4);
+  }
+
   arrive(from: Vector2, to: Vector2, slowRadius: number): Vector2 {
     const start = this.cleanVector(from);
     const destination = this.cleanVector(to);

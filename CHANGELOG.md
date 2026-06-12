@@ -4,15 +4,15 @@
 Date: 12/06/26
 Theme: Sectors / Sandbox / Audio / UI / AI
 
-This update restructures Blood and Restoration into secondary sectors, sharpens menu presentation, improves sandbox flow, and continues AI, HUD, and trap-side cleanup.
+This build turns Blood and Restoration into secondary sectors, simplifies the click-to-play flow, fixes aura and music issues, and gives Dominion a better balance and bot pass.
 
 ### Highlights
-- Blood and Restoration now work as secondary sectors layered on top of your main class instead of replacing it.
-- Level 30 now opens a sector choice so builds can continue into normal class progressions while gaining support or drain utility.
-- Removed the old class-transfer stat weirdness that could leave deaths, mode swaps, or class upgrades feeling weaker or inconsistent.
-- Updated HUD and gameplay logic to respect sector overlays instead of treating Blood and Restoration like isolated chassis paths.
-- Continued sandbox, preview, and menu polish work, including visualizer cleanup and broader UI organisation passes.
-- Ongoing AI, trap, and combat tuning landed alongside the new progression structure.
+- Blood and Restoration now sit on top of your main class as secondary sectors instead of replacing your chassis path.
+- Level 30 opens sector choice while normal class progression continues, which removes old stat-transfer weirdness during deaths, swaps, and upgrades.
+- The click-to-play screen and menu flow were simplified and cleaned up, with audio gate, visualizer, spacing, and scrolling fixes.
+- Restoration and Blood aura visuals now show correctly after selection.
+- Menu music now rotates between tracks properly instead of sticking after one song ends.
+- Dominion no longer gets pentagon nest pressure, and Dominion bots now defend, regroup, stage, and contest objectives more intelligently.
 
 ### Notes
 - This changelog is intentionally short for webhook safety.
