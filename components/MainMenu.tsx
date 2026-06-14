@@ -931,7 +931,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   </Panel>
 
                   <Panel bodyClassName="p-0" className="shrink-0">
-                    <div className="grid gap-2.5 p-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(235px,300px)_minmax(220px,285px)]">
+                    <div className="grid gap-2.5 p-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(235px,285px)_minmax(250px,320px)] 2xl:grid-cols-[minmax(0,1fr)_minmax(235px,285px)_minmax(220px,270px)_minmax(250px,320px)]">
                       <div className="min-w-0 rounded-xl border border-cyan-300/10 bg-sky-950/20 p-3">
                         <div className="flex min-w-0 items-center gap-2.5">
                           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/18 bg-cyan-400/[0.08]"><Pencil className="h-4 w-4 text-cyan-300" /></div>
@@ -1009,7 +1009,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                         </button>
                       </div>
 
-                      <div className="rounded-xl border p-3" style={{ borderColor: modeMeta.border, background: modeMeta.fill }}>
+                      <div className="rounded-xl border p-3 2xl:block hidden" style={{ borderColor: modeMeta.border, background: modeMeta.fill }}>
                         <div className="break-words text-[8px] font-black uppercase tracking-[0.16em]" style={{ color: modeMeta.color }}>{modeMeta.code}</div>
                         <div className="mt-1 break-words text-sm font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/90">{modeMeta.title}</div>
                         <p className="mt-1.5 break-words text-[9px] font-bold uppercase leading-relaxed tracking-[0.07em] text-sky-100/42">{modeMeta.desc}</p>
@@ -1020,12 +1020,31 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                           </div>
                         )}
                       </div>
+
+                      <div className="min-w-0 rounded-xl border border-cyan-300/10 bg-slate-950/45 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="break-words text-[8px] font-black uppercase tracking-[0.16em] text-cyan-200/78">Top Agents</div>
+                            <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/30">Leaderboard uplink</div>
+                          </div>
+                          <div className="shrink-0 rounded-full border border-cyan-300/12 bg-cyan-400/[0.07] px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-cyan-100/70">
+                            {topScores.length}
+                          </div>
+                        </div>
+                        <div className="menu-scrollbar mt-3 grid max-h-[170px] content-start gap-1.5 overflow-y-auto pr-1">
+                          {topScores.length === 0 ? (
+                            <div className="flex items-center justify-center rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-5 text-center text-[9px] font-black uppercase tracking-[0.12em] text-sky-100/25">No data stream</div>
+                          ) : (
+                            topScores.map((entry, index) => <LeaderboardRow key={`${entry.name}-${index}`} entry={entry} index={index} />)
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </Panel>
                 </form>
               </motion.main>
 
-              <motion.aside variants={slideRight} className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2.5 overflow-hidden">
+              <motion.aside variants={slideRight} className="grid min-h-0 min-w-0 grid-rows-[auto_auto] gap-2.5 overflow-hidden">
                 <Panel title="Arena Setup" subtitle="Mode and team grouped">
                   <div className="grid gap-3">
                     <div className="grid grid-cols-2 gap-2">
@@ -1068,16 +1087,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                         })}
                       </div>
                     )}
-                  </div>
-                </Panel>
 
-                <Panel title="Top Agents" subtitle="Leaderboard uplink" className="min-h-0" bodyClassName="min-h-0 p-2.5">
-                  <div className="menu-scrollbar grid h-full content-start gap-1.5 overflow-y-auto pr-1">
-                    {topScores.length === 0 ? (
-                      <div className="flex items-center justify-center rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-5 text-center text-[9px] font-black uppercase tracking-[0.12em] text-sky-100/25">No data stream</div>
-                    ) : (
-                      topScores.map((entry, index) => <LeaderboardRow key={`${entry.name}-${index}`} entry={entry} index={index} />)
-                    )}
                   </div>
                 </Panel>
 

@@ -15,11 +15,16 @@ export const chooseBossRushAttack = (
   definition: BossRushBossDefinition,
   runtime: BossRushBossRuntime,
   boss: BossRushBossEntity,
-  player: any
+  player: any,
+  options?: {
+    excludeIds?: Set<string>;
+    preferNonBasic?: boolean;
+  }
 ): BossRushAttackSpec | null => {
   const distance = Vector.dist(boss.pos, player.pos);
   const phase = getBossRushPhase(definition, boss, runtime.awakened);
   const available = definition.attacks.filter((attack) => {
+    if (options?.excludeIds?.has(attack.id)) return false;
     if ((runtime.attackCooldowns[attack.id] || 0) > 0) return false;
     if (attack.minRange != null && distance < attack.minRange) return false;
     if (attack.maxRange != null && distance > attack.maxRange) return false;
@@ -28,7 +33,12 @@ export const chooseBossRushAttack = (
   });
   if (available.length === 0) return null;
 
-  const weighted = available
+  const filtered = options?.preferNonBasic
+    ? available.filter((attack) => attack.id !== 'boss_basic_volley')
+    : available;
+  const source = filtered.length > 0 ? filtered : available;
+
+  const weighted = source
     .map((attack) => ({ attack, score: (attack.weight || 1) * (0.85 + Math.random() * 0.3) }))
     .sort((a, b) => b.score - a.score);
   return weighted[0].attack;

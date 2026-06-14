@@ -105,6 +105,17 @@ export class SoundEngine {
     return center * (1 - amount + Math.random() * amount * 2);
   }
 
+  private semitoneFactor(semitones: number) {
+    return Math.pow(2, semitones / 12);
+  }
+
+  private chooseBossPitchFlavor(awakened = false) {
+    const flavors = awakened
+      ? [-5, -2, 0, 3, 7]
+      : [-7, -3, 0, 4, 8];
+    return this.semitoneFactor(flavors[Math.floor(Math.random() * flavors.length)]);
+  }
+
   // Global pitch variance per synthesized voice so tones naturally swing high/low.
   private createOscillatorVoice(): OscillatorNode {
     const osc = this.ctx.createOscillator();
@@ -677,9 +688,13 @@ export class SoundEngine {
     const t = this.ctx.currentTime;
     const oscA = this.createOscillatorVoice();
     const oscB = this.createOscillatorVoice();
+    const ghost = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
+    const pitchFlavor = this.chooseBossPitchFlavor(awakened);
+    const contourFlavor = Math.random() < 0.5 ? this.semitoneFactor(-5) : this.semitoneFactor(4);
+    const duration = (awakened ? 0.34 : 0.28) * this.jitter(1, 0.18);
 
     let startA = 104;
     let endA = 64;
@@ -688,6 +703,7 @@ export class SoundEngine {
     let peak = awakened ? 0.11 : 0.075;
     let waveA: OscillatorType = 'sawtooth';
     let waveB: OscillatorType = 'square';
+    let waveGhost: OscillatorType = 'triangle';
     let center = 380;
 
     if (bossKey === 'gatekeeper') {
@@ -739,24 +755,31 @@ export class SoundEngine {
 
     oscA.type = waveA;
     oscB.type = waveB;
-    oscA.frequency.setValueAtTime(startA * this.jitter(1, 0.03), t);
-    oscA.frequency.exponentialRampToValueAtTime(endA * this.jitter(1, 0.02), t + 0.24);
-    oscB.frequency.setValueAtTime(startB * this.jitter(1, 0.03), t);
-    oscB.frequency.exponentialRampToValueAtTime(endB * this.jitter(1, 0.025), t + 0.24);
-    bp.frequency.setValueAtTime(center, t);
-    bp.Q.setValueAtTime(awakened ? 2.8 : 2.1, t);
+    ghost.type = waveGhost;
+    oscA.frequency.setValueAtTime(startA * pitchFlavor * this.jitter(1, 0.045), t);
+    oscA.frequency.exponentialRampToValueAtTime(endA * contourFlavor * this.jitter(1, 0.03), t + duration * 0.82);
+    oscB.frequency.setValueAtTime(startB * pitchFlavor * this.jitter(1, 0.05), t);
+    oscB.frequency.exponentialRampToValueAtTime(endB * contourFlavor * this.jitter(1, 0.035), t + duration * 0.84);
+    ghost.frequency.setValueAtTime((startA * 0.5 + endB * 0.35) * pitchFlavor * this.jitter(1, 0.05), t);
+    ghost.frequency.exponentialRampToValueAtTime((endA * 0.7 + endB * 0.2) * contourFlavor * this.jitter(1, 0.04), t + duration);
+    bp.frequency.setValueAtTime(center * this.jitter(1, 0.12), t);
+    bp.frequency.linearRampToValueAtTime(center * this.jitter(1, awakened ? 0.2 : 0.14), t + duration * 0.55);
+    bp.Q.setValueAtTime((awakened ? 2.8 : 2.1) * this.jitter(1, 0.18), t);
 
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(peak * spatial.gainMul, t + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
     oscA.connect(bp);
     oscB.connect(bp);
+    ghost.connect(bp);
     bp.connect(gain);
     oscA.start(t);
     oscB.start(t);
-    oscA.stop(t + 0.3);
-    oscB.stop(t + 0.3);
+    ghost.start(t);
+    oscA.stop(t + duration + 0.02);
+    oscB.stop(t + duration + 0.02);
+    ghost.stop(t + duration + 0.03);
   }
 
   playBossRushAwaken(
@@ -773,9 +796,12 @@ export class SoundEngine {
     const t = this.ctx.currentTime;
     const osc = this.createOscillatorVoice();
     const sub = this.createOscillatorVoice();
+    const top = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
+    const pitchFlavor = this.chooseBossPitchFlavor(true);
+    const duration = 0.68 * this.jitter(1, 0.15);
 
     let start = 280;
     let end = 110;
@@ -823,24 +849,30 @@ export class SoundEngine {
 
     osc.type = wave;
     sub.type = 'sine';
-    osc.frequency.setValueAtTime(start, t);
-    osc.frequency.exponentialRampToValueAtTime(end, t + 0.55);
-    sub.frequency.setValueAtTime(subStart, t);
-    sub.frequency.exponentialRampToValueAtTime(subEnd, t + 0.6);
-    filter.frequency.setValueAtTime(1200, t);
-    filter.frequency.exponentialRampToValueAtTime(120, t + 0.6);
+    top.type = bossKey === 'grand_singularity' ? 'sine' : 'triangle';
+    osc.frequency.setValueAtTime(start * pitchFlavor * this.jitter(1, 0.06), t);
+    osc.frequency.exponentialRampToValueAtTime(end * this.semitoneFactor(Math.random() < 0.5 ? -4 : 3) * this.jitter(1, 0.05), t + duration * 0.8);
+    sub.frequency.setValueAtTime(subStart * this.jitter(1, 0.04), t);
+    sub.frequency.exponentialRampToValueAtTime(subEnd * this.jitter(1, 0.05), t + duration * 0.88);
+    top.frequency.setValueAtTime(start * 1.85 * this.jitter(1, 0.08), t + 0.01);
+    top.frequency.exponentialRampToValueAtTime(end * 0.92 * this.jitter(1, 0.07), t + duration * 0.62);
+    filter.frequency.setValueAtTime(1200 * this.jitter(1, 0.12), t);
+    filter.frequency.exponentialRampToValueAtTime(120, t + duration * 0.88);
 
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(peak * spatial.gainMul, t + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.65);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
     osc.connect(filter);
     sub.connect(filter);
+    top.connect(filter);
     filter.connect(gain);
     osc.start(t);
     sub.start(t);
-    osc.stop(t + 0.68);
-    sub.stop(t + 0.68);
+    top.start(t + 0.01);
+    osc.stop(t + duration + 0.02);
+    sub.stop(t + duration + 0.02);
+    top.stop(t + duration * 0.72);
   }
 
   playCelestialBoom(options?: AudioSpatialOptions) {
@@ -1118,6 +1150,8 @@ export class SoundEngine {
     let endFreq = 540;
     let peak = 0.06;
     let wave: OscillatorType = 'square';
+    let jitterAmount = 0.035;
+    let duration = 0.08;
 
     if (variant === 'support') {
       startFreq = 980;
@@ -1144,42 +1178,57 @@ export class SoundEngine {
       endFreq = 176;
       peak = 0.1;
       wave = 'sawtooth';
+      jitterAmount = 0.12;
+      duration = 0.1;
     } else if (variant === 'boss_gatekeeper') {
       startFreq = 248;
       endFreq = 138;
       peak = 0.098;
       wave = 'square';
+      jitterAmount = 0.13;
+      duration = 0.102;
     } else if (variant === 'boss_splitter') {
       startFreq = 468;
       endFreq = 236;
       peak = 0.084;
       wave = 'triangle';
+      jitterAmount = 0.16;
+      duration = 0.088;
     } else if (variant === 'boss_reactor') {
       startFreq = 286;
       endFreq = 126;
       peak = 0.104;
       wave = 'sawtooth';
+      jitterAmount = 0.14;
+      duration = 0.1;
     } else if (variant === 'boss_executioner') {
       startFreq = 188;
       endFreq = 92;
       peak = 0.112;
       wave = 'square';
+      jitterAmount = 0.11;
+      duration = 0.11;
     } else if (variant === 'boss_grand_singularity') {
       startFreq = 352;
       endFreq = 118;
       peak = 0.108;
       wave = 'triangle';
+      jitterAmount = 0.18;
+      duration = 0.108;
     }
 
+    const phrasePitch = variant.startsWith('boss_')
+      ? this.semitoneFactor(([-7, -3, 0, 4, 8])[Math.floor(Math.random() * 5)])
+      : 1;
     osc.type = wave;
-    osc.frequency.setValueAtTime(startFreq * this.jitter(1, 0.035), t);
-    osc.frequency.exponentialRampToValueAtTime(endFreq * this.jitter(1, 0.025), t + 0.065);
+    osc.frequency.setValueAtTime(startFreq * phrasePitch * this.jitter(1, jitterAmount), t);
+    osc.frequency.exponentialRampToValueAtTime(endFreq * this.jitter(1, jitterAmount * 0.7), t + duration * 0.82);
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(peak, t + 0.006);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
     osc.connect(gain);
     osc.start(t);
-    osc.stop(t + 0.09);
+    osc.stop(t + duration + 0.01);
   }
 
   playNotification() {

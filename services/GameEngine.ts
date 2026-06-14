@@ -1,4 +1,4 @@
-import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector, BotChatBubble, BotChatCategory, DeathPresentationState, DeathKillerSnapshot } from '../types';
+import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector, BotChatBubble, BotChatCategory, DeathPresentationState, DeathKillerSnapshot, BossRushLoadout } from '../types';
 import { BASE_STATS, BOSS_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG, SHOP_ITEMS, getShapeRarityTable, SECONDARY_SECTOR_OPTIONS } from '../constants';
 import * as Vector from './MathUtils';
 import { SoundEngine } from './SoundEngine';
@@ -262,6 +262,37 @@ const SKIN_APPLICATION = {
 } as const;
 
 const PLAYABLE_TEAMS: Team[] = [Team.BLUE, Team.RED, Team.GREEN, Team.PURPLE];
+const BOSS_RUSH_LOADOUT_LEVEL = 45;
+const BOSS_RUSH_ALLOWED_STATS: StatType[] = [
+    StatType.REGEN,
+    StatType.MAX_HEALTH,
+    StatType.BODY_DAMAGE,
+    StatType.BULLET_SPEED,
+    StatType.BULLET_PENETRATION,
+    StatType.BULLET_DAMAGE,
+    StatType.RELOAD,
+    StatType.MOVEMENT_SPEED,
+    StatType.BULLET_SPREAD,
+    StatType.MAX_SHIELD,
+];
+const DEFAULT_BOSS_RUSH_LOADOUT: BossRushLoadout = {
+  classType: TankClass.TWIN,
+    stats: {
+        [StatType.BULLET_DAMAGE]: 6,
+        [StatType.BULLET_PENETRATION]: 5,
+        [StatType.RELOAD]: 5,
+        [StatType.MOVEMENT_SPEED]: 3,
+        [StatType.MAX_HEALTH]: 2,
+        [StatType.REGEN]: 1,
+    },
+};
+const BOSS_RUSH_DISABLED_CLASSES = new Set<TankClass>([
+  TankClass.COLOSSAL,
+  TankClass.LEVIATHAN,
+  TankClass.WARLORD,
+  TankClass.CELESTIAL,
+  TankClass.OBLITERATOR,
+]);
 
 function isPlayableTeam(team: Team): boolean {
     return team === Team.BLUE || team === Team.RED || team === Team.GREEN || team === Team.PURPLE;
@@ -462,6 +493,34 @@ function getRarityRank(rarity: ShapeRarity): number {
         [ShapeRarity.DIVINE]: 9,
     };
     return ranks[rarity] ?? 0;
+}
+
+function getShapeHealthCap(rarity: ShapeRarity, isInVoid: boolean): number | null {
+    const normalCaps: Partial<Record<ShapeRarity, number>> = {
+        [ShapeRarity.MYTHICAL]: 180000,
+        [ShapeRarity.ETERNAL]: 320000,
+        [ShapeRarity.TRANSCENDENT]: 500000,
+        [ShapeRarity.GODLY]: 750000,
+        [ShapeRarity.DIVINE]: 1050000,
+    };
+    const voidCaps: Partial<Record<ShapeRarity, number>> = {
+        [ShapeRarity.MYTHICAL]: 220000,
+        [ShapeRarity.ETERNAL]: 380000,
+        [ShapeRarity.TRANSCENDENT]: 620000,
+        [ShapeRarity.GODLY]: 900000,
+        [ShapeRarity.DIVINE]: 1250000,
+    };
+    return (isInVoid ? voidCaps : normalCaps)[rarity] ?? null;
+}
+
+function getScaledShapeHealth(baseHealth: number, rarityConfig: { hpMult: number }, rarity: ShapeRarity, isInVoid: boolean): number {
+    const rawHealth = Math.floor(baseHealth * rarityConfig.hpMult);
+    const cap = getShapeHealthCap(rarity, isInVoid);
+    return cap === null ? rawHealth : Math.min(rawHealth, cap);
+}
+
+function getAccuracySpreadFactor(points: number, minFactor: number = 0.22): number {
+    return Math.max(minFactor, Math.pow(0.83, Math.max(0, points)));
 }
 
 function createEmptyStatRecord(): Record<StatType, number> {
@@ -1193,10 +1252,10 @@ class Drone extends Entity {
   private static readonly REBIRTH_DRONE_DAMAGE_MULT = 1.45;
   private static readonly REBIRTH_DRONE_HEALTH_MULT = 1.45;
   private static getOwnerDamageMult(owner: Tank): number {
-      if (owner.classType === TankClass.OVERLORD) return 1.58;
-      if (owner.classType === TankClass.OVERSEER) return 1.42;
-      if (owner.classType === TankClass.MANAGER) return 1.24;
-      if (owner.classType === TankClass.HYBRID) return 1.16;
+      if (owner.classType === TankClass.OVERLORD) return 2.3;
+      if (owner.classType === TankClass.OVERSEER) return 1.95;
+      if (owner.classType === TankClass.MANAGER) return 1.3;
+      if (owner.classType === TankClass.HYBRID) return 1.24;
       return 1.0;
   }
   private static getFormationRadius(owner: Tank): number {
@@ -5450,6 +5509,426 @@ class Boss extends Entity {
         });
         ctx.restore();
     }
+
+    private drawBossRushChassis(ctx: CanvasRenderingContext2D, t: number, hpRatio: number, awakened: boolean) {
+        const key = (this as any).__bossRushKey as string | undefined;
+        const transformPhase = Math.max(0, Math.min(1, Number((this as any).__bossRushTransformPhase ?? 1)));
+        const forming = !!(this as any).__bossRushTransforming;
+        const deathAnimating = !!(this as any).__bossRushDeathAnimating;
+        const deathProgress = Math.max(0, Math.min(1, Number((this as any).__bossRushDeathProgress ?? 0)));
+        const reveal = forming ? Math.max(0.16, transformPhase) : 1;
+        const pulse = 1 + Math.sin(t * (awakened ? 5.2 : 3.4)) * (awakened ? 0.08 : 0.04);
+        const bodyScale = reveal * pulse;
+        const accent =
+            key === 'gatekeeper' ? '#fca5a5' :
+            key === 'splitter' ? '#fecdd3' :
+            key === 'reactor' ? '#fdba74' :
+            key === 'executioner' ? '#fca5a5' :
+            '#c4b5fd';
+        const low = 
+            key === 'gatekeeper' ? '#3f1118' :
+            key === 'splitter' ? '#4b1327' :
+            key === 'reactor' ? '#51210c' :
+            key === 'executioner' ? '#3a0c12' :
+            '#23103f';
+        const mid =
+            key === 'gatekeeper' ? '#b91c1c' :
+            key === 'splitter' ? '#e11d48' :
+            key === 'reactor' ? '#ea580c' :
+            key === 'executioner' ? '#dc2626' :
+            '#7c3aed';
+        const high =
+            key === 'gatekeeper' ? '#fecaca' :
+            key === 'splitter' ? '#ffe4ea' :
+            key === 'reactor' ? '#ffedd5' :
+            key === 'executioner' ? '#ffe4e6' :
+            '#ede9fe';
+        const barrelCount =
+            key === 'gatekeeper' ? 4 :
+            key === 'splitter' ? 6 :
+            key === 'reactor' ? 5 :
+            key === 'executioner' ? 3 :
+            7;
+        const turretRadius =
+            key === 'executioner' ? this.radius * 1.08 :
+            key === 'reactor' ? this.radius * 0.92 :
+            this.radius * 0.98;
+        const gateSpin = t * (awakened ? 1.25 : 0.72);
+        const gateBreath = Math.sin(t * (awakened ? 4.8 : 2.6));
+        const gateJawShift = key === 'gatekeeper' ? gateBreath * this.radius * (awakened ? 0.045 : 0.028) : 0;
+        const gatePlateLift = key === 'gatekeeper' ? Math.sin(t * (awakened ? 3.8 : 2.1) + 0.8) * this.radius * 0.022 : 0;
+        const collapseSquash = deathAnimating
+            ? key === 'grand_singularity'
+                ? Math.max(0.1, 1 - deathProgress * 1.05)
+                : key === 'reactor'
+                    ? Math.max(0.46, 1 - deathProgress * 0.38)
+                    : Math.max(0.28, 1 - deathProgress * 0.64)
+            : 1;
+        const collapseStretch = deathAnimating
+            ? key === 'grand_singularity'
+                ? Math.max(0.5, 1 - deathProgress * 0.3)
+                : key === 'splitter'
+                    ? 1 + deathProgress * 0.24
+                    : 1 + deathProgress * 0.14
+            : 1;
+        const collapseDrop = deathAnimating
+            ? key === 'executioner'
+                ? deathProgress * this.radius * 0.28
+                : deathProgress * this.radius * 0.18
+            : 0;
+        const collapseTwist = deathAnimating
+            ? key === 'gatekeeper'
+                ? deathProgress * 0.42
+                : key === 'executioner'
+                    ? -deathProgress * 0.54
+                    : key === 'splitter'
+                        ? deathProgress * 0.36
+                        : key === 'grand_singularity'
+                            ? deathProgress * 0.9
+                            : deathProgress * 0.22
+            : 0;
+        const gateBreakShift = key === 'gatekeeper' ? deathProgress * this.radius * 0.22 : 0;
+        const splitterShear = key === 'splitter' ? deathProgress * this.radius * 0.34 : 0;
+        const reactorOverheat = key === 'reactor' ? deathProgress : 0;
+        const executionerDrop = key === 'executioner' ? deathProgress * this.radius * 0.32 : 0;
+        const singularityImplode = key === 'grand_singularity' ? deathProgress : 0;
+
+        ctx.save();
+        if (deathAnimating) {
+            ctx.translate(0, collapseDrop + executionerDrop);
+            ctx.rotate(collapseTwist);
+            ctx.scale(collapseStretch, collapseSquash);
+            ctx.globalAlpha *= Math.max(0.24, 1 - deathProgress * 0.42);
+        }
+        ctx.scale(bodyScale, bodyScale);
+
+        const aura = ctx.createRadialGradient(0, 0, this.radius * 0.2, 0, 0, this.radius * (key === 'reactor' && deathAnimating ? 2.1 + reactorOverheat * 0.5 : 1.85));
+        aura.addColorStop(0, `${accent}44`);
+        aura.addColorStop(0.45, `${mid}28`);
+        aura.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = aura;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius * (key === 'reactor' && deathAnimating ? 2.1 + reactorOverheat * 0.5 : 1.85), 0, Math.PI * 2);
+        ctx.fill();
+
+        if (deathAnimating && key === 'reactor') {
+            for (let wave = 0; wave < 3; wave += 1) {
+                ctx.save();
+                ctx.strokeStyle = wave === 0 ? `${high}aa` : wave === 1 ? `${accent}88` : `${mid}55`;
+                ctx.lineWidth = this.radius * (0.045 - wave * 0.008);
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * (0.84 + wave * 0.24 + deathProgress * (0.7 + wave * 0.18)), 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        if (key === 'gatekeeper') {
+            ctx.save();
+            ctx.rotate(gateSpin * 0.8 + deathProgress * 0.28);
+            for (let ring = 0; ring < 3; ring += 1) {
+                const size = this.radius * (1.02 + ring * 0.24 + Math.max(0, gateBreath) * 0.03 + deathProgress * 0.06 * (ring + 1));
+                ctx.strokeStyle = ring === 0 ? `${high}b8` : ring === 1 ? `${accent}8c` : `${mid}58`;
+                ctx.lineWidth = this.radius * (ring === 0 ? 0.055 : 0.03);
+                ctx.strokeRect(-size, -size, size * 2, size * 2);
+                ctx.rotate(Math.PI / 8 + deathProgress * 0.06);
+            }
+            ctx.restore();
+        }
+
+        for (let ring = 0; ring < 2; ring += 1) {
+            ctx.save();
+            ctx.rotate((ring === 0 ? 1 : -1) * t * (0.28 + ring * 0.16));
+            ctx.strokeStyle = ring === 0 ? `${accent}aa` : `${high}55`;
+            ctx.lineWidth = this.radius * (ring === 0 ? 0.08 : 0.045);
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius * (1.16 + ring * 0.2), Math.PI * 0.08, Math.PI * 1.78);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        for (let i = 0; i < barrelCount; i += 1) {
+            const angle = (i / barrelCount) * Math.PI * 2 + t * 0.15;
+            const mountLen = this.radius * (key === 'grand_singularity' ? 0.82 : 0.74);
+            const splitterOffset = key === 'splitter' && deathAnimating ? (i % 2 === 0 ? splitterShear : -splitterShear) : 0;
+            const singularityDrawRadius = key === 'grand_singularity' && deathAnimating ? turretRadius * Math.max(0.22, 1 - singularityImplode * 0.78) : turretRadius;
+            const x = Math.cos(angle) * singularityDrawRadius + (key === 'splitter' ? Math.cos(angle) * splitterOffset : 0);
+            const y = Math.sin(angle) * singularityDrawRadius + (key === 'splitter' ? Math.sin(angle) * splitterOffset * 0.35 : 0);
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle + (key === 'splitter' && deathAnimating ? (i % 2 === 0 ? 1 : -1) * deathProgress * 0.38 : 0));
+            ctx.fillStyle = low;
+            ctx.strokeStyle = `${accent}66`;
+            ctx.lineWidth = this.radius * 0.03;
+            ctx.beginPath();
+            ctx.roundRect(-this.radius * 0.12, -this.radius * 0.09, mountLen, this.radius * 0.18, this.radius * 0.08);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        ctx.save();
+        ctx.rotate(t * 0.12);
+        if (key === 'gatekeeper') {
+            const shell = ctx.createLinearGradient(-this.radius, -this.radius, this.radius, this.radius);
+            shell.addColorStop(0, high);
+            shell.addColorStop(0.2, accent);
+            shell.addColorStop(0.55, mid);
+            shell.addColorStop(1, low);
+            ctx.fillStyle = shell;
+            ctx.beginPath();
+            ctx.moveTo(-this.radius * 0.72, -this.radius * 0.88 + gatePlateLift);
+            ctx.lineTo(this.radius * 0.72, -this.radius * 0.88 + gatePlateLift);
+            ctx.lineTo(this.radius * 0.94, -this.radius * 0.24);
+            ctx.lineTo(this.radius * 0.94, this.radius * 0.24);
+            ctx.lineTo(this.radius * 0.72, this.radius * 0.88 - gatePlateLift);
+            ctx.lineTo(-this.radius * 0.72, this.radius * 0.88 - gatePlateLift);
+            ctx.lineTo(-this.radius * 0.94, this.radius * 0.24);
+            ctx.lineTo(-this.radius * 0.94, -this.radius * 0.24);
+            ctx.closePath();
+            ctx.fill();
+            ctx.lineWidth = this.radius * 0.08;
+            ctx.strokeStyle = `${high}b8`;
+            ctx.stroke();
+
+            ctx.save();
+            ctx.globalAlpha = 0.84;
+            ctx.fillStyle = `${low}ee`;
+            ctx.beginPath();
+            ctx.moveTo(-this.radius * 0.28, -this.radius * 0.52 + gateJawShift - gateBreakShift * 0.35);
+            ctx.lineTo(this.radius * 0.28, -this.radius * 0.52 + gateJawShift - gateBreakShift * 0.35);
+            ctx.lineTo(this.radius * 0.16, -this.radius * 0.08 - gateBreakShift * 0.2);
+            ctx.lineTo(-this.radius * 0.16, -this.radius * 0.08 - gateBreakShift * 0.2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(-this.radius * 0.28, this.radius * 0.52 - gateJawShift + gateBreakShift * 0.35);
+            ctx.lineTo(this.radius * 0.28, this.radius * 0.52 - gateJawShift + gateBreakShift * 0.35);
+            ctx.lineTo(this.radius * 0.16, this.radius * 0.08 + gateBreakShift * 0.2);
+            ctx.lineTo(-this.radius * 0.16, this.radius * 0.08 + gateBreakShift * 0.2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        } else {
+            const shell = ctx.createRadialGradient(0, 0, this.radius * 0.08, 0, 0, this.radius * 0.98);
+            shell.addColorStop(0, high);
+            shell.addColorStop(0.18, accent);
+            shell.addColorStop(0.58, mid);
+            shell.addColorStop(1, low);
+            ctx.fillStyle = shell;
+            if (key === 'splitter') {
+                const halfShift = splitterShear * 0.65;
+                ctx.save();
+                ctx.translate(-halfShift, 0);
+                ctx.beginPath();
+                ctx.moveTo(0, -this.radius * 0.96);
+                ctx.quadraticCurveTo(-this.radius * 0.94, 0, 0, this.radius * 0.96);
+                ctx.lineTo(0, -this.radius * 0.96);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+                ctx.save();
+                ctx.translate(halfShift, 0);
+                ctx.beginPath();
+                ctx.moveTo(0, -this.radius * 0.96);
+                ctx.quadraticCurveTo(this.radius * 0.94, 0, 0, this.radius * 0.96);
+                ctx.lineTo(0, -this.radius * 0.96);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            } else {
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * 0.96, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.lineWidth = this.radius * 0.08;
+            ctx.strokeStyle = `${high}aa`;
+            if (key === 'executioner' && deathAnimating) {
+                ctx.save();
+                ctx.rotate(-0.18 - deathProgress * 0.5);
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * 0.96, Math.PI * 0.08, Math.PI * 1.72);
+                ctx.stroke();
+                ctx.restore();
+            } else {
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+
+        ctx.save();
+        if (key === 'gatekeeper') {
+            ctx.rotate(-gateSpin * 1.35 - deathProgress * 0.22);
+            for (let i = 0; i < 4; i += 1) {
+                const angle = (i / 4) * Math.PI * 2;
+                const lockWidth = this.radius * 0.23;
+                const lockLen = this.radius * (0.82 + Math.max(0, gateBreath) * 0.08);
+                const radialBreak = gateBreakShift * (i % 2 === 0 ? 1 : 0.72);
+                ctx.save();
+                ctx.rotate(angle);
+                ctx.translate(radialBreak, 0);
+                ctx.fillStyle = i % 2 === 0 ? `${accent}d8` : `${high}b4`;
+                ctx.strokeStyle = `${low}cc`;
+                ctx.lineWidth = this.radius * 0.03;
+                ctx.beginPath();
+                ctx.roundRect(this.radius * 0.15, -lockWidth * 0.5, lockLen, lockWidth, this.radius * 0.08);
+                ctx.fill();
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(this.radius * 1.02 + lockLen * 0.12, 0, this.radius * 0.11, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff4f4';
+                ctx.fill();
+                ctx.restore();
+            }
+            ctx.rotate(gateSpin * 0.56 + deathProgress * 0.18);
+            for (let i = 0; i < 8; i += 1) {
+                const angle = (i / 8) * Math.PI * 2;
+                const inner = this.radius * 0.24;
+                const outer = this.radius * (0.54 + (i % 2 === 0 ? 0.12 : 0.04) + deathProgress * 0.08);
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+                ctx.lineTo(Math.cos(angle + 0.12) * outer, Math.sin(angle + 0.12) * outer);
+                ctx.lineTo(Math.cos(angle - 0.12) * outer, Math.sin(angle - 0.12) * outer);
+                ctx.closePath();
+                ctx.fillStyle = i % 2 === 0 ? `${mid}d8` : `${high}6e`;
+                ctx.fill();
+            }
+        } else {
+            ctx.rotate(-t * 0.2);
+            if (key === 'executioner' && deathAnimating) {
+                for (let i = 0; i < 3; i += 1) {
+                    const angle = -Math.PI / 2 + (i - 1) * 0.4 - deathProgress * 0.24;
+                    const base = this.radius * 0.28;
+                    const tip = this.radius * (1.02 + deathProgress * 0.4);
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(angle) * base, Math.sin(angle) * base);
+                    ctx.lineTo(Math.cos(angle + 0.08) * tip, Math.sin(angle + 0.08) * tip);
+                    ctx.lineTo(Math.cos(angle - 0.08) * tip, Math.sin(angle - 0.08) * tip);
+                    ctx.closePath();
+                    ctx.fillStyle = i === 1 ? `${high}90` : `${accent}a8`;
+                    ctx.fill();
+                }
+            } else if (key === 'grand_singularity' && deathAnimating) {
+                for (let i = 0; i < 5; i += 1) {
+                    const angle = t * 1.8 + i * (Math.PI * 2 / 5) + deathProgress * 0.8;
+                    const orbit = this.radius * (0.66 - deathProgress * 0.48 + i * 0.04);
+                    ctx.beginPath();
+                    ctx.arc(Math.cos(angle) * orbit, Math.sin(angle) * orbit, this.radius * (0.12 + (4 - i) * 0.012), 0, Math.PI * 2);
+                    ctx.fillStyle = i % 2 === 0 ? `${accent}a4` : `${high}78`;
+                    ctx.fill();
+                }
+            } else {
+                for (let i = 0; i < 8; i += 1) {
+                    const angle = (i / 8) * Math.PI * 2;
+                    const inner = this.radius * 0.42;
+                    const outer = this.radius * (0.72 + (i % 2 === 0 ? 0.08 : -0.02));
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+                    ctx.lineTo(Math.cos(angle + 0.12) * outer, Math.sin(angle + 0.12) * outer);
+                    ctx.lineTo(Math.cos(angle - 0.12) * outer, Math.sin(angle - 0.12) * outer);
+                    ctx.closePath();
+                    ctx.fillStyle = i % 2 === 0 ? `${accent}cc` : `${high}66`;
+                    ctx.fill();
+                }
+            }
+        }
+        ctx.restore();
+
+        const corePulse = 1 + Math.sin(t * (awakened ? 7.5 : 4.6)) * 0.09;
+        const gateCorePulse = key === 'gatekeeper' ? 1 + Math.sin(t * (awakened ? 8.8 : 4.1)) * 0.16 : corePulse;
+        const gateCoreRadius = this.radius * 0.28 * gateCorePulse * (deathAnimating ? Math.max(0.1, 1 - deathProgress * 1.1) : 1);
+        const coreGrad = ctx.createRadialGradient(0, 0, this.radius * 0.04, 0, 0, this.radius * 0.34 * (key === 'gatekeeper' ? gateCorePulse : corePulse));
+        coreGrad.addColorStop(0, '#ffffff');
+        coreGrad.addColorStop(0.35, high);
+        coreGrad.addColorStop(0.72, accent);
+        coreGrad.addColorStop(1, `${mid}00`);
+        ctx.fillStyle = coreGrad;
+        ctx.beginPath();
+        if (key === 'gatekeeper') {
+            ctx.arc(0, 0, gateCoreRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = `${high}bb`;
+            ctx.lineWidth = this.radius * 0.024;
+            ctx.beginPath();
+            ctx.moveTo(-this.radius * 0.22 * (1 + deathProgress * 0.18), 0);
+            ctx.lineTo(this.radius * 0.22 * (1 + deathProgress * 0.18), 0);
+            ctx.moveTo(0, -this.radius * 0.22 * (1 + deathProgress * 0.18));
+            ctx.lineTo(0, this.radius * 0.22 * (1 + deathProgress * 0.18));
+            ctx.stroke();
+        } else {
+            const reactorRadius = key === 'reactor' && deathAnimating ? this.radius * 0.34 * corePulse * (1 + reactorOverheat * 0.95) : this.radius * 0.34 * corePulse;
+            const singularityRadius = key === 'grand_singularity' && deathAnimating ? this.radius * 0.34 * corePulse * Math.max(0.06, 1 - singularityImplode * 1.18) : reactorRadius;
+            ctx.arc(0, 0, singularityRadius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        if (forming) {
+            if (key === 'gatekeeper') {
+                ctx.strokeStyle = `${high}88`;
+                ctx.lineWidth = this.radius * 0.05;
+                for (let i = 0; i < 4; i += 1) {
+                    const size = this.radius * (0.32 + transformPhase * (0.42 + i * 0.12));
+                    ctx.save();
+                    ctx.rotate(gateSpin + i * 0.22);
+                    ctx.strokeRect(-size, -size, size * 2, size * 2);
+                    ctx.restore();
+                }
+                for (let i = 0; i < 4; i += 1) {
+                    const angle = (i / 4) * Math.PI * 2 + gateSpin * 1.2;
+                    const start = this.radius * (0.24 + transformPhase * 0.08);
+                    const end = this.radius * (0.96 + transformPhase * 0.52);
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(angle) * start, Math.sin(angle) * start);
+                    ctx.lineTo(Math.cos(angle) * end, Math.sin(angle) * end);
+                    ctx.lineWidth = this.radius * 0.04;
+                    ctx.strokeStyle = i % 2 === 0 ? `${accent}aa` : `${high}66`;
+                    ctx.stroke();
+                }
+            } else if (key === 'splitter') {
+                for (let i = 0; i < 6; i += 1) {
+                    const angle = (i / 6) * Math.PI * 2 + t * 0.8;
+                    const len = this.radius * (0.5 + transformPhase * 0.8);
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
+                    ctx.lineWidth = this.radius * 0.035;
+                    ctx.strokeStyle = i % 2 === 0 ? `${accent}aa` : `${high}66`;
+                    ctx.stroke();
+                }
+            } else if (key === 'reactor') {
+                ctx.strokeStyle = `${high}88`;
+                ctx.lineWidth = this.radius * 0.035;
+                for (let i = 0; i < 5; i += 1) {
+                    const radius = this.radius * (0.28 + transformPhase * (0.34 + i * 0.12));
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            } else if (key === 'executioner') {
+                for (let i = 0; i < 4; i += 1) {
+                    const angle = -Math.PI / 2 + (i - 1.5) * 0.28;
+                    const len = this.radius * (0.8 + transformPhase * 0.7);
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(angle) * this.radius * 0.12, Math.sin(angle) * this.radius * 0.12);
+                    ctx.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
+                    ctx.lineWidth = this.radius * 0.05;
+                    ctx.strokeStyle = `${high}88`;
+                    ctx.stroke();
+                }
+            } else {
+                ctx.strokeStyle = `${high}88`;
+                ctx.lineWidth = this.radius * 0.04;
+                for (let i = 0; i < 4; i += 1) {
+                    const angle = t * 1.1 + i * (Math.PI / 2);
+                    ctx.beginPath();
+                    ctx.arc(Math.cos(angle) * this.radius * 0.22, Math.sin(angle) * this.radius * 0.22, this.radius * (0.55 + transformPhase * 0.55), 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        ctx.restore();
+    }
     
     override update(dt: number) { 
         this.playerDamageSampleTimer += dt;
@@ -5511,18 +5990,8 @@ class Boss extends Entity {
         ctx.restore();
 
         if (isBossRushBoss) {
-            ctx.save();
-            const haloAlpha = isAwakenedBossRush ? 0.4 : 0.24;
-            ctx.rotate(-t * (this.archetype === 'SINGULARITY' ? 0.36 : this.archetype === 'SWARMLORD' ? 0.52 : 0.3));
-            ctx.beginPath();
-            ctx.lineWidth = this.radius * 0.09;
-            ctx.strokeStyle =
-                this.archetype === 'SINGULARITY' ? `rgba(212, 180, 255, ${haloAlpha})` :
-                this.archetype === 'SWARMLORD' ? `rgba(110, 255, 220, ${haloAlpha})` :
-                `rgba(255, 210, 210, ${haloAlpha})`;
-            ctx.arc(0, 0, this.radius * (1.34 + (1 - hpRatio) * 0.08), 0, Math.PI * 1.32);
-            ctx.stroke();
-            ctx.restore();
+            this.drawBossRushChassis(ctx, t, hpRatio, isAwakenedBossRush);
+            return;
         }
 
         if (this.archetype === 'SINGULARITY') {
@@ -5700,7 +6169,7 @@ class Shape extends Entity {
     this.raritySpinMult = rarityConfig.spinMult;
     this.maxHealth = isAlphaPentagon
       ? Math.floor(alphaPentagonStats.health * (isInVoid ? 1.2 : 1))
-      : Math.floor(stats.health * rarityConfig.hpMult);
+      : getScaledShapeHealth(stats.health, rarityConfig, rarity, isInVoid);
     this.health = this.maxHealth;
     this.displayHealth = this.maxHealth;
     this.xpValue = isAlphaPentagon
@@ -7454,12 +7923,16 @@ class Bullet extends Entity {
         break;
       case TankClass.GUNNER:
       case TankClass.AUTO_GUNNER:
-      case TankClass.STREAMLINER:
       case TankClass.MACHINE_GUN:
       case TankClass.SPRAYER:
         coreColor = '#b7ffb0';
         strokeColor = '#30443a';
         innerMark = 'tick';
+        break;
+      case TankClass.STREAMLINER:
+        coreColor = '#bff7ff';
+        strokeColor = '#27475b';
+        innerMark = 'bar';
         break;
       case TankClass.OVERSEER:
       case TankClass.OVERLORD:
@@ -8044,6 +8517,7 @@ export class GameEngine {
   preferredColor: string = COLORS.player;
   preferredSkinId: string = 'default';
   preferredDonorRank: DonorRank = 'standard';
+  bossRushLoadout: BossRushLoadout = DEFAULT_BOSS_RUSH_LOADOUT;
   xp: number = 0;
   level: number = 1;
   maxShapes = 750; 
@@ -8494,6 +8968,18 @@ export class GameEngine {
     return source.team;
   }
 
+  private resolveOwningTeamFromEntity(source: Entity | null | undefined): Team {
+    if (!source) return Team.NONE;
+    if (source.type === EntityType.BULLET) {
+      const owner = this.entities.find((entity) => entity.id === (source as Bullet).ownerId);
+      return owner?.team ?? Team.NONE;
+    }
+    if (source.type === EntityType.DRONE || source.type === EntityType.MINI_TANK) {
+      return (source as Drone | MiniTank).owner.team;
+    }
+    return source.team;
+  }
+
   private handleDominionTankDefeat(tank: DominionTank) {
     const zone = this.dominionZones.find((entry) => entry.tankId === tank.id);
     if (!zone) return;
@@ -8503,7 +8989,8 @@ export class GameEngine {
     const killerSourceId =
       tank.lastDamageSourceId ??
       (resolvedKiller ? (resolvedKiller.type === EntityType.BULLET ? (resolvedKiller as Bullet).id : resolvedKiller.id) : null);
-    const capturingTeam = this.resolveOwningTeamFromSource(killerSourceId);
+    const sourceTeam = this.resolveOwningTeamFromSource(killerSourceId);
+    const capturingTeam = sourceTeam !== Team.NONE ? sourceTeam : this.resolveOwningTeamFromEntity(resolvedKiller);
     const validCapturingTeam = isPlayableTeam(capturingTeam) ? capturingTeam : Team.NONE;
     const wasNeutral = zone.owner === Team.NONE;
     const nextOwner = wasNeutral ? validCapturingTeam : Team.NONE;
@@ -8975,6 +9462,15 @@ export class GameEngine {
       this.player.setSkin(this.preferredSkinId, this.preferredDonorRank);
   }
   setPlayerTeam(team: Team) { this.preferredTeam = team; }
+  setBossRushLoadout(loadout: BossRushLoadout) {
+      this.bossRushLoadout = this.sanitizeBossRushLoadout(loadout);
+      if (this.gameMode === GameMode.BOSS_RUSH && this.bossRushMode.isLoadoutSelectionOpen()) {
+          this.applyBossRushLoadout();
+          this.player.health = this.player.maxHealth;
+          this.player.displayHealth = this.player.maxHealth;
+          this.player.shield = this.player.maxShield;
+      }
+  }
   getNowMs() { return Date.now(); }
   getSimTimeMs() { return this.simulationTick * (1000 / 60); }
   setGameMode(mode: GameMode) { 
@@ -9546,6 +10042,15 @@ export class GameEngine {
     this.player.isSacrificing = false;
     this.player.sacrificeActiveTimer = 0;
     this.player.sacrificeCooldownTimer = 0;
+    this.player.secondarySector = 'none';
+    this.player.restorationLinkCooldown = 0;
+    this.player.bloodPactActiveTimer = 0;
+    this.player.drainDotStacks = 0;
+    this.player.drainDotTimer = 0;
+    this.player.drainDotTickTimer = 0;
+    this.player.totalDrainedThisSession = 0;
+    this.player.drainHistory = [];
+    this.player.restorationXpBuffer = 0;
     
     if (preserveWorld) { 
         const newLevel = Math.max(1, Math.floor(this.level * 0.7)); 
@@ -9586,7 +10091,8 @@ export class GameEngine {
     this.player.vel = { x: 0, y: 0 }; 
     this.resetTankClassAndProgression(this.player, TankClass.BASIC);
     if (this.gameMode === GameMode.BOSS_RUSH) {
-        this.instantLevel(45);
+        this.instantLevel(BOSS_RUSH_LOADOUT_LEVEL);
+        this.applyBossRushLoadout();
     }
     this.player.health = this.player.maxHealth; 
     this.player.displayHealth = this.player.maxHealth; 
@@ -10664,6 +11170,7 @@ export class GameEngine {
     const bossRushCameraOverride = this.gameMode === GameMode.BOSS_RUSH
         ? this.bossRushMode.getCameraOverride(this as any)
         : null;
+    const bossRushCombatPaused = this.gameMode === GameMode.BOSS_RUSH && this.bossRushMode.isCombatPaused();
 
     if (this.attractMode) {
         if (this.manualSpectateMode) {
@@ -10749,9 +11256,9 @@ export class GameEngine {
         if(Math.random() < spawnProb) this.spawnEnemy(); 
     }
 
-    if (!this.attractMode && !this.player.isDead && this.playerState === PlayerState.ACTIVE) this.updatePlayerControl(dt);
+    if (!bossRushCombatPaused && !this.attractMode && !this.player.isDead && this.playerState === PlayerState.ACTIVE) this.updatePlayerControl(dt);
 
-    if ((this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) && !this.sandboxConfig.freezeAll) {
+    if (!bossRushCombatPaused && (this.gameMode === GameMode.TEAMS || this.gameMode === GameMode.DOMINION) && !this.sandboxConfig.freezeAll) {
         const safeZones = this.gameMode === GameMode.DOMINION
             ? [
                 { team: Team.BLUE, center: { x: BASE_ZONE_WIDTH * 0.5, y: BASE_ZONE_WIDTH * 0.5 }, radius: BASE_ZONE_WIDTH * 0.88 },
@@ -10777,7 +11284,7 @@ export class GameEngine {
         this.tdmAiSystem.update(bots as any, players, this.simulationTick);
     }
 
-    if (!this.sandboxConfig.freezeAll) {
+    if (!this.sandboxConfig.freezeAll && !bossRushCombatPaused) {
         const canUpdateAI = (this.gameMode !== GameMode.SANDBOX || this.sandboxConfig.botsEnabled) && this.gameMode !== GameMode.BOSS_RUSH;
         let aiEntitiesProcessed = 0;
 
@@ -10823,26 +11330,32 @@ export class GameEngine {
 
     this.applySafeZoneProtection(dt);
 
-    this.entities.forEach(e => {
-        if (this.sandboxConfig.freezeAll && e.type !== EntityType.PLAYER) return;
-        e.update(dt);
-    });
-    for (const e of this.entities) {
-        if (!Number.isFinite(e.health) || e.health <= -0.001) {
-            e.health = 0;
-            e.displayHealth = 0;
-            e.isDead = true;
-            e.shouldRemove = true;
+    if (!bossRushCombatPaused) {
+        this.entities.forEach(e => {
+            if (this.sandboxConfig.freezeAll && e.type !== EntityType.PLAYER) return;
+            e.update(dt);
+        });
+        for (const e of this.entities) {
+            if (!Number.isFinite(e.health) || e.health <= -0.001) {
+                e.health = 0;
+                e.displayHealth = 0;
+                e.isDead = true;
+                if (!(e.type === EntityType.BOSS && (e as any).__bossRushBoss)) {
+                    e.shouldRemove = true;
+                }
+            }
+            if (!Number.isFinite(e.maxHealth) || e.maxHealth <= 0) {
+                e.maxHealth = 1;
+                if (e.health > 1) e.health = 1;
+                if (e.displayHealth > 1) e.displayHealth = 1;
+            }
         }
-        if (!Number.isFinite(e.maxHealth) || e.maxHealth <= 0) {
-            e.maxHealth = 1;
-            if (e.health > 1) e.health = 1;
-            if (e.displayHealth > 1) e.displayHealth = 1;
-        }
-    }
 
-    this.handleCollisions();
-    this.resolveNonCollisionDeaths();
+        this.handleCollisions();
+        this.resolveNonCollisionDeaths();
+    } else {
+        this.player.vel = { x: 0, y: 0 };
+    }
     
     this.particles.forEach(p => p.update());
     let particleWrite = 0;
@@ -10878,7 +11391,8 @@ export class GameEngine {
     
     let removedShapes = 0;
     this.entities = this.entities.filter(e => {
-        const removed = e.shouldRemove || (e.isDead && e.type !== EntityType.SHAPE);
+        const keepBossRushDeathAnimation = e.type === EntityType.BOSS && (e as any).__bossRushBoss && (e as any).__bossRushDeathAnimating && !e.shouldRemove;
+        const removed = !keepBossRushDeathAnimation && (e.shouldRemove || (e.isDead && e.type !== EntityType.SHAPE));
         if (removed && e.type === EntityType.SHAPE) {
             removedShapes++;
             this.sound.playShapeDeath((e as Shape).rarity);
@@ -11876,7 +12390,7 @@ export class GameEngine {
     if (classType === TankClass.SPREAD_SHOT) return 28;
     if (classType === TankClass.GUNNER) return 20;
     if (classType === TankClass.AUTO_GUNNER) return 17;
-    if (classType === TankClass.STREAMLINER) return 14;
+    if (classType === TankClass.STREAMLINER) return 15;
     return 40;
   }
 
@@ -12120,8 +12634,8 @@ export class GameEngine {
 
     this.enforceTrapCap(tank.id, profile.activeTrapCap, barrelIndices.length);
 
-    const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
-    const stabilityFactor = Math.max(0.28, Math.pow(0.86, stability));
+    const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
+    const stabilityFactor = getAccuracySpreadFactor(accuracy);
     const muzzleFlashColor = tank.team === Team.NONE ? 'rgba(250, 204, 21, 0.45)' : `${getTeamProjectileColor(tank.team)}88`;
     let fired = false;
 
@@ -12293,7 +12807,7 @@ export class GameEngine {
         [TankClass.HYBRID]: 1.28,
         [TankClass.BOOSTER]: 0.86,
         [TankClass.FIGHTER]: 0.86,
-        [TankClass.STREAMLINER]: 0.48,
+        [TankClass.STREAMLINER]: 0.52,
         [TankClass.X_HUNTER]: 1.02,
         [TankClass.AUTO_GUNNER]: 0.6,
         [TankClass.OVERLORD]: 0.94,
@@ -12429,7 +12943,7 @@ export class GameEngine {
             const isDestroyer = true;
             const isAnnihilator = false;
             const isSpecialLarge = true;
-            const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
+            const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
 
             let bulletSpeedMult = 2.2, bulletDamageMult = 6.25, bulletLifeMult = 1.95, bulletSizeMult = this.sandboxConfig?.spawningEnabled ? 2.28 : 2.08;
             if (!isSpecialLarge) {
@@ -12438,7 +12952,7 @@ export class GameEngine {
                 bulletLifeMult *= widthScale;
             }
 
-            const stabilityFactor = Math.max(0.28, Math.pow(0.86, stability));
+            const stabilityFactor = getAccuracySpreadFactor(accuracy);
             const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * stabilityFactor, tank.spread * stabilityFactor);
             const forward = Vector.fromAngle(angle);
             const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
@@ -12476,7 +12990,7 @@ export class GameEngine {
             const recoilPower = 3.15;
             if (this.sandboxConfig.knockbackEnabled) {
                 tank.vel = Vector.sub(tank.vel, Vector.mult(forward, recoilPower));
-                const recoilComp = Math.min(0.45, stability * 0.035);
+                const recoilComp = Math.min(0.45, accuracy * 0.04);
                 tank.vel = Vector.add(tank.vel, Vector.mult(forward, recoilPower * recoilComp));
             }
 
@@ -12492,8 +13006,8 @@ export class GameEngine {
         const [length, width = 2.4, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
-            const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
-            const spreadScale = Math.max(0.12, Math.pow(0.84, stability));
+            const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
+            const spreadScale = getAccuracySpreadFactor(accuracy, 0.12);
             const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * spreadScale, tank.spread * spreadScale);
             const forward = Vector.fromAngle(angle);
             const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
@@ -12544,8 +13058,8 @@ export class GameEngine {
         const [length, width = 1.2, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
-            const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
-            const spreadScale = Math.max(0.08, Math.pow(0.8, stability));
+            const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
+            const spreadScale = getAccuracySpreadFactor(accuracy, 0.08);
             const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * spreadScale, tank.spread * spreadScale);
             const forward = Vector.fromAngle(angle);
             const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
@@ -12623,8 +13137,8 @@ export class GameEngine {
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
 
         if (ready) {
-            const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
-            const spreadScale = Math.max(0.12, Math.pow(0.82, stability));
+            const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
+            const spreadScale = getAccuracySpreadFactor(accuracy, 0.12);
             const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * spreadScale, tank.spread * spreadScale);
             const forward = Vector.fromAngle(angle);
             const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
@@ -12686,8 +13200,8 @@ export class GameEngine {
         const [length, width = 1.0, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
-            const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
-            const spreadScale = Math.max(0.1, Math.pow(0.84, stability));
+            const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
+            const spreadScale = getAccuracySpreadFactor(accuracy, 0.1);
             const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * spreadScale, tank.spread * spreadScale);
             const forward = Vector.fromAngle(angle);
             const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
@@ -12735,8 +13249,8 @@ export class GameEngine {
         const [length, width = 0.9, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
-            const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
-            const spreadScale = Math.max(0.14, Math.pow(0.84, stability));
+            const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
+            const spreadScale = getAccuracySpreadFactor(accuracy, 0.14);
             const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * spreadScale, tank.spread * spreadScale);
             const forward = Vector.fromAngle(angle);
             const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
@@ -12808,8 +13322,8 @@ export class GameEngine {
         const [length, width = 0.9, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
-            const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
-            const spreadScale = Math.max(0.16, Math.pow(0.86, stability));
+            const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
+            const spreadScale = getAccuracySpreadFactor(accuracy, 0.16);
             const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * spreadScale, tank.spread * spreadScale);
             const forward = Vector.fromAngle(angle);
             const lateralAngle = tank.rotation + angleOff + Math.PI / 2;
@@ -12950,7 +13464,7 @@ export class GameEngine {
         const isPacifistClass = this.isPacifist(tank.classType);
         const isDrainingClass = this.isDraining(tank.classType);
         const isSpecialLarge = isDestroyer || isAnnihilator;
-        const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
+        const accuracy = tank.stats[StatType.BULLET_SPREAD] || 0;
 
         let bulletSpeedMult = 1.0, bulletDamageMult = 1.0, bulletLifeMult = 1.0, bulletSizeMult = 1.0;
         
@@ -13048,7 +13562,12 @@ export class GameEngine {
             bulletSpeedMult = tank.classType === TankClass.GUNNER ? 1.82 : 1.94;
             bulletLifeMult = tank.classType === TankClass.GUNNER ? 1.5 : 1.4;
         }
-        else if (tank.classType === TankClass.STREAMLINER) { bulletDamageMult = 0.74; bulletSizeMult = 0.68; bulletSpeedMult = 2.08; bulletLifeMult = 1.22; }
+        else if (tank.classType === TankClass.STREAMLINER) {
+            bulletDamageMult = 0.9;
+            bulletSizeMult = 0.76;
+            bulletSpeedMult = 1.96;
+            bulletLifeMult = 1.52;
+        }
 
         if (tank instanceof DominionTank) {
             const tuning = this.getDominionProjectileTuning(tank);
@@ -13081,7 +13600,7 @@ export class GameEngine {
             }
         }
 
-        const stabilityFactor = Math.max(0.28, Math.pow(0.86, stability));
+        const stabilityFactor = getAccuracySpreadFactor(accuracy);
         let spreadScale = stabilityFactor;
         if (isMachineGun) {
             const spin = Math.min(1, tank.machineSpin);
@@ -13241,7 +13760,7 @@ export class GameEngine {
         } else if (isDestroyer) {
             recoilPower = 4.2; 
         } else if (tank.classType === TankClass.STREAMLINER) {
-            recoilPower = 0.01; 
+            recoilPower = 0.035; 
         } else if (tank.classType === TankClass.TRI_ANGLE || tank.classType === TankClass.BOOSTER || tank.classType === TankClass.FIGHTER) {
             recoilPower = (angleOff === 0) ? 0.1 : 2.2; 
         } else if (tank.barrels.length > 2) {
@@ -13250,8 +13769,8 @@ export class GameEngine {
         
         if (this.sandboxConfig.knockbackEnabled) tank.vel = Vector.sub(tank.vel, Vector.mult(forward, recoilPower)); 
         if (isMachineGun) {
-            // Weapon Stability now doubles as recoil compensation
-            const recoilComp = Math.min(0.45, stability * 0.035);
+            // Accuracy also reins in machine-gun recoil so the stat has a clear feel impact.
+            const recoilComp = Math.min(0.45, accuracy * 0.04);
             tank.vel = Vector.add(tank.vel, Vector.mult(forward, recoilPower * recoilComp));
         }
 
@@ -13267,13 +13786,13 @@ export class GameEngine {
         if (isMachineGun) {
             const spin = Math.min(1, tank.machineSpin);
             const heat = Math.min(1, tank.machineHeat);
-            const efficiency = Math.min(0.35, 0.11 + stability * 0.022);
+            const efficiency = Math.min(0.38, 0.12 + accuracy * 0.024);
             const overdrive = Math.max(0, (heat - 0.3) / 0.7) * (0.5 + spin * 0.5);
             const fireRateBonus = 1 - Math.min(0.38, overdrive * efficiency);
             const overheatTax = heat > 0.92 ? 1 + (heat - 0.92) * 1.5 : 1;
             cooldownVal = Math.max(18, cooldownVal * fireRateBonus * overheatTax);
-            tank.machineSpin = Math.min(1, tank.machineSpin + 0.22 + stability * 0.01);
-            const heatGain = Math.max(0.035, 0.12 - stability * 0.006);
+            tank.machineSpin = Math.min(1, tank.machineSpin + 0.22 + accuracy * 0.012);
+            const heatGain = Math.max(0.03, 0.118 - accuracy * 0.007);
             tank.machineHeat = Math.min(1, tank.machineHeat + heatGain);
         }
         if (!this.sandboxConfig.infiniteAmmo) {
@@ -13319,7 +13838,7 @@ export class GameEngine {
     if (!barrel) return;
 
     const [length, width, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
-    const stabilityFactor = Math.max(0.28, Math.pow(0.86, tank.stats[StatType.BULLET_SPREAD] || 0));
+    const stabilityFactor = getAccuracySpreadFactor(tank.stats[StatType.BULLET_SPREAD] || 0);
     const angle = tank.rotation + angleOff + Vector.randomRange(-tank.spread * stabilityFactor, tank.spread * stabilityFactor);
     const forward = Vector.fromAngle(angle);
 
@@ -14306,16 +14825,17 @@ export class GameEngine {
      let ratioA = 0.5, ratioB = 0.5, pcf = 1.0; 
      if (a.type === EntityType.BULLET || b.type === EntityType.BULLET) pcf = 0.05; 
      if (a.type === EntityType.DRONE || b.type === EntityType.DRONE || a.type === EntityType.MINI_TANK || b.type === EntityType.MINI_TANK) pcf = 0.2;
-     if (passThroughShapeCollision) {
-         ratioA = 0;
-         ratioB = 0;
-         pcf = 0;
-     }
-     if (a.type === EntityType.BOSS || b.type === EntityType.BOSS || a.type === EntityType.DUMMY || b.type === EntityType.DUMMY) { if (a.type === EntityType.BOSS || a.type === EntityType.DUMMY) { ratioA = 0.0; ratioB = 1.0; } else { ratioA = 1.0; ratioB = 0.0; } }
-     else if (a.type === EntityType.GUARDIAN || b.type === EntityType.GUARDIAN) { if (a.type === EntityType.GUARDIAN && b.type !== EntityType.GUARDIAN) { ratioA = 0.05; ratioB = 1.0; } else if (b.type === EntityType.GUARDIAN && a.type !== EntityType.GUARDIAN) { ratioA = 1.0; ratioB = 0.05; } }
-     else if (a.type === EntityType.BULLET && b.type !== EntityType.BULLET) { ratioA = 0.01; ratioB = 0.99; }
-     else if (b.type === EntityType.BULLET && a.type !== EntityType.BULLET) { ratioA = 0.99; ratioB = 0.01; }
-     else { const totalMass = a.mass + b.mass; ratioA = b.mass / totalMass; ratioB = a.mass / totalMass; }
+      if (passThroughShapeCollision) {
+          ratioA = 0;
+          ratioB = 0;
+          pcf = 0;
+      }
+      if (a.type === EntityType.BOSS || b.type === EntityType.BOSS || a.type === EntityType.DUMMY || b.type === EntityType.DUMMY) { if (a.type === EntityType.BOSS || a.type === EntityType.DUMMY) { ratioA = 0.0; ratioB = 1.0; } else { ratioA = 1.0; ratioB = 0.0; } }
+      else if (a.type === EntityType.GUARDIAN || b.type === EntityType.GUARDIAN) { if (a.type === EntityType.GUARDIAN && b.type !== EntityType.GUARDIAN) { ratioA = 0.05; ratioB = 1.0; } else if (b.type === EntityType.GUARDIAN && a.type !== EntityType.GUARDIAN) { ratioA = 1.0; ratioB = 0.05; } }
+      else if (aIsShape !== bIsShape) { if (aIsShape) { ratioA = 0.0; ratioB = 1.0; } else { ratioA = 1.0; ratioB = 0.0; } }
+      else if (a.type === EntityType.BULLET && b.type !== EntityType.BULLET) { ratioA = 0.01; ratioB = 0.99; }
+      else if (b.type === EntityType.BULLET && a.type !== EntityType.BULLET) { ratioA = 0.99; ratioB = 0.01; }
+      else { const totalMass = a.mass + b.mass; ratioA = b.mass / totalMass; ratioB = a.mass / totalMass; }
      const force = Vector.mult(dir, overlap * pcf);
      a.pos = Vector.add(a.pos, Vector.mult(force, ratioA)); b.pos = Vector.sub(b.pos, Vector.mult(force, ratioB));
      
@@ -14402,6 +14922,17 @@ export class GameEngine {
                   const durabilityFactor = Math.min(1.0, bullet.health / Math.max(1, bullet.maxHealth));
                  const massFactor = Math.min(0.65, Math.max(0, (victim.maxHealth - 180) / 900));
                   dmg *= 1 + massFactor + durabilityFactor * 0.3;
+              }
+          }
+
+          if (killer.type === EntityType.BULLET && victim.type === EntityType.BOSS) {
+              const bullet = killer as Bullet;
+              const boss = victim as Boss;
+              const isGrandSingularity = boss.archetype === 'SINGULARITY';
+              if (bullet.ownerClass === TankClass.DESTROYER) {
+                  dmg *= isGrandSingularity ? 1.85 : 1.35;
+              } else if (bullet.ownerClass === TankClass.ANNIHILATOR) {
+                  dmg *= isGrandSingularity ? 2.35 : 1.7;
               }
           }
 
@@ -14553,30 +15084,36 @@ export class GameEngine {
           const durabilityFactor = Vector.clamp(attacker.health / Math.max(1, attacker.maxHealth), 0.45, 1.05);
           const chaseFactor = Vector.clamp(0.9 + attackerSpeed * 0.05 + Math.max(0, attackerSpeed - victimSpeed) * 0.028, 0.82, 1.3);
           const statFactor = 1 + penStat * 0.04 + dmgStat * 0.025 + speedStat * 0.012;
+          const classPressure =
+              owner.classType === TankClass.OVERLORD ? 2.8 :
+              owner.classType === TankClass.OVERSEER ? 2.2 :
+              owner.classType === TankClass.MANAGER ? 1.4 :
+              owner.classType === TankClass.HYBRID ? 1.3 :
+              1.0;
 
-          let scalar = 0.42;
+          let scalar = 0.56;
           let cap = victim.maxHealth * 0.12;
           if (victim.type === EntityType.SHAPE) {
-              scalar = 0.94;
-              cap = victim.maxHealth * 0.32;
+              scalar = 1.28;
+              cap = victim.maxHealth * 0.42;
           } else if (victim.type === EntityType.CRASHER) {
-              scalar = 0.7;
-              cap = victim.maxHealth * 0.2;
+              scalar = 0.92;
+              cap = victim.maxHealth * 0.24;
           } else if (victim.type === EntityType.DRONE || victim.type === EntityType.MINI_TANK) {
-              scalar = 0.48;
-              cap = victim.maxHealth * 0.2;
+              scalar = 0.7;
+              cap = victim.maxHealth * 0.24;
           } else if (victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY) {
-              scalar = 0.36;
-              cap = victim.maxHealth * 0.1;
+              scalar = 0.58;
+              cap = victim.maxHealth * 0.14;
           } else if (victim.type === EntityType.ELITE_TANK) {
-              scalar = 0.3;
-              cap = victim.maxHealth * 0.07;
+              scalar = 0.42;
+              cap = victim.maxHealth * 0.09;
           } else if (victim.type === EntityType.BOSS || victim.type === EntityType.GUARDIAN) {
-              scalar = 0.18;
-              cap = victim.maxHealth * 0.016;
+              scalar = 0.24;
+              cap = victim.maxHealth * 0.022;
           }
 
-          const raw = baseDamage * scalar * chaseFactor * durabilityFactor * statFactor;
+          const raw = baseDamage * scalar * chaseFactor * durabilityFactor * statFactor * classPressure;
           return Math.min(raw, cap);
       };
 
@@ -14748,16 +15285,20 @@ export class GameEngine {
         this.sound.playHit(this.getAudioSpatialOptions(impactPos, a.type === EntityType.PLAYER || b.type === EntityType.PLAYER)); 
      }
      
-     if (this.sandboxConfig.knockbackEnabled) { 
-        const baseKb = 2.0; 
-        if ((a.type === EntityType.BULLET || a.type === EntityType.DRONE || a.type === EntityType.MINI_TANK || a.type === EntityType.BASE_DEFENSE_DRONE) && b.type !== EntityType.BULLET && b.type !== EntityType.DUMMY) { 
-            const mMult = Math.min(1.0, 35 / b.mass); 
-            b.vel = Vector.add(b.vel, Vector.mult(dir, -(baseKb * mMult * (b.type === EntityType.SHAPE ? 0.8 : 1.0)))); 
-        } else if ((b.type === EntityType.BULLET || b.type === EntityType.DRONE || b.type === EntityType.MINI_TANK || b.type === EntityType.BASE_DEFENSE_DRONE) && a.type !== EntityType.BULLET && a.type !== EntityType.DUMMY) { 
-            const mMult = Math.min(1.0, 35 / a.mass); 
-            a.vel = Vector.add(a.vel, Vector.mult(dir, baseKb * mMult * (a.type === EntityType.SHAPE ? 0.8 : 1.0))); 
-        } 
-     }
+      if (this.sandboxConfig.knockbackEnabled) { 
+         const baseKb = 2.0; 
+         if ((a.type === EntityType.BULLET || a.type === EntityType.DRONE || a.type === EntityType.MINI_TANK || a.type === EntityType.BASE_DEFENSE_DRONE) && b.type !== EntityType.BULLET && b.type !== EntityType.DUMMY) { 
+             if (b.type !== EntityType.SHAPE) {
+                 const mMult = Math.min(1.0, 35 / b.mass); 
+                 b.vel = Vector.add(b.vel, Vector.mult(dir, -(baseKb * mMult))); 
+             }
+         } else if ((b.type === EntityType.BULLET || b.type === EntityType.DRONE || b.type === EntityType.MINI_TANK || b.type === EntityType.BASE_DEFENSE_DRONE) && a.type !== EntityType.BULLET && a.type !== EntityType.DUMMY) { 
+             if (a.type !== EntityType.SHAPE) {
+                 const mMult = Math.min(1.0, 35 / a.mass); 
+                 a.vel = Vector.add(a.vel, Vector.mult(dir, baseKb * mMult)); 
+             }
+         } 
+      }
      
      if (a.isDead) this.handleDeath(a, b); 
      if (b.isDead) this.handleDeath(b, a);
@@ -15068,6 +15609,45 @@ export class GameEngine {
 
   private getStatPointBudgetForLevel(level: number): number {
       return Math.max(0, Math.min(45, Math.floor(level / 2)));
+  }
+
+  private sanitizeBossRushLoadout(loadout: BossRushLoadout | null | undefined): BossRushLoadout {
+      const source = loadout ?? DEFAULT_BOSS_RUSH_LOADOUT;
+      const budget = this.getStatPointBudgetForLevel(BOSS_RUSH_LOADOUT_LEVEL);
+      const stats: Partial<Record<StatType, number>> = {};
+      let spent = 0;
+      const classType = BOSS_RUSH_DISABLED_CLASSES.has(source.classType) ? TankClass.TWIN : source.classType;
+
+      for (const stat of BOSS_RUSH_ALLOWED_STATS) {
+          const raw = Math.max(0, Math.min(8, Math.floor(Number(source.stats?.[stat] ?? 0))));
+          const allowed = Math.min(raw, budget - spent);
+          if (allowed > 0) {
+              stats[stat] = allowed;
+              spent += allowed;
+          }
+      }
+
+      return { classType, stats };
+  }
+
+  private applyBossRushLoadout() {
+      const loadout = this.sanitizeBossRushLoadout(this.bossRushLoadout);
+      const budget = this.getStatPointBudgetForLevel(BOSS_RUSH_LOADOUT_LEVEL);
+      let spent = 0;
+
+      this.bossRushLoadout = loadout;
+      this.upgradeClassForTank(this.player, loadout.classType);
+
+      for (const stat of BOSS_RUSH_ALLOWED_STATS) {
+          const value = Math.max(0, Math.min(8, Math.floor(Number(loadout.stats[stat] ?? 0))));
+          this.player.stats[stat] = value;
+          this.player.universalUpgrades[stat] = value;
+          spent += value;
+      }
+
+      this.player.availableStatPoints = Math.max(0, budget - spent);
+      this.player.updateStats();
+      this.statRevision++;
   }
 
   private getClassUpgradeLevelRequirement(targetClass: TankClass): number {

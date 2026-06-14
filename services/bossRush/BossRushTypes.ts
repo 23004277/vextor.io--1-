@@ -1,4 +1,4 @@
-import { GameMode, Team, Vector2 } from '../../types';
+import { BossRushLoadout, GameMode, Team, Vector2 } from '../../types';
 
 export type BossRushTelegraphType =
   | 'straight_red_lane'
@@ -10,6 +10,7 @@ export type BossRushTelegraphType =
   | 'rotating_danger_arc';
 
 export type BossRushBossState =
+  | 'transforming'
   | 'intro'
   | 'idle'
   | 'choosing_attack'
@@ -27,22 +28,34 @@ export type BossRushMovementStyle =
   | 'SINGULARITY';
 
 export type BossRushAttackId =
+  | 'boss_basic_volley'
   | 'gate_lane'
+  | 'gate_arc_beam'
   | 'gate_squares'
   | 'gate_dash'
+  | 'gate_ring_prison'
+  | 'gate_hash_lock'
+  | 'gate_cross_grid'
+  | 'gate_rapid_crosshatch'
   | 'splitter_triple_lane'
   | 'splitter_checker'
   | 'splitter_cone'
+  | 'splitter_pincer'
+  | 'splitter_zigzag_lines'
+  | 'splitter_corrupted_cascade'
   | 'reactor_circles'
   | 'reactor_arc'
   | 'reactor_shuffle'
+  | 'reactor_supernova'
   | 'executioner_cleave'
   | 'executioner_lockon'
   | 'executioner_cross'
+  | 'executioner_fan_drive'
   | 'singularity_lane_chain'
   | 'singularity_gravity'
   | 'singularity_spiral'
-  | 'singularity_rapid_chain';
+  | 'singularity_rapid_chain'
+  | 'singularity_event_horizon';
 
 export interface BossRushAttackSpec {
   id: BossRushAttackId;
@@ -67,11 +80,14 @@ export interface BossRushBossDefinition {
   maxHealth: number;
   contactDamage: number;
   moveStyle: BossRushMovementStyle;
+  transformSeconds: number;
   introSeconds: number;
+  awakeningSeconds: number;
   awakenThreshold: number;
   awakenRestoreRatio: number;
   attackFrequencyMultiplier: number;
   recoveryReductionMultiplier: number;
+  postAwakenRecovery?: number;
   phases: number;
   attacks: BossRushAttackSpec[];
   archetype: 'SINGULARITY' | 'SIEGEBREAKER' | 'SWARMLORD';
@@ -81,16 +97,19 @@ export interface BossRushBossRuntime {
   state: BossRushBossState;
   phase: number;
   awakened: boolean;
+  transformationTimer: number;
   awakeningTimer: number;
+  defeatedTimer: number;
   recoveryTimer: number;
   introTimer: number;
+  passiveHazardTimer: number;
   attackCooldowns: Partial<Record<BossRushAttackId, number>>;
   queuedAttackId: BossRushAttackId | null;
 }
 
 export interface BossRushCinematicHudState {
   active: boolean;
-  mode: 'intro' | 'awakening';
+  mode: 'intro' | 'awakening' | 'transformation';
   title: string;
   speaker: string;
   line: string;
@@ -168,6 +187,10 @@ export interface BossRushHudState {
   awakened: boolean;
   transitionText?: string;
   victory: boolean;
+  loadoutEditable: boolean;
+  loadoutLevel: number;
+  remainingStatPoints: number;
+  loadout: BossRushLoadout;
   cinematic?: BossRushCinematicHudState;
 }
 
@@ -180,6 +203,7 @@ export interface BossRushEngineBridge {
   player: any;
   settings: { shakeEnabled: boolean; shakeIntensity: number };
   shakeAmount: number;
+  bossRushLoadout: BossRushLoadout;
   sound: any;
   createBossRushBoss: (def: BossRushBossDefinition) => BossRushBossEntity;
   addNotification: (message: string, color: string) => void;

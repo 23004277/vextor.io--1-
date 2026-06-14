@@ -9,7 +9,7 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 type ActiveBossRushCinematic = {
   active: boolean;
   id: string;
-  mode: 'intro' | 'awakening';
+  mode: 'intro' | 'awakening' | 'transformation';
   bossId: number;
   title: string;
   speaker: string;
@@ -28,6 +28,7 @@ export class BossRushMode {
   private controller = new BossRushBossController();
   private telegraphs: BossRushTelegraph[] = [];
   private currentIndex = 0;
+  private clearedBossCount = 0;
   private currentBossId: number | null = null;
   private currentRuntime: BossRushBossRuntime | null = null;
   private activeCinematic: ActiveBossRushCinematic | null = null;
@@ -38,9 +39,35 @@ export class BossRushMode {
   private victory = false;
   private active = false;
 
+  private getCurrentDefinition(): BossRushBossDefinition {
+    return BOSS_RUSH_BOSSES[Math.min(this.currentIndex, BOSS_RUSH_BOSSES.length - 1)];
+  }
+
+  private estimateCinematicDurationMs(
+    definition: BossRushBossDefinition,
+    mode: 'intro' | 'awakening' | 'transformation'
+  ): number {
+    const line = this.getBossLine(definition, mode);
+    const words = line.trim().split(/\s+/).filter(Boolean);
+    const wordDelayMs =
+      mode === 'awakening'
+        ? definition.key === 'grand_singularity' ? 138 : definition.key === 'executioner' ? 146 : 150
+        : mode === 'transformation'
+          ? definition.key === 'reactor' ? 128 : definition.key === 'splitter' ? 122 : definition.key === 'grand_singularity' ? 142 : 135
+          : definition.key === 'gatekeeper' ? 168 : 170;
+    const holdMs =
+      mode === 'awakening'
+        ? Math.round(definition.awakeningSeconds * 420)
+        : mode === 'transformation'
+          ? Math.round(definition.transformSeconds * 420)
+          : 980;
+    return words.length * wordDelayMs + holdMs;
+  }
+
   reset() {
     this.telegraphs = [];
     this.currentIndex = 0;
+    this.clearedBossCount = 0;
     this.currentBossId = null;
     this.currentRuntime = null;
     this.activeCinematic = null;
@@ -68,15 +95,30 @@ export class BossRushMode {
     return this.active;
   }
 
+  isCombatPaused(): boolean {
+    if (!this.active) return false;
+    const state = this.currentRuntime?.state;
+    return !!this.activeCinematic?.active || state === 'transforming' || state === 'intro' || state === 'awakening' || state === 'defeated';
+  }
+
+  isLoadoutSelectionOpen(): boolean {
+    return this.active && !this.victory && this.currentIndex === 0 && !this.currentRuntime && this.currentBossId == null && this.intermissionTimer > 0;
+  }
+
   getHud(engine: BossRushEngineBridge): BossRushHudState | undefined {
     if (!this.active) return undefined;
-    const definition = BOSS_RUSH_BOSSES[Math.min(this.currentIndex, BOSS_RUSH_BOSSES.length - 1)];
+    const definition = this.getCurrentDefinition();
     const boss = this.getCurrentBoss(engine);
+    const displayIndex = this.victory
+      ? BOSS_RUSH_BOSSES.length
+      : boss
+        ? Math.min(BOSS_RUSH_BOSSES.length, definition.index)
+        : Math.min(BOSS_RUSH_BOSSES.length, this.clearedBossCount + 1);
     return {
       active: true,
       bossName: boss?.name || definition?.name || 'Boss Rush',
       bossSubtitle: definition?.subtitle || 'Gauntlet',
-      bossIndex: Math.min(BOSS_RUSH_BOSSES.length, this.currentIndex + (this.victory ? 1 : 1)),
+      bossIndex: displayIndex,
       bossCount: BOSS_RUSH_BOSSES.length,
       health: boss?.health || 0,
       maxHealth: boss?.maxHealth || definition?.maxHealth || 1,
@@ -85,6 +127,10 @@ export class BossRushMode {
       awakened: !!this.currentRuntime?.awakened,
       transitionText: this.transitionText || undefined,
       victory: this.victory,
+      loadoutEditable: this.isLoadoutSelectionOpen(),
+      loadoutLevel: 45,
+      remainingStatPoints: Math.max(0, Math.floor(engine.player?.availableStatPoints ?? 0)),
+      loadout: engine.bossRushLoadout,
       cinematic: this.getCinematicHud(engine),
     };
   }
@@ -92,32 +138,59 @@ export class BossRushMode {
   update(engine: BossRushEngineBridge, dt: number) {
     if (!this.active) return;
     this.applyArenaContainment(engine, dt);
-    updateBossRushTelegraphs(engine, this.telegraphs, dt);
+    if (!this.isCombatPaused()) {
+      updateBossRushTelegraphs(engine, this.telegraphs, dt);
+    }
 
     if (this.victory) return;
 
     const boss = this.getCurrentBoss(engine);
     this.updateCinematic(engine, boss, dt);
     this.updateBossPresentation(engine, boss);
-    if (boss && (boss.isDead || boss.shouldRemove || boss.health <= 0)) {
-      boss.shouldRemove = true;
-      this.currentBossId = null;
-      this.currentRuntime = null;
-      this.activeCinematic = null;
-      this.telegraphs = [];
-      this.currentIndex += 1;
-      if (this.currentIndex >= BOSS_RUSH_BOSSES.length) {
-        this.victory = true;
-        this.transitionText = 'BOSS RUSH CLEARED';
-        engine.addNotification('BOSS RUSH VICTORY', '#facc15');
-        engine.spawnParticles(engine.player.pos, '#facc15', 60, 7);
-        return;
+    if (boss && this.currentRuntime?.state === 'defeated') {
+      const defeatedDefinition = this.getCurrentDefinition();
+      this.currentRuntime.defeatedTimer -= dt;
+      const totalDefeatSeconds =
+        defeatedDefinition.key === 'gatekeeper' ? 1.55 :
+        defeatedDefinition.key === 'splitter' ? 1.25 :
+        defeatedDefinition.key === 'reactor' ? 1.45 :
+        defeatedDefinition.key === 'executioner' ? 1.35 :
+        1.65;
+      const deathProgress = clamp(1 - this.currentRuntime.defeatedTimer / totalDefeatSeconds, 0, 1);
+      (boss as any).__bossRushDeathAnimating = true;
+      (boss as any).__bossRushDeathProgress = deathProgress;
+      boss.shouldRemove = false;
+      const shakeStrength =
+        defeatedDefinition.key === 'gatekeeper' ? 0.7 :
+        defeatedDefinition.key === 'splitter' ? 0.58 :
+        defeatedDefinition.key === 'reactor' ? 0.88 :
+        defeatedDefinition.key === 'executioner' ? 0.64 :
+        0.96;
+      engine.shakeAmount += shakeStrength * (1 - deathProgress * 0.55) * engine.settings.shakeIntensity;
+      if (Math.random() < (defeatedDefinition.key === 'grand_singularity' ? 0.62 : 0.45)) {
+        const particleColor =
+          defeatedDefinition.key === 'reactor'
+            ? (deathProgress > 0.5 ? '#fff1bf' : '#ffe17a')
+            : defeatedDefinition.key === 'grand_singularity'
+              ? (deathProgress > 0.6 ? '#ffffff' : '#d8c4ff')
+              : deathProgress > 0.55
+                ? defeatedDefinition.accent
+                : '#ffffff';
+        engine.spawnParticles(
+          boss.pos,
+          particleColor,
+          defeatedDefinition.key === 'splitter' ? 7 : defeatedDefinition.key === 'grand_singularity' ? 10 : 5,
+          defeatedDefinition.key === 'reactor' ? 6 : 5
+        );
       }
-      this.intermissionTimer = 3.1;
-      this.transitionText = `NEXT BOSS INCOMING // ${BOSS_RUSH_BOSSES[this.currentIndex].name.toUpperCase()}`;
-      engine.player.health = engine.player.maxHealth;
-      engine.player.shield = engine.player.maxShield;
-      engine.addNotification(this.transitionText, '#ff9f43');
+      if (this.currentRuntime.defeatedTimer <= 0) {
+        this.finishBossDefeat(engine, boss, defeatedDefinition);
+      }
+      return;
+    }
+
+    if (boss && (boss.isDead || boss.health <= 0)) {
+      this.startBossDefeat(engine, boss);
       return;
     }
 
@@ -126,8 +199,10 @@ export class BossRushMode {
       const secondsLeft = Math.max(0, Math.ceil(this.intermissionTimer));
       if (this.currentIndex === 0 && this.intermissionTimer > 0) {
         this.transitionText = `COMBAT STAGING // FIRST BOSS ARRIVES IN ${secondsLeft}`;
+      } else if (this.currentIndex > 0 && this.currentIndex < BOSS_RUSH_BOSSES.length && this.intermissionTimer > 0) {
+        this.transitionText = `TARGET ELIMINATED // ${BOSS_RUSH_BOSSES[this.currentIndex].name.toUpperCase()} ARRIVES IN ${secondsLeft}`;
       }
-      if (this.intermissionTimer <= 0) {
+      if (this.intermissionTimer <= 0 && this.currentIndex < BOSS_RUSH_BOSSES.length && !this.currentRuntime && this.currentBossId == null) {
         this.spawnCurrentBoss(engine);
       }
       return;
@@ -136,12 +211,20 @@ export class BossRushMode {
     if (this.currentRuntime) {
       const previousState = this.currentRuntime.state;
       this.transitionText = '';
-      this.controller.update(engine, BOSS_RUSH_ARENA, BOSS_RUSH_BOSSES[this.currentIndex], boss, this.currentRuntime, this.telegraphs, dt);
+      const definition = this.getCurrentDefinition();
+      this.controller.update(engine, BOSS_RUSH_ARENA, definition, boss, this.currentRuntime, this.telegraphs, dt);
+      if (previousState === 'transforming' && this.currentRuntime.state === 'intro') {
+        this.beginCinematic(engine, boss, definition, 'intro');
+      }
       if (previousState !== 'awakening' && this.currentRuntime.state === 'awakening') {
         this.lastAmbientSfxAtMs = 0;
         this.lastAuraBurstAtMs = 0;
-        engine.sound.playBossRushAwaken(engine.getAudioSpatialOptions(boss.pos, true), BOSS_RUSH_BOSSES[this.currentIndex].key as any);
-        this.beginCinematic(engine, boss, BOSS_RUSH_BOSSES[this.currentIndex], 'awakening');
+        this.currentRuntime.awakeningTimer = Math.max(
+          this.currentRuntime.awakeningTimer,
+          this.estimateCinematicDurationMs(definition, 'awakening') / 1000 + 0.12
+        );
+        engine.sound.playBossRushAwaken(engine.getAudioSpatialOptions(boss.pos, true), definition.key as any);
+        this.beginCinematic(engine, boss, definition, 'awakening');
       }
     }
   }
@@ -162,12 +245,15 @@ export class BossRushMode {
     const boss = engine.createBossRushBoss(definition);
     this.currentBossId = boss.id;
     this.currentRuntime = {
-      state: 'intro',
+      state: 'transforming',
       phase: 1,
       awakened: false,
+      transformationTimer: Math.max(definition.transformSeconds, this.estimateCinematicDurationMs(definition, 'transformation') / 1000 + 0.12),
       awakeningTimer: 0,
+      defeatedTimer: 0,
       recoveryTimer: 0,
-      introTimer: Math.max(definition.introSeconds, 3.45),
+      introTimer: Math.max(definition.introSeconds, 3.45, this.estimateCinematicDurationMs(definition, 'intro') / 1000 + 0.12),
+      passiveHazardTimer: definition.key === 'reactor' ? 4.8 : definition.key === 'grand_singularity' ? 4.2 : 6.5,
       attackCooldowns: {},
       queuedAttackId: null,
     };
@@ -177,7 +263,75 @@ export class BossRushMode {
     engine.spawnParticles(boss.pos, definition.accent, 48, 7);
     engine.sound.playRoar(engine.getAudioSpatialOptions(boss.pos, true));
     engine.sound.playBossRushAura(engine.getAudioSpatialOptions(boss.pos, true), definition.key as any, false);
-    this.beginCinematic(engine, boss, definition, 'intro');
+    (boss as any).__bossRushTransforming = true;
+    (boss as any).__bossRushTransformPhase = 0;
+    this.beginCinematic(engine, boss, definition, 'transformation');
+  }
+
+  private startBossDefeat(engine: BossRushEngineBridge, boss: BossRushBossEntity) {
+    if (!this.currentRuntime || this.currentRuntime.state === 'defeated') return;
+    const definition = this.getCurrentDefinition();
+    const defeatDuration =
+      definition.key === 'gatekeeper' ? 1.55 :
+      definition.key === 'splitter' ? 1.25 :
+      definition.key === 'reactor' ? 1.45 :
+      definition.key === 'executioner' ? 1.35 :
+      1.65;
+    this.currentRuntime.state = 'defeated';
+    this.currentRuntime.defeatedTimer = defeatDuration;
+    this.activeCinematic = null;
+    this.telegraphs = [];
+    boss.health = 0;
+    boss.displayHealth = 0;
+    boss.isDead = true;
+    boss.shouldRemove = false;
+    (boss as any).__bossRushTransforming = false;
+    (boss as any).__bossRushDeathAnimating = true;
+    (boss as any).__bossRushDeathProgress = 0;
+    this.transitionText =
+      definition.key === 'gatekeeper'
+        ? 'VAULT FAILURE // GATEKEEPER COLLAPSING'
+        : definition.key === 'splitter'
+          ? 'FRACTURE EVENT // SPLITTER COMING APART'
+          : definition.key === 'reactor'
+            ? 'CORE FAILURE // REACTOR OVERLOADING'
+            : definition.key === 'executioner'
+              ? 'JUDGEMENT BROKEN // EXECUTIONER FALLING'
+              : 'GRAVITY COLLAPSE // SINGULARITY IMPLODING';
+    engine.shakeAmount += 18 * engine.settings.shakeIntensity;
+    engine.spawnParticles(
+      boss.pos,
+      definition.key === 'reactor' ? '#ffe17a' : definition.accent,
+      definition.key === 'gatekeeper' ? 92 : definition.key === 'grand_singularity' ? 110 : 72,
+      definition.key === 'grand_singularity' ? 9 : 8
+    );
+    engine.addNotification(this.transitionText, definition.accent);
+  }
+
+  private finishBossDefeat(engine: BossRushEngineBridge, boss: BossRushBossEntity, defeatedDefinition: BossRushBossDefinition) {
+    boss.shouldRemove = true;
+    (boss as any).__bossRushDeathAnimating = false;
+    (boss as any).__bossRushDeathProgress = 1;
+    this.currentBossId = null;
+    this.currentRuntime = null;
+    this.activeCinematic = null;
+    this.telegraphs = [];
+    this.clearedBossCount = Math.max(this.clearedBossCount, this.currentIndex + 1);
+    this.currentIndex += 1;
+    engine.spawnParticles(boss.pos, defeatedDefinition.accent, 72, 8);
+    if (this.currentIndex >= BOSS_RUSH_BOSSES.length) {
+      this.victory = true;
+      this.transitionText = 'BOSS RUSH CLEARED';
+      engine.addNotification('BOSS RUSH VICTORY', '#facc15');
+      engine.spawnParticles(engine.player.pos, '#facc15', 60, 7);
+      return;
+    }
+    const nextBoss = BOSS_RUSH_BOSSES[this.currentIndex];
+    this.intermissionTimer = this.currentIndex === 1 ? 4.4 : 3.6;
+    this.transitionText = `TARGET ELIMINATED // ${nextBoss.name.toUpperCase()} ARRIVES IN ${Math.ceil(this.intermissionTimer)}`;
+    engine.player.health = engine.player.maxHealth;
+    engine.player.shield = engine.player.maxShield;
+    engine.addNotification(this.transitionText, '#ff9f43');
   }
 
   private applyArenaContainment(engine: BossRushEngineBridge, dt: number) {
@@ -246,7 +400,7 @@ export class BossRushMode {
     engine: BossRushEngineBridge,
     boss: BossRushBossEntity,
     definition: BossRushBossDefinition,
-    mode: 'intro' | 'awakening'
+    mode: 'intro' | 'awakening' | 'transformation'
   ) {
     const line = this.getBossLine(definition, mode);
     this.activeCinematic = {
@@ -255,13 +409,23 @@ export class BossRushMode {
       mode,
       bossId: boss.id,
       title: this.getBossTitle(definition, mode),
-      speaker: mode === 'awakening' ? `${definition.name} // Phase Break` : definition.subtitle,
+      speaker: this.getBossSpeaker(definition, mode),
       line,
       accent: definition.accent,
       color: definition.color,
       startedAtMs: engine.elapsedMs,
-      wordDelayMs: mode === 'awakening' ? 150 : 170,
-      holdMs: mode === 'awakening' ? 1120 : 980,
+      wordDelayMs:
+        mode === 'awakening'
+          ? definition.key === 'grand_singularity' ? 138 : definition.key === 'executioner' ? 146 : 150
+          : mode === 'transformation'
+            ? definition.key === 'reactor' ? 128 : definition.key === 'splitter' ? 122 : definition.key === 'grand_singularity' ? 142 : 135
+            : definition.key === 'gatekeeper' ? 168 : 170,
+      holdMs:
+        mode === 'awakening'
+          ? Math.round(definition.awakeningSeconds * 420)
+          : mode === 'transformation'
+            ? Math.round(definition.transformSeconds * 420)
+            : 980,
       barsProgress: 0,
       lastBlipWordCount: 0,
       voiceVariant: this.getBossVoiceVariant(definition),
@@ -317,64 +481,85 @@ export class BossRushMode {
       accent: cinematic.accent,
       color: cinematic.color,
       flash:
-        cinematic.mode === 'awakening'
+        cinematic.mode === 'awakening' || cinematic.mode === 'transformation'
           ? clamp(
-              Math.sin(elapsedMs * 0.022) * 0.24 +
-              cinematic.barsProgress * 0.28 +
-              (revealCount < words.length ? 0.14 : 0),
+              Math.sin(elapsedMs * (cinematic.mode === 'transformation' ? 0.03 : 0.022)) * (cinematic.mode === 'transformation' ? 0.3 : 0.24) +
+              cinematic.barsProgress * (cinematic.mode === 'transformation' ? 0.34 : 0.28) +
+              (revealCount < words.length ? (cinematic.mode === 'transformation' ? 0.18 : 0.14) : 0),
               0,
-              0.72
+              cinematic.mode === 'transformation' ? 0.84 : 0.72
             )
           : 0,
       chromatic:
-        cinematic.mode === 'awakening'
+        cinematic.mode === 'awakening' || cinematic.mode === 'transformation'
           ? clamp(
-              Math.sin(elapsedMs * 0.014 + 0.6) * 0.16 +
-              cinematic.barsProgress * 0.24 +
-              (revealCount < words.length ? 0.1 : 0),
+              Math.sin(elapsedMs * (cinematic.mode === 'transformation' ? 0.018 : 0.014) + 0.6) * (cinematic.mode === 'transformation' ? 0.22 : 0.16) +
+              cinematic.barsProgress * (cinematic.mode === 'transformation' ? 0.3 : 0.24) +
+              (revealCount < words.length ? (cinematic.mode === 'transformation' ? 0.14 : 0.1) : 0),
               0,
-              0.6
+              cinematic.mode === 'transformation' ? 0.74 : 0.6
             )
           : 0,
     };
   }
 
-  private getBossLine(definition: BossRushBossDefinition, mode: 'intro' | 'awakening'): string {
-    const lines: Record<string, { intro: string; awakening: string }> = {
+  private getBossLine(definition: BossRushBossDefinition, mode: 'intro' | 'awakening' | 'transformation'): string {
+    const lines: Record<string, { intro: string; awakening: string; transformation: string }> = {
       gatekeeper: {
-        intro: 'You crossed the threshold. Now prove you were meant to survive it.',
-        awakening: 'The gate is broken. Good. Now face what was sealed behind it.',
+        intro: 'You broke the first seal. Good. Now hold your ground and learn why the threshold was buried.',
+        awakening: 'The locks are ash now. Excellent. You no longer face a gate. You face what the gate was hiding.',
+        transformation: 'Ancient hinges scream. War-steel wakes. Gatekeeper, close the world around the intruder.',
       },
       splitter: {
-        intro: 'I do not chase prey. I carve the arena until there is nowhere left to stand.',
-        awakening: 'Pressure becomes slaughter. Run if you want the ending to be slower.',
+        intro: 'I do not hunt. I reduce the arena until panic is your last open path.',
+        awakening: 'Pressure is over. This is the cut. Move beautifully, or die in pieces.',
+        transformation: 'Angles divide. Routes collapse. Splitter, take shape and sever every escape line.',
       },
       reactor: {
-        intro: 'This chamber answers to my pulse. Every safe zone you trust is already burning.',
-        awakening: 'Containment failed by design. Now the whole arena detonates with me.',
+        intro: 'This chamber answers to my pulse. Every safe zone you trust is already overheating.',
+        awakening: 'Containment did not fail. Containment opened. Now the entire arena burns on purpose.',
+        transformation: 'Ignition sequence complete. Core online. Reactor, breathe fire through the chamber.',
       },
       executioner: {
-        intro: 'I was not made to threaten you. I was made to finish what the others started.',
-        awakening: 'Mercy is gone. From this point on, every mistake is a death sentence.',
+        intro: 'I was not built to warn you. I was built to finish what the others merely prepared.',
+        awakening: 'Mercy has left the arena. From this point forward, every mistake signs your sentence.',
+        transformation: 'Judgement descends in iron. Executioner, wake the frame and pronounce the sentence.',
       },
       grand_singularity: {
-        intro: 'You did not reach the end. The end opened its eyes and waited for you.',
-        awakening: 'Gravity kneels. Light folds. And you are still arrogant enough to remain.',
+        intro: 'You did not reach the end. The end noticed you, opened its eyes, and waited.',
+        awakening: 'Gravity kneels. Light folds. And still you remain, arrogant enough to call that courage.',
+        transformation: 'Matter folds into a throne of ruin. Grand Singularity, complete the collapse.',
       },
     };
 
     const selected = lines[definition.key];
     if (selected) return selected[mode];
+    if (mode === 'transformation') {
+      return `${definition.name} forges a war-body from the arena itself.`;
+    }
     return mode === 'awakening'
       ? `${definition.name} has awakened. The arena will not forgive hesitation.`
       : `${definition.name} enters the arena. Stand your ground if you still have one.`;
   }
 
-  private getBossTitle(definition: BossRushBossDefinition, mode: 'intro' | 'awakening'): string {
-    if (mode === 'awakening') {
-      return `AWAKENING // ${definition.name.toUpperCase()}`;
+  private getBossTitle(definition: BossRushBossDefinition, mode: 'intro' | 'awakening' | 'transformation'): string {
+    if (mode === 'transformation') {
+      return definition.key === 'gatekeeper'
+        ? `SEALBREAK EVENT // ${definition.name.toUpperCase()}`
+        : `WARFORM MANIFEST // ${definition.name.toUpperCase()}`;
     }
-    return `BOSS INBOUND // ${definition.name.toUpperCase()}`;
+    if (mode === 'awakening') {
+      return definition.key === 'gatekeeper'
+        ? `LOCKDOWN OVERRIDE // ${definition.name.toUpperCase()}`
+        : `PHASE BREAK // ${definition.name.toUpperCase()}`;
+    }
+    return `HOSTILE TRANSMISSION // ${definition.name.toUpperCase()}`;
+  }
+
+  private getBossSpeaker(definition: BossRushBossDefinition, mode: 'intro' | 'awakening' | 'transformation'): string {
+    if (mode === 'transformation') return `${definition.name} // Warform Manifest`;
+    if (mode === 'awakening') return `${definition.name} // Phase Break`;
+    return `${definition.name} // ${definition.subtitle.toUpperCase()}`;
   }
 
   private getBossVoiceVariant(definition: BossRushBossDefinition): ActiveBossRushCinematic['voiceVariant'] {
@@ -397,12 +582,17 @@ export class BossRushMode {
   private updateBossPresentation(engine: BossRushEngineBridge, boss: BossRushBossEntity | null) {
     const runtime = this.currentRuntime;
     if (!boss || !runtime) return;
-    const definition = BOSS_RUSH_BOSSES[Math.min(this.currentIndex, BOSS_RUSH_BOSSES.length - 1)];
+    const definition = this.getCurrentDefinition();
     const now = engine.elapsedMs;
     const hpRatio = boss.health / Math.max(1, boss.maxHealth);
     const awakened = !!runtime.awakened;
+    const transforming = runtime.state === 'transforming';
+    (boss as any).__bossRushTransforming = transforming;
+    (boss as any).__bossRushTransformPhase = transforming
+      ? clamp(1 - runtime.transformationTimer / Math.max(0.01, definition.transformSeconds), 0, 1)
+      : 1;
     const auraCadenceMs =
-      runtime.state === 'awakening' ? 360 :
+      runtime.state === 'awakening' || runtime.state === 'transforming' ? (definition.key === 'gatekeeper' ? 220 : 360) :
       awakened ? 780 :
       1180;
 
@@ -412,9 +602,23 @@ export class BossRushMode {
     }
 
     const burstCadenceMs =
-      runtime.state === 'awakening' ? 160 :
+      runtime.state === 'awakening' || runtime.state === 'transforming' ? (definition.key === 'gatekeeper' ? 110 : 160) :
       hpRatio < 0.35 ? 320 :
       520;
+
+    if (runtime.state === 'transforming' || runtime.state === 'awakening') {
+      const phaseTimer = runtime.state === 'transforming' ? runtime.transformationTimer : runtime.awakeningTimer;
+      const phaseTotal = runtime.state === 'transforming'
+        ? Math.max(0.01, definition.transformSeconds)
+        : Math.max(0.01, definition.awakeningSeconds);
+      const progress = clamp(1 - phaseTimer / phaseTotal, 0, 1);
+      const wave = 0.4 + Math.sin(now * (definition.key === 'gatekeeper' ? 0.045 : 0.028)) * 0.5;
+      const baseShake =
+        definition.key === 'gatekeeper'
+          ? 0.7 + progress * 1.9 + Math.max(0, wave)
+          : 0.45 + progress * 1.15 + Math.max(0, wave * 0.65);
+      engine.shakeAmount += baseShake * engine.settings.shakeIntensity;
+    }
 
     if (now - this.lastAuraBurstAtMs >= burstCadenceMs) {
       this.lastAuraBurstAtMs = now;
@@ -443,8 +647,63 @@ export class BossRushMode {
         );
       }
 
-      if (runtime.state === 'awakening') {
+      if (runtime.state === 'awakening' || runtime.state === 'transforming') {
         engine.spawnParticles(boss.pos, definition.accent, 10, 5);
+        if (runtime.state === 'transforming') {
+          const progress = clamp(1 - runtime.transformationTimer / Math.max(0.01, definition.transformSeconds), 0, 1);
+          if (definition.key === 'gatekeeper') {
+            const ring = boss.radius * (0.86 + progress * 1.02);
+            for (let i = 0; i < 4; i += 1) {
+              const angle = (i / 4) * Math.PI * 2 + now * 0.0028;
+              engine.spawnParticles({
+                x: boss.pos.x + Math.cos(angle) * ring,
+                y: boss.pos.y + Math.sin(angle) * ring,
+              }, '#ffd0b2', 6, 5);
+            }
+            for (let i = 0; i < 8; i += 1) {
+              const angle = (i / 8) * Math.PI * 2 + now * 0.0012;
+              const inner = boss.radius * (0.35 + progress * 0.18);
+              const outer = boss.radius * (1.08 + progress * 0.5);
+              engine.spawnParticles({
+                x: boss.pos.x + Math.cos(angle) * inner,
+                y: boss.pos.y + Math.sin(angle) * outer,
+              }, i % 2 === 0 ? '#ffe2dc' : '#ff9b9b', 3, 4);
+            }
+          } else if (definition.key === 'splitter') {
+            for (let i = 0; i < 6; i += 1) {
+              const angle = (i / 6) * Math.PI * 2;
+              engine.spawnParticles({
+                x: boss.pos.x + Math.cos(angle) * boss.radius * (0.45 + progress * 0.55),
+                y: boss.pos.y + Math.sin(angle) * boss.radius * (0.45 + progress * 0.55),
+              }, '#ffd1ea', 3, 3);
+            }
+          } else if (definition.key === 'reactor') {
+            engine.spawnParticles(boss.pos, '#ffe17a', 14, 6);
+          } else if (definition.key === 'executioner') {
+            const head = {
+              x: boss.pos.x + Math.cos(boss.rotation) * boss.radius * 0.9,
+              y: boss.pos.y + Math.sin(boss.rotation) * boss.radius * 0.9,
+            };
+            engine.spawnParticles(head, '#ffd3db', 8, 5);
+          } else if (definition.key === 'grand_singularity') {
+            for (let i = 0; i < 3; i += 1) {
+              const angle = now * 0.003 + i * (Math.PI * 2 / 3);
+              engine.spawnParticles({
+                x: boss.pos.x + Math.cos(angle) * boss.radius * (0.85 + progress * 0.45),
+                y: boss.pos.y + Math.sin(angle) * boss.radius * (0.85 + progress * 0.45),
+              }, '#e5d9ff', 5, 4);
+            }
+          }
+        } else if (runtime.state === 'awakening' && definition.key === 'gatekeeper') {
+          for (let i = 0; i < 12; i += 1) {
+            const angle = (i / 12) * Math.PI * 2 + now * 0.0034;
+            const radius = boss.radius * (0.92 + (i % 2 === 0 ? 0.26 : 0.42));
+            engine.spawnParticles({
+              x: boss.pos.x + Math.cos(angle) * radius,
+              y: boss.pos.y + Math.sin(angle) * radius,
+            }, i % 3 === 0 ? '#fff1f1' : definition.accent, 3, 4);
+          }
+        }
       }
     }
   }

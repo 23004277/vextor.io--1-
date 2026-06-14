@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GameMode, GameSettings, GameState, HighScoreEntry, PlayerState, SecondarySector, StatType, TankClass, Team, ShapeType, ShapeRarity } from '../types';
+import { BossRushLoadout, GameMode, GameSettings, GameState, HighScoreEntry, PlayerState, SecondarySector, StatType, TankClass, Team, ShapeType, ShapeRarity } from '../types';
 import { CLASS_TREE, COLORS, STAT_COLORS, TANK_CONFIGS } from '../constants';
 import { TankPreview } from './TankPreview';
 import { ShapePreview } from './ShapePreview';
@@ -17,6 +17,7 @@ interface UIOverlayProps {
   onRestart: () => void;
   onExit: () => void;
   onSpectateKiller?: () => void;
+  onBossRushLoadoutChange?: (loadout: BossRushLoadout) => void;
   highScores: HighScoreEntry[];
   playHover?: () => void;
   engine?: any;
@@ -168,6 +169,31 @@ const SANDBOX_DOMINION_PROFILES: Array<{ id: 'DESTROYER' | 'GUNNER' | 'TRAPPER' 
   { id: 'TRIPLE', label: 'Triple Dominion', classType: TankClass.TRIPLE_TANK, note: 'Balanced lane pressure' },
 ];
 
+const BOSS_RUSH_DISABLED_CLASSES = new Set<TankClass>([
+  TankClass.COLOSSAL,
+  TankClass.LEVIATHAN,
+  TankClass.WARLORD,
+  TankClass.CELESTIAL,
+  TankClass.OBLITERATOR,
+]);
+
+const BOSS_RUSH_CLASS_CATEGORIES = CLASS_CATEGORIES
+  .filter((category) => category.name !== 'Rebirth')
+  .map((category) => ({
+    ...category,
+    classes: category.classes.filter((cls) => !BOSS_RUSH_DISABLED_CLASSES.has(cls)),
+  }))
+  .filter((category) => category.classes.length > 0);
+
+const BOSS_RUSH_CATEGORY_META: Record<string, { hint: string; tone: string }> = {
+  Assault: { hint: 'Front pressure and lane control', tone: 'rgba(34,211,238,0.14) 0%, rgba(14,165,233,0.05) 100%' },
+  Precision: { hint: 'Range, picks, and clean angles', tone: 'rgba(167,139,250,0.14) 0%, rgba(99,102,241,0.05) 100%' },
+  Impact: { hint: 'Heavy shells and burst damage', tone: 'rgba(251,191,36,0.14) 0%, rgba(249,115,22,0.05) 100%' },
+  Tactical: { hint: 'Mobility, traps, and drones', tone: 'rgba(52,211,153,0.14) 0%, rgba(20,184,166,0.05) 100%' },
+};
+
+const formatTankClassLabel = (klass: TankClass): string => String(klass).replace(/_/g, ' ');
+
 const getSandboxPreviewPose = (cls: TankClass): { turretRotation: number; chassisRotation: number } => {
   if (cls === TankClass.TRAPPER) return { turretRotation: -8, chassisRotation: 4 };
   if (cls === TankClass.DUAL_TRAPPER) return { turretRotation: -12, chassisRotation: 6 };
@@ -183,7 +209,7 @@ const getSandboxPreviewPose = (cls: TankClass): { turretRotation: number; chassi
   return { turretRotation: -6, chassisRotation: 2 };
 };
 
-export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, onUpgradeClass, onUpgradeSector, onRestart, onExit, onSpectateKiller, highScores, playHover, engine, settings, deathReport }) => {
+export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, onUpgradeClass, onUpgradeSector, onRestart, onExit, onSpectateKiller, onBossRushLoadoutChange, highScores, playHover, engine, settings, deathReport }) => {
   const { 
     score, level, xp, maxXp, stats, availableStatPoints, mainClass, currentClass, secondarySector, isDead, fps, killFeed, 
     leaderboard, health, maxHealth, camera, mapSize, gameMode, 
@@ -267,6 +293,23 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   const showStandardUpgrades = !showBossChoiceUI && !showSectorChoiceUI && (unlockableClasses.length > 0 && !isTransformed) && gameMode !== GameMode.SANDBOX;
   const isRebirthClass = currentClass === TankClass.COLOSSAL || currentClass === TankClass.LEVIATHAN || currentClass === TankClass.WARLORD || currentClass === TankClass.CELESTIAL || currentClass === TankClass.OBLITERATOR;
   const showStatUpgradeUI = showStatsMenu && !showStandardUpgrades && !isRebirthClass;
+  const bossRushLoadout = bossRush?.loadout;
+  const bossRushSelectionActive = gameMode === GameMode.BOSS_RUSH && !!bossRush?.loadoutEditable && !!bossRushLoadout && !!onBossRushLoadoutChange;
+  const bossRushSelectedCategory = useMemo(
+    () => BOSS_RUSH_CLASS_CATEGORIES.find((category) => category.classes.includes(bossRushLoadout?.classType as TankClass))?.name ?? 'Custom',
+    [bossRushLoadout],
+  );
+  const rightHudWidthClass = bossRushSelectionActive
+    ? 'w-[min(25rem,calc(100vw-1rem))] md:w-[24rem] xl:w-[25rem]'
+    : 'w-[244px]';
+
+  const handleBossRushClassPick = (classType: TankClass) => {
+    if (!bossRushSelectionActive || !bossRushLoadout || !onBossRushLoadoutChange) return;
+    onBossRushLoadoutChange({
+      ...bossRushLoadout,
+      classType,
+    });
+  };
 
   useEffect(() => {
     if (availableStatPoints > 0 && !showStandardUpgrades) {
@@ -595,7 +638,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             exit={{ opacity: 0 }}
             className="absolute inset-0 z-[190] pointer-events-none"
           >
-            {bossRushCinematic.mode === 'awakening' && (
+            {(bossRushCinematic.mode === 'awakening' || bossRushCinematic.mode === 'transformation') && (
               <>
                 <div
                   className="absolute inset-0"
@@ -628,40 +671,72 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             />
 
             <div className="absolute inset-x-0 top-6 flex justify-center px-8">
-              <div className="w-full max-w-5xl rounded-[1.4rem] border border-white/10 bg-[linear-gradient(180deg,rgba(0,0,0,0.84),rgba(0,0,0,0.7))] px-5 py-3 backdrop-blur-md shadow-[0_16px_44px_rgba(0,0,0,0.35)]">
-                <div
-                  className="text-center text-[11px] font-black uppercase tracking-[0.34em]"
-                  style={{ color: bossRushCinematic.accent }}
-                >
-                  {bossRushCinematic.title}
+              <div className="w-full max-w-5xl rounded-[1.55rem] border border-white/10 bg-[linear-gradient(180deg,rgba(1,4,10,0.9),rgba(0,0,0,0.72))] px-5 py-3 backdrop-blur-md shadow-[0_18px_48px_rgba(0,0,0,0.38)]">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shadow-[0_0_18px_currentColor]"
+                      style={{ backgroundColor: bossRushCinematic.accent, color: bossRushCinematic.accent }}
+                    />
+                    <div
+                      className="text-[11px] font-black uppercase tracking-[0.34em]"
+                      style={{ color: bossRushCinematic.accent }}
+                    >
+                      {bossRushCinematic.title}
+                    </div>
+                  </div>
+                  <div className="hidden md:block text-[9px] font-black uppercase tracking-[0.26em] text-white/34">
+                    Hostile Feed Live
+                  </div>
                 </div>
               </div>
             </div>
 
             <div className="absolute inset-x-0 bottom-[4.5%] flex justify-center px-8">
-              <div className="w-full max-w-5xl rounded-[1.4rem] border border-white/10 bg-[linear-gradient(180deg,rgba(0,0,0,0.88),rgba(0,0,0,0.76))] px-5 py-4 shadow-[0_22px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0">
+              <div className="w-full max-w-5xl overflow-hidden rounded-[1.6rem] border border-white/10 bg-[linear-gradient(180deg,rgba(2,6,12,0.92),rgba(0,0,0,0.8))] shadow-[0_22px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+                <div className="h-[1px] w-full bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.18),transparent)]" />
+                <div className="grid gap-0 md:grid-cols-[minmax(0,1fr)_220px]">
+                  <div className="min-w-0 px-5 py-4 md:px-6 md:py-5">
                     <div
                       className="text-[10px] font-black uppercase tracking-[0.34em]"
                       style={{ color: bossRushCinematic.accent }}
                     >
                       {bossRushCinematic.speaker}
                     </div>
-                    <div className="mt-2 text-lg font-black leading-8 text-white md:text-[1.65rem] md:leading-10">
+                    <div className="mt-3 max-w-[54rem] text-lg font-black leading-8 text-white md:text-[1.8rem] md:leading-[2.7rem]">
+                      <span className="mr-2 align-top text-white/24">"</span>
                       {bossRushCinematic.displayLine}
                       {bossRushCinematic.progress < 1 && <span className="ml-1 inline-block h-6 w-[2px] animate-pulse bg-white/80 align-middle" />}
+                      <span className="ml-2 align-top text-white/24">"</span>
+                    </div>
+                    <div className="mt-4 flex items-center gap-3">
+                      <div className="h-[3px] w-14 overflow-hidden rounded-full bg-white/8">
+                        <div
+                          className="h-full rounded-full transition-all duration-150"
+                          style={{
+                            width: `${Math.max(8, bossRushCinematic.progress * 100)}%`,
+                            boxShadow: `0 0 18px ${bossRushCinematic.color}66`,
+                            background: `linear-gradient(90deg, ${bossRushCinematic.color}, rgba(255,255,255,0.95))`,
+                          }}
+                        />
+                      </div>
+                      <div className="text-[9px] font-black uppercase tracking-[0.24em] text-white/32">
+                        Threat Voiceprint Synced
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="mt-4 h-1.5 rounded-full bg-white/8 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-[linear-gradient(90deg,rgba(255,255,255,0.25),rgba(255,255,255,0.95),rgba(255,255,255,0.25))]"
-                    style={{
-                      width: `${Math.max(6, bossRushCinematic.progress * 100)}%`,
-                      boxShadow: `0 0 24px ${bossRushCinematic.color}66`,
-                    }}
-                  />
+                  <div className="border-t border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))] px-5 py-4 md:border-l md:border-t-0 md:px-6">
+                    <div className="space-y-3 text-[9px] font-black uppercase tracking-[0.22em] text-white/40">
+                      <div className="flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: bossRushCinematic.accent }} />
+                        Hostile Channel Open
+                      </div>
+                      <div>
+                        Source: {bossRushCinematic.mode === 'awakening' ? 'Awakened Core' : bossRushCinematic.mode === 'transformation' ? 'Warform Manifest' : 'Arena Arrival'}
+                      </div>
+                      <div>Cipher Lock // Live</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -874,7 +949,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             )}
         </div>
 
-        <div className="flex w-[244px] flex-col items-stretch gap-3 pointer-events-auto">
+        <div className={`flex ${rightHudWidthClass} flex-col items-stretch gap-3 pointer-events-auto`}>
              <div className="flex items-center justify-end gap-2">
                 {gameMode === GameMode.SANDBOX && (
                     <motion.button 
@@ -929,37 +1004,146 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
               )}
 
              {gameMode === GameMode.BOSS_RUSH && bossRush && (
-                <div className="w-full rounded-2xl border border-rose-400/20 bg-[#12060a]/86 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
-                  <div className="px-3 py-2 border-b border-white/10 bg-rose-500/[0.08] flex items-center justify-between gap-3">
-                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-200/90">Boss Rush</span>
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-white/55">{Math.min(bossRush.bossIndex, bossRush.bossCount)} / {bossRush.bossCount}</span>
+                <div className="flex w-full flex-col gap-3">
+                  <div className="w-full rounded-2xl border border-rose-400/20 bg-[#12060a]/86 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
+                    <div className="px-3 py-2 border-b border-white/10 bg-rose-500/[0.08] flex items-center justify-between gap-3">
+                      <span className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-200/90">Boss Rush</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-white/55">{Math.min(bossRush.bossIndex, bossRush.bossCount)} / {bossRush.bossCount}</span>
+                    </div>
+                    <div className="px-3 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="break-words text-[15px] font-black uppercase tracking-[0.08em] text-white">{bossRush.bossName}</div>
+                          <div className="mt-1 break-words text-[10px] font-bold uppercase tracking-[0.14em] text-rose-100/55">{bossRush.bossSubtitle}</div>
+                        </div>
+                        <div className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${bossRush.awakened ? 'border-amber-300/25 bg-amber-400/14 text-amber-100' : 'border-white/10 bg-white/5 text-white/55'}`}>
+                          {bossRush.awakened ? 'Awakened' : `Phase ${bossRush.phase}/${bossRush.phaseCount}`}
+                        </div>
+                      </div>
+                      <div className="mt-3 h-3 rounded-full bg-white/8 overflow-hidden border border-white/8">
+                        <div
+                          className={`h-full rounded-full transition-[width] duration-300 ${bossRush.victory ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-500' : 'bg-gradient-to-r from-rose-500 via-red-400 to-orange-300'}`}
+                          style={{ width: `${Math.max(0, Math.min(100, (bossRush.health / Math.max(1, bossRush.maxHealth)) * 100))}%` }}
+                        />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-white/52">
+                        <span>{Math.max(0, Math.round(bossRush.health)).toLocaleString()} HP</span>
+                        <span>{Math.round(bossRush.maxHealth).toLocaleString()} MAX</span>
+                      </div>
+                      {bossRush.transitionText && (
+                        <div className="mt-3 rounded-xl border border-rose-300/14 bg-rose-500/[0.08] px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-rose-100/82">
+                          {bossRush.transitionText}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="break-words text-[15px] font-black uppercase tracking-[0.08em] text-white">{bossRush.bossName}</div>
-                        <div className="mt-1 break-words text-[10px] font-bold uppercase tracking-[0.14em] text-rose-100/55">{bossRush.bossSubtitle}</div>
+
+                  {bossRushSelectionActive && bossRushLoadout && (
+                    <div className="w-full max-h-[calc(100vh-10rem)] rounded-2xl border border-cyan-300/18 bg-[linear-gradient(180deg,rgba(4,14,25,0.94),rgba(4,9,18,0.96))] backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
+                      <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-cyan-400/[0.06] px-3 py-2.5">
+                        <div>
+                          <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-100">Boss Rush Class Select</div>
+                          <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white/42">Choose your class in-match before the first boss arrives</div>
+                        </div>
+                        <div className="shrink-0 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-cyan-100">
+                          In-Match Picker
+                        </div>
                       </div>
-                      <div className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${bossRush.awakened ? 'border-amber-300/25 bg-amber-400/14 text-amber-100' : 'border-white/10 bg-white/5 text-white/55'}`}>
-                        {bossRush.awakened ? 'Awakened' : `Phase ${bossRush.phase}/${bossRush.phaseCount}`}
+
+                      <div className="custom-scrollbar max-h-[calc(100vh-14.5rem)] space-y-3 overflow-y-auto px-3 py-3">
+                        <div className="rounded-2xl border border-cyan-300/14 bg-[linear-gradient(135deg,rgba(20,184,166,0.10),rgba(15,23,42,0.52)_48%,rgba(8,12,20,0.74))] px-3 py-3 shadow-[0_10px_28px_rgba(0,0,0,0.22)]">
+                          <div className="flex items-start gap-3">
+                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-400/8">
+                              <TankPreview
+                                key={`${SANDBOX_RESEARCH_ICON_REV}-boss-rush-current-${bossRushLoadout.classType}`}
+                                tankClass={resolvePreviewClass(bossRushLoadout.classType)}
+                                size={30}
+                                turretRotation={getSandboxPreviewPose(bossRushLoadout.classType).turretRotation}
+                                chassisRotation={getSandboxPreviewPose(bossRushLoadout.classType).chassisRotation}
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="text-[11px] font-black uppercase tracking-[0.16em] text-white">{formatTankClassLabel(bossRushLoadout.classType)}</div>
+                                <span className="rounded-full border border-cyan-300/18 bg-cyan-400/10 px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-cyan-100">
+                                  {bossRushSelectedCategory}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white/45">Combat role staged for first contact</div>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-white/60">
+                                  Select a combat role
+                                </span>
+                                <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-white/60">
+                                  Tap any class to swap instantly
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          {BOSS_RUSH_CLASS_CATEGORIES.map((category) => (
+                            <div key={`boss-rush-${category.name}`} className="rounded-2xl border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-2.5">
+                              <div
+                                className="mb-2 rounded-xl border border-white/8 px-2.5 py-2"
+                                style={{
+                                  background: `linear-gradient(135deg, rgba(255,255,255,0.04), transparent), linear-gradient(180deg, ${BOSS_RUSH_CATEGORY_META[category.name]?.tone ?? 'rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%'})`,
+                                }}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-100/78">{category.name}</div>
+                                  <div className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-white/45">
+                                    {category.classes.length} classes
+                                  </div>
+                                </div>
+                                <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/38">
+                                  {BOSS_RUSH_CATEGORY_META[category.name]?.hint ?? 'Combat role group'}
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                {category.classes.map((klass) => {
+                                  const active = bossRushLoadout.classType === klass;
+                                  return (
+                                    <button
+                                      key={`boss-rush-class-${klass}`}
+                                      type="button"
+                                      onClick={() => handleBossRushClassPick(klass)}
+                                      onMouseEnter={() => playHover?.()}
+                                      className={`min-h-[5.4rem] rounded-2xl border px-2.5 py-2.5 text-left transition-all duration-200 ${active ? 'border-cyan-300/34 bg-[linear-gradient(135deg,rgba(34,211,238,0.16),rgba(10,20,34,0.82))] shadow-[0_0_0_1px_rgba(103,232,249,0.12),0_10px_26px_rgba(8,145,178,0.18)]' : 'border-white/8 bg-slate-950/32 hover:border-cyan-300/22 hover:bg-cyan-400/[0.04]'}`}
+                                    >
+                                      <div className="flex h-full flex-col gap-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${active ? 'border-cyan-300/20 bg-cyan-400/10' : 'border-white/10 bg-black/30'}`}>
+                                            <TankPreview
+                                              key={`${SANDBOX_RESEARCH_ICON_REV}-boss-rush-choice-${klass}`}
+                                              tankClass={resolvePreviewClass(klass)}
+                                              size={20}
+                                              turretRotation={getSandboxPreviewPose(klass).turretRotation}
+                                              chassisRotation={getSandboxPreviewPose(klass).chassisRotation}
+                                            />
+                                          </div>
+                                          <div className={`shrink-0 rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] ${active ? 'border-cyan-300/20 bg-cyan-300/10 text-cyan-100' : 'border-white/10 bg-white/[0.03] text-white/35'}`}>
+                                            {active ? 'Live' : 'Pick'}
+                                          </div>
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="line-clamp-2 text-[10px] font-black uppercase tracking-[0.08em] text-white/92 leading-tight">{formatTankClassLabel(klass)}</div>
+                                          <div className="mt-1 text-[8px] font-bold uppercase tracking-[0.16em] text-white/38">
+                                            {category.name}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                    <div className="mt-3 h-3 rounded-full bg-white/8 overflow-hidden border border-white/8">
-                      <div
-                        className={`h-full rounded-full transition-[width] duration-300 ${bossRush.victory ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-500' : 'bg-gradient-to-r from-rose-500 via-red-400 to-orange-300'}`}
-                        style={{ width: `${Math.max(0, Math.min(100, (bossRush.health / Math.max(1, bossRush.maxHealth)) * 100))}%` }}
-                      />
-                    </div>
-                    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-white/52">
-                      <span>{Math.max(0, Math.round(bossRush.health)).toLocaleString()} HP</span>
-                      <span>{Math.round(bossRush.maxHealth).toLocaleString()} MAX</span>
-                    </div>
-                    {bossRush.transitionText && (
-                      <div className="mt-3 rounded-xl border border-rose-300/14 bg-rose-500/[0.08] px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-rose-100/82">
-                        {bossRush.transitionText}
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </div>
               )}
 

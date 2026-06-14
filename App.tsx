@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import GameCanvas from './components/GameCanvas';
 import UIOverlay from './components/UIOverlay';
 import CustomCursor from './components/CustomCursor';
-import { GameMode, GameState, HighScoreEntry, TankClass, User, Team, Achievement, UserStats, GameSettings } from './types';
+import { GameMode, GameState, HighScoreEntry, TankClass, User, Team, Achievement, UserStats, GameSettings, BossRushLoadout, StatType } from './types';
 import { GameEngine } from './services/GameEngine';
 import { BackendService } from './services/BackendService';
 import { LoginModal } from './components/LoginModal';
@@ -35,6 +35,18 @@ const DEFAULT_SETTINGS: GameSettings = {
     particleDensity: 1.0,
     uiScale: 1.0,
     showFps: true
+};
+
+const DEFAULT_BOSS_RUSH_LOADOUT: BossRushLoadout = {
+  classType: TankClass.TWIN,
+  stats: {
+    [StatType.BULLET_DAMAGE]: 6,
+    [StatType.BULLET_PENETRATION]: 5,
+    [StatType.RELOAD]: 5,
+    [StatType.MOVEMENT_SPEED]: 3,
+    [StatType.MAX_HEALTH]: 2,
+    [StatType.REGEN]: 1,
+  },
 };
 
 type OverlayErrorBoundaryProps = {
@@ -112,6 +124,7 @@ const App: React.FC = () => {
   
   const [gameMode, setGameMode] = useState<GameMode>(GameMode.FFA);
   const [selectedTeam, setSelectedTeam] = useState<Team>(Team.BLUE);
+  const [bossRushLoadout, setBossRushLoadout] = useState<BossRushLoadout>(DEFAULT_BOSS_RUSH_LOADOUT);
   const [isSpectating, setIsSpectating] = useState(false);
   const [menuMusicSnapshot, setMenuMusicSnapshot] = useState<BackgroundMusicVisualizerFrame | null>(null);
   const [menuBootPhase, setMenuBootPhase] = useState<MenuBootPhase>('locked');
@@ -533,6 +546,10 @@ const App: React.FC = () => {
   }, [engine, settings]);
 
   useEffect(() => {
+    engine?.setBossRushLoadout?.(bossRushLoadout);
+  }, [bossRushLoadout, engine]);
+
+  useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const isTypingContext =
@@ -714,6 +731,7 @@ const App: React.FC = () => {
         engine.setPlayerSkin(user?.equippedItem || 'default', user?.supporterRank || 'standard');
         engine.setPlayerColor(activeColor);
         engine.setPlayerTeam(selectedTeam);
+        engine.setBossRushLoadout?.(bossRushLoadout);
         engine.setAttractMode(false);
         engine.resetPlayer(false);
         setLastDeathReport(null);
@@ -894,6 +912,7 @@ const App: React.FC = () => {
             }}
             highScores={displayHighScores}
             playHover={playHover}
+            onBossRushLoadoutChange={setBossRushLoadout}
             engine={engine}
             settings={settings}
             deathReport={lastDeathReport}

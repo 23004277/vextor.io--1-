@@ -105,7 +105,7 @@ export enum StatType {
   BULLET_DAMAGE = 'Bullet Damage',
   RELOAD = 'Reload',
   MOVEMENT_SPEED = 'Movement Speed',
-  BULLET_SPREAD = 'Weapon Stability',
+  BULLET_SPREAD = 'Accuracy',
   MAX_SHIELD = 'Max Shield',
   // Pacifist Stats
   HEALING_RADIUS = 'Healing Radius',
@@ -468,9 +468,13 @@ export interface GameState {
     awakened: boolean;
     transitionText?: string;
     victory: boolean;
+    loadoutEditable: boolean;
+    loadoutLevel: number;
+    remainingStatPoints: number;
+    loadout: BossRushLoadout;
     cinematic?: {
       active: boolean;
-      mode: 'intro' | 'awakening';
+      mode: 'intro' | 'awakening' | 'transformation';
       title: string;
       speaker: string;
       line: string;
@@ -550,6 +554,11 @@ export interface GameSettings {
   particleDensity: number;
   uiScale: number;
   showFps: boolean;
+}
+
+export interface BossRushLoadout {
+  classType: TankClass;
+  stats: Partial<Record<StatType, number>>;
 }
 
 export interface User {

@@ -61,6 +61,16 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
         transition={{ type: 'spring', stiffness: 800, damping: 20 }}
         className="relative flex items-center justify-center"
       >
+        <motion.div
+          aria-hidden
+          animate={{
+            scale: isPointer ? 1.18 : isPlaying ? 1.1 : 1,
+            opacity: isClicking ? 0.9 : 0.7,
+          }}
+          transition={{ type: 'spring', stiffness: 360, damping: 24 }}
+          className="absolute h-12 w-12 rounded-full border border-white/12 bg-white/[0.03] shadow-[0_0_24px_rgba(255,255,255,0.08)] backdrop-blur-[2px]"
+        />
+
         <AnimatePresence>
           {variant === 'playing' && (
             <motion.div
@@ -69,11 +79,13 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
               animate={{ opacity: 1, scale: 1, rotate: 0 }}
               exit={{ opacity: 0, scale: 0.2, rotate: 90 }}
               transition={{ duration: 0.15, ease: "easeOut" }}
-              className="absolute flex items-center justify-center w-7 h-7"
+              className="absolute flex items-center justify-center w-10 h-10"
             >
-              <div className="absolute w-full h-[2px] bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] rounded-full" />
-              <div className="absolute h-full w-[2px] bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] rounded-full" />
-              <div className="absolute w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_5px_rgba(255,255,255,1)]" />
+              <div className="absolute inset-0 rounded-full border border-cyan-300/45 shadow-[0_0_18px_rgba(34,211,238,0.28)]" />
+              <div className="absolute w-full h-[2px] bg-cyan-200 shadow-[0_0_10px_rgba(103,232,249,0.95)] rounded-full" />
+              <div className="absolute h-full w-[2px] bg-cyan-200 shadow-[0_0_10px_rgba(103,232,249,0.95)] rounded-full" />
+              <div className="absolute w-2 h-2 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,1)]" />
+              <div className="absolute w-4 h-4 rounded-full border border-cyan-100/70" />
             </motion.div>
           )}
 
@@ -84,14 +96,15 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.2 }}
               transition={{ duration: 0.15, ease: "easeOut" }}
-              className="absolute flex items-center justify-center w-10 h-10"
+              className="absolute flex items-center justify-center w-12 h-12"
             >
               <motion.div 
                 animate={{ rotate: 360 }}
                 transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-                className="absolute inset-0 border-[2px] border-dashed border-yellow-400/90 rounded-full shadow-[0_0_10px_rgba(250,204,21,0.4)]"
+                className="absolute inset-0 border-[2px] border-dashed border-yellow-300 rounded-full shadow-[0_0_14px_rgba(250,204,21,0.5)]"
               />
-              <div className="w-2.5 h-2.5 bg-yellow-400 rounded-full shadow-[0_0_8px_rgba(250,204,21,0.9)]" />
+              <div className="absolute inset-[6px] rounded-full border border-yellow-100/45" />
+              <div className="w-3 h-3 bg-yellow-300 rounded-full shadow-[0_0_12px_rgba(253,224,71,0.95)]" />
             </motion.div>
           )}
 
@@ -102,10 +115,11 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.2 }}
               transition={{ duration: 0.15, ease: "easeOut" }}
-              className="absolute flex items-center justify-center w-8 h-8"
+              className="absolute flex items-center justify-center w-10 h-10"
             >
-              <div className="absolute inset-0 border-[1.5px] border-white/50 rounded-full" />
-              <div className="w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_5px_rgba(255,255,255,0.8)]" />
+              <div className="absolute inset-0 rounded-full border-[1.5px] border-white/70 shadow-[0_0_16px_rgba(255,255,255,0.15)]" />
+              <div className="absolute inset-[7px] rounded-full border border-cyan-100/18" />
+              <div className="w-2 h-2 bg-white rounded-full shadow-[0_0_8px_rgba(255,255,255,0.95)]" />
             </motion.div>
           )}
         </AnimatePresence>
