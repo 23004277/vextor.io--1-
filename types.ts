@@ -55,6 +55,7 @@ export enum GameMode {
   FFA = 'FFA',
   TEAMS = 'TEAMS',
   DOMINION = 'DOMINION',
+  BOSS_RUSH = 'BOSS_RUSH',
   SANDBOX = 'SANDBOX',
 }
 
@@ -326,6 +327,9 @@ export interface BotChatBubble {
   text: string;
   displayText: string;
   typing: boolean;
+  revealedWordCount: number;
+  totalWords: number;
+  onScreen: boolean;
   opacity: number;
   worldPos: Vector2;
   accentColor: string;
@@ -340,6 +344,23 @@ export interface DeathPresentationState {
   blurPx: number;
   delayRemainingMs: number;
   killerBotId?: number | null;
+}
+
+export interface DeathKillerSnapshot {
+  entityId: number | null;
+  spectateTargetId: number | null;
+  name: string;
+  classType: TankClass | null;
+  team: Team;
+  level: number | null;
+  score: number | null;
+  health: number | null;
+  maxHealth: number | null;
+  shield: number | null;
+  maxShield: number | null;
+  isBot: boolean;
+  isAlive: boolean;
+  canSpectate: boolean;
 }
 
 export interface SandboxConfig {
@@ -358,6 +379,10 @@ export interface SandboxConfig {
   enabledShapes: Record<string, boolean>; // Toggles for specific shape types
   cleanupActive: boolean;      // Auto-cleanup stray entities
   showSpawnNotifications: boolean; // Toggle for shape announcements
+  projectileDamageScale: number;
+  projectileDurabilityScale: number;
+  droneDamageScale: number;
+  droneDurabilityScale: number;
 }
 
 export type DominionWeaponProfile = 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE';
@@ -430,7 +455,36 @@ export interface GameState {
   dominionOwnedCount?: Partial<Record<Team, number>>;
   dominionTimeRemaining?: number;
   dominionZones?: DominionZoneState[];
+  bossRush?: {
+    active: boolean;
+    bossName: string;
+    bossSubtitle: string;
+    bossIndex: number;
+    bossCount: number;
+    health: number;
+    maxHealth: number;
+    phase: number;
+    phaseCount: number;
+    awakened: boolean;
+    transitionText?: string;
+    victory: boolean;
+    cinematic?: {
+      active: boolean;
+      mode: 'intro' | 'awakening';
+      title: string;
+      speaker: string;
+      line: string;
+      displayLine: string;
+      progress: number;
+      barsProgress: number;
+      accent: string;
+      color: string;
+      flash: number;
+      chromatic: number;
+    };
+  };
   deathPresentation?: DeathPresentationState;
+  deathKiller?: DeathKillerSnapshot | null;
 }
 
 // --- Shop Types ---

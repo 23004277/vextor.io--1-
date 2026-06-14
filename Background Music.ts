@@ -62,6 +62,7 @@ const MANUAL_BEAT_WINDOW = 0.075;
 const MENU_BEAT_MAP_SECONDS: number[] = [
   // Add exact musical hit timestamps here for cinematic sync.
 ];
+const getRandomTrackIndex = () => (MENU_TRACK_URLS.length > 1 ? Math.floor(Math.random() * MENU_TRACK_URLS.length) : 0);
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const lerp = (from: number, to: number, alpha: number) => from + (to - from) * alpha;
@@ -164,7 +165,7 @@ export class BackgroundMusic {
   private lastFrameAt = 0;
   private lastBeatDetected = false;
   private currentGain = 0;
-  private trackIndex = 0;
+  private trackIndex = getRandomTrackIndex();
   private frameCache: BackgroundMusicVisualizerFrame = {
     bars: EMPTY_BARS,
     waveform: EMPTY_WAVEFORM,
@@ -306,7 +307,7 @@ export class BackgroundMusic {
     this.waveformBuffer = createZeroBars(DEFAULT_WAVEFORM_POINTS);
     this.smoothedBars = createZeroBars(DEFAULT_BAR_COUNT);
     this.smoothedWaveform = createZeroBars(DEFAULT_WAVEFORM_POINTS);
-    this.trackIndex = 0;
+    this.trackIndex = getRandomTrackIndex();
     this.prevBass = 0;
     this.beatPulse = 0;
     this.downbeatPulse = 0;

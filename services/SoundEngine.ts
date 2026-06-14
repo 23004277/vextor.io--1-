@@ -604,19 +604,243 @@ export class SoundEngine {
     if (!this.shouldPlaySound(options, true)) return;
     const spatial = this.getSpatialMix(options);
     if (!this.throttle('blood-burst', Math.round(350 * spatial.throttleMul))) return;
-    this.playExplosion(true, options);
     const t = this.ctx.currentTime;
+    const body = this.createOscillatorVoice();
+    const hiss = this.createOscillatorVoice();
+    const snap = this.createOscillatorVoice();
+    const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+    const colorFilter = this.ctx.createBiquadFilter();
+    colorFilter.type = 'bandpass';
+    colorFilter.frequency.setValueAtTime(620, t);
+    colorFilter.Q.setValueAtTime(1.2, t);
+
+    body.type = 'sawtooth';
+    body.frequency.setValueAtTime(132, t);
+    body.frequency.exponentialRampToValueAtTime(68, t + 0.11);
+    body.frequency.exponentialRampToValueAtTime(34, t + 0.3);
+
+    hiss.type = 'triangle';
+    hiss.frequency.setValueAtTime(760, t);
+    hiss.frequency.exponentialRampToValueAtTime(210, t + 0.16);
+
+    snap.type = 'square';
+    snap.frequency.setValueAtTime(1180, t);
+    snap.frequency.exponentialRampToValueAtTime(320, t + 0.045);
+
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.22 * spatial.gainMul, t + 0.012);
+    gain.gain.linearRampToValueAtTime(0.16 * spatial.gainMul, t + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.34);
+
+    body.connect(colorFilter);
+    hiss.connect(colorFilter);
+    snap.connect(colorFilter);
+    colorFilter.connect(gain);
+
+    body.start(t);
+    hiss.start(t);
+    snap.start(t);
+    body.stop(t + 0.34);
+    hiss.stop(t + 0.18);
+    snap.stop(t + 0.06);
+
+    if (this.noiseBuffer) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const noiseFilter = this.ctx.createBiquadFilter();
+      noiseFilter.type = 'highpass';
+      noiseFilter.frequency.setValueAtTime(900, t);
+      const { gain: noiseGain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+      noiseGain.gain.setValueAtTime(0, t);
+      noiseGain.gain.linearRampToValueAtTime(0.1 * spatial.gainMul, t + 0.01);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      src.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      src.start(t);
+      src.stop(t + 0.16);
+    }
+  }
+
+  playBossRushAura(
+    options?: AudioSpatialOptions,
+    bossKey: 'gatekeeper' | 'splitter' | 'reactor' | 'executioner' | 'grand_singularity' = 'gatekeeper',
+    awakened = false
+  ) {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (!this.shouldPlaySound(options, true)) return;
+    const spatial = this.getSpatialMix(options);
+    const throttleKey = `boss-rush-aura-${bossKey}-${awakened ? 'awakened' : 'base'}`;
+    if (!this.throttle(throttleKey, Math.round((awakened ? 220 : 320) * spatial.throttleMul))) return;
+
+    const t = this.ctx.currentTime;
+    const oscA = this.createOscillatorVoice();
+    const oscB = this.createOscillatorVoice();
+    const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+
+    let startA = 104;
+    let endA = 64;
+    let startB = 192;
+    let endB = 132;
+    let peak = awakened ? 0.11 : 0.075;
+    let waveA: OscillatorType = 'sawtooth';
+    let waveB: OscillatorType = 'square';
+    let center = 380;
+
+    if (bossKey === 'gatekeeper') {
+      startA = awakened ? 92 : 108;
+      endA = awakened ? 54 : 66;
+      startB = awakened ? 176 : 198;
+      endB = awakened ? 110 : 138;
+      peak = awakened ? 0.125 : 0.084;
+      waveA = 'square';
+      waveB = 'sawtooth';
+      center = 340;
+    } else if (bossKey === 'splitter') {
+      startA = awakened ? 214 : 242;
+      endA = awakened ? 136 : 158;
+      startB = awakened ? 428 : 476;
+      endB = awakened ? 248 : 292;
+      peak = awakened ? 0.102 : 0.07;
+      waveA = 'triangle';
+      waveB = 'triangle';
+      center = 880;
+    } else if (bossKey === 'reactor') {
+      startA = awakened ? 138 : 164;
+      endA = awakened ? 74 : 92;
+      startB = awakened ? 262 : 304;
+      endB = awakened ? 142 : 176;
+      peak = awakened ? 0.132 : 0.09;
+      waveA = 'sawtooth';
+      waveB = 'triangle';
+      center = 560;
+    } else if (bossKey === 'executioner') {
+      startA = awakened ? 82 : 98;
+      endA = awakened ? 42 : 56;
+      startB = awakened ? 148 : 176;
+      endB = awakened ? 84 : 108;
+      peak = awakened ? 0.136 : 0.094;
+      waveA = 'square';
+      waveB = 'square';
+      center = 260;
+    } else if (bossKey === 'grand_singularity') {
+      startA = awakened ? 156 : 182;
+      endA = awakened ? 88 : 106;
+      startB = awakened ? 318 : 362;
+      endB = awakened ? 176 : 208;
+      peak = awakened ? 0.116 : 0.082;
+      waveA = 'sine';
+      waveB = 'triangle';
+      center = 620;
+    }
+
+    oscA.type = waveA;
+    oscB.type = waveB;
+    oscA.frequency.setValueAtTime(startA * this.jitter(1, 0.03), t);
+    oscA.frequency.exponentialRampToValueAtTime(endA * this.jitter(1, 0.02), t + 0.24);
+    oscB.frequency.setValueAtTime(startB * this.jitter(1, 0.03), t);
+    oscB.frequency.exponentialRampToValueAtTime(endB * this.jitter(1, 0.025), t + 0.24);
+    bp.frequency.setValueAtTime(center, t);
+    bp.Q.setValueAtTime(awakened ? 2.8 : 2.1, t);
+
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(peak * spatial.gainMul, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+
+    oscA.connect(bp);
+    oscB.connect(bp);
+    bp.connect(gain);
+    oscA.start(t);
+    oscB.start(t);
+    oscA.stop(t + 0.3);
+    oscB.stop(t + 0.3);
+  }
+
+  playBossRushAwaken(
+    options?: AudioSpatialOptions,
+    bossKey: 'gatekeeper' | 'splitter' | 'reactor' | 'executioner' | 'grand_singularity' = 'gatekeeper'
+  ) {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (!this.shouldPlaySound(options, true)) return;
+    const spatial = this.getSpatialMix(options);
+    if (!this.throttle(`boss-rush-awaken-${bossKey}`, Math.round(700 * spatial.throttleMul))) return;
+
+    const t = this.ctx.currentTime;
+    const osc = this.createOscillatorVoice();
     const sub = this.createOscillatorVoice();
     const { gain } = this.createPannedGain(spatial.panRange, spatial.pan, spatial.lowpassHz);
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+
+    let start = 280;
+    let end = 110;
+    let subStart = 64;
+    let subEnd = 28;
+    let wave: OscillatorType = 'sawtooth';
+    let peak = 0.18;
+
+    if (bossKey === 'gatekeeper') {
+      start = 246;
+      end = 84;
+      subStart = 54;
+      subEnd = 20;
+      wave = 'square';
+      peak = 0.17;
+    } else if (bossKey === 'splitter') {
+      start = 482;
+      end = 148;
+      subStart = 76;
+      subEnd = 36;
+      wave = 'triangle';
+      peak = 0.145;
+    } else if (bossKey === 'reactor') {
+      start = 326;
+      end = 96;
+      subStart = 68;
+      subEnd = 24;
+      wave = 'sawtooth';
+      peak = 0.19;
+    } else if (bossKey === 'executioner') {
+      start = 212;
+      end = 58;
+      subStart = 48;
+      subEnd = 16;
+      wave = 'square';
+      peak = 0.2;
+    } else if (bossKey === 'grand_singularity') {
+      start = 372;
+      end = 88;
+      subStart = 58;
+      subEnd = 18;
+      wave = 'triangle';
+      peak = 0.175;
+    }
+
+    osc.type = wave;
     sub.type = 'sine';
-    sub.frequency.setValueAtTime(58, t);
-    sub.frequency.exponentialRampToValueAtTime(18, t + 0.25);
+    osc.frequency.setValueAtTime(start, t);
+    osc.frequency.exponentialRampToValueAtTime(end, t + 0.55);
+    sub.frequency.setValueAtTime(subStart, t);
+    sub.frequency.exponentialRampToValueAtTime(subEnd, t + 0.6);
+    filter.frequency.setValueAtTime(1200, t);
+    filter.frequency.exponentialRampToValueAtTime(120, t + 0.6);
+
     gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(0.24 * spatial.gainMul, t + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
-    sub.connect(gain);
+    gain.gain.linearRampToValueAtTime(peak * spatial.gainMul, t + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.65);
+
+    osc.connect(filter);
+    sub.connect(filter);
+    filter.connect(gain);
+    osc.start(t);
     sub.start(t);
-    sub.stop(t + 0.3);
+    osc.stop(t + 0.68);
+    sub.stop(t + 0.68);
   }
 
   playCelestialBoom(options?: AudioSpatialOptions) {
@@ -877,6 +1101,85 @@ export class SoundEngine {
     osc.connect(gain);
     osc.start(t);
     osc.stop(t + 0.12);
+  }
+
+  playDialogueBlip(options?: AudioSpatialOptions, variant: 'default' | 'support' | 'sniper' | 'rusher' | 'boss' | 'boss_cinematic' | 'boss_gatekeeper' | 'boss_splitter' | 'boss_reactor' | 'boss_executioner' | 'boss_grand_singularity' = 'default') {
+    if (!this.enabled || this.muteGameSounds) return;
+    this.resume();
+    if (this.volume <= 0.001) return;
+    if (options && !options.onScreen) return;
+    if (!this.throttle(`dialogue-blip-${variant}`, 28)) return;
+
+    const t = this.ctx.currentTime;
+    const osc = this.createOscillatorVoice();
+    const { gain } = this.createPannedGain(0.12, options?.pan);
+
+    let startFreq = 760;
+    let endFreq = 540;
+    let peak = 0.06;
+    let wave: OscillatorType = 'square';
+
+    if (variant === 'support') {
+      startFreq = 980;
+      endFreq = 760;
+      peak = 0.05;
+      wave = 'triangle';
+    } else if (variant === 'sniper') {
+      startFreq = 1180;
+      endFreq = 900;
+      peak = 0.045;
+      wave = 'sine';
+    } else if (variant === 'rusher') {
+      startFreq = 640;
+      endFreq = 420;
+      peak = 0.065;
+      wave = 'square';
+    } else if (variant === 'boss') {
+      startFreq = 420;
+      endFreq = 250;
+      peak = 0.085;
+      wave = 'sawtooth';
+    } else if (variant === 'boss_cinematic') {
+      startFreq = 310;
+      endFreq = 176;
+      peak = 0.1;
+      wave = 'sawtooth';
+    } else if (variant === 'boss_gatekeeper') {
+      startFreq = 248;
+      endFreq = 138;
+      peak = 0.098;
+      wave = 'square';
+    } else if (variant === 'boss_splitter') {
+      startFreq = 468;
+      endFreq = 236;
+      peak = 0.084;
+      wave = 'triangle';
+    } else if (variant === 'boss_reactor') {
+      startFreq = 286;
+      endFreq = 126;
+      peak = 0.104;
+      wave = 'sawtooth';
+    } else if (variant === 'boss_executioner') {
+      startFreq = 188;
+      endFreq = 92;
+      peak = 0.112;
+      wave = 'square';
+    } else if (variant === 'boss_grand_singularity') {
+      startFreq = 352;
+      endFreq = 118;
+      peak = 0.108;
+      wave = 'triangle';
+    }
+
+    osc.type = wave;
+    osc.frequency.setValueAtTime(startFreq * this.jitter(1, 0.035), t);
+    osc.frequency.exponentialRampToValueAtTime(endFreq * this.jitter(1, 0.025), t + 0.065);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(peak, t + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    osc.connect(gain);
+    osc.start(t);
+    osc.stop(t + 0.09);
   }
 
   playNotification() {

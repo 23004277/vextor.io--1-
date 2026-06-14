@@ -1,4 +1,4 @@
-import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector, BotChatBubble, BotChatCategory, DeathPresentationState } from '../types';
+import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector, BotChatBubble, BotChatCategory, DeathPresentationState, DeathKillerSnapshot } from '../types';
 import { BASE_STATS, BOSS_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG, SHOP_ITEMS, getShapeRarityTable, SECONDARY_SECTOR_OPTIONS } from '../constants';
 import * as Vector from './MathUtils';
 import { SoundEngine } from './SoundEngine';
@@ -6,6 +6,8 @@ import type { AudioSpatialOptions } from './SoundEngine';
 import { EnemyAITanks } from './EnemyAITanks';
 import { AISystem } from './systems/AISystem';
 import { TDMAISystem, type Player as TDMPlayer } from '../systems/TDM-ai';
+import { BossRushMode } from './bossRush/BossRushMode';
+import { BOSS_RUSH_ARENA, type BossRushBossDefinition } from './bossRush/BossRushTypes';
 
 // Define FloatingTextType for type safety
 type FloatingTextType = 'DAMAGE' | 'SCORE';
@@ -51,6 +53,10 @@ type ActiveBotChat = {
     typingUntil: number;
     visibleUntil: number;
     expiresAt: number;
+    words: string[];
+    wordDelayMs: number;
+    lastBlipWordCount: number;
+    onScreen: boolean;
     worldPos: Vector2;
     accentColor: string;
     persistAfterDeath: boolean;
@@ -62,6 +68,17 @@ type PlayerDeathPresentation = {
     completeAt: number;
     fadeSeconds: number;
     killerBotId: number | null;
+    killerEntityId: number | null;
+    killerSpectateTargetId: number | null;
+};
+
+type PlayerDeathKillerRef = {
+    killerEntityId: number | null;
+    killerSpectateTargetId: number | null;
+    fallbackName: string;
+    fallbackTeam: Team;
+    fallbackClassType: TankClass | null;
+    fallbackLevel: number | null;
 };
 
 const DOMINION_TANK_MAX_HEALTH = 30000;
@@ -69,7 +86,7 @@ const DOMINION_TANK_RADIUS = 62;
 const ELITE_TANK_HEALTH_BASE = 22000;
 const ELITE_TANK_HEALTH_PER_LEVEL = 190;
 const ELITE_TANK_SHIELD_BASE = 320;
-const ELITE_TANK_SPEED_CAP = 0.92;
+const ELITE_TANK_BASELINE_SPEED = BASE_STATS.speed;
 const MAX_ACTIVE_BOT_CHATS = 4;
 const BOT_CHAT_BASE_COOLDOWN_MS = 12000;
 const BOT_RARE_CHAT_COOLDOWN_MS = 18000;
@@ -866,8 +883,9 @@ class Entity {
         
         let pierceAmount = 0;
         if (isBodyDamage) {
-            // High-velocity body collisions pierce shielding by 25%, damaging underlying health directly!
-            pierceAmount = Math.round(amount * 0.25);
+            // Body impact should pressure shields, not trivially bypass them.
+            // Only the heavier portion of a contact hit can leak through.
+            pierceAmount = Math.round(Math.max(0, amount - 24) * 0.08);
             amount -= pierceAmount;
             
             // Apply pierce damage directly to health under the shield
@@ -1172,11 +1190,25 @@ class MiniTank extends Entity {
 }
 
 class Drone extends Entity {
-    private static readonly REBIRTH_DRONE_DAMAGE_MULT = 2.15;
-    private static readonly REBIRTH_DRONE_HEALTH_MULT = 1.45;
-    owner: Tank;
-    orbitAngle: number;
-    orbitDistance: number = 140;
+  private static readonly REBIRTH_DRONE_DAMAGE_MULT = 1.45;
+  private static readonly REBIRTH_DRONE_HEALTH_MULT = 1.45;
+  private static getOwnerDamageMult(owner: Tank): number {
+      if (owner.classType === TankClass.OVERLORD) return 1.58;
+      if (owner.classType === TankClass.OVERSEER) return 1.42;
+      if (owner.classType === TankClass.MANAGER) return 1.24;
+      if (owner.classType === TankClass.HYBRID) return 1.16;
+      return 1.0;
+  }
+  private static getFormationRadius(owner: Tank): number {
+      if (owner.classType === TankClass.OVERLORD) return 32;
+      if (owner.classType === TankClass.OVERSEER) return 28;
+      if (owner.classType === TankClass.MANAGER) return 18;
+      if (owner.classType === TankClass.HYBRID) return 22;
+      return 24;
+  }
+  owner: Tank;
+  orbitAngle: number;
+  orbitDistance: number = 140;
 
     constructor(id: number, x: number, y: number, owner: Tank) {
         super(id, EntityType.DRONE, x, y, 10, getTeamSummonColor(owner.team));
@@ -1189,8 +1221,13 @@ class Drone extends Entity {
         const bulletDmg = BASE_STATS.bulletDamage + (owner.stats[StatType.BULLET_DAMAGE] * 3);
         const bulletPen = BASE_STATS.bulletPenetration + (owner.stats[StatType.BULLET_PENETRATION] * 5);
         
-        this.damage = bulletDmg * 0.9;
+        this.damage = bulletDmg * 0.9 * Drone.getOwnerDamageMult(owner);
         this.maxHealth = 30 + bulletPen * 2.5;
+        const liveEngine = (window as any).gameEngine as GameEngine | undefined;
+        if (liveEngine?.gameMode === GameMode.SANDBOX) {
+            this.damage *= Math.max(0.4, liveEngine.sandboxConfig.droneDamageScale || 1);
+            this.maxHealth *= Math.max(0.4, liveEngine.sandboxConfig.droneDurabilityScale || 1);
+        }
         if (owner.isTransformed && owner.isBossClass(owner.classType)) {
             this.damage *= Drone.REBIRTH_DRONE_DAMAGE_MULT;
             this.maxHealth *= Drone.REBIRTH_DRONE_HEALTH_MULT;
@@ -1210,14 +1247,26 @@ class Drone extends Entity {
         const engine = (window as any).gameEngine;
         const isManagerOwner = this.owner.classType === TankClass.MANAGER;
         const isColossalOwner = this.owner.classType === TankClass.COLOSSAL && this.owner.isTransformed;
+        const siblingDrones = engine ? engine.entities.filter((e: any) => e.type === EntityType.DRONE && e.owner === this.owner) : [];
+        const siblingIndex = Math.max(0, siblingDrones.indexOf(this));
+        const siblingCount = Math.max(1, siblingDrones.length);
         let isCommanded = false;
         let targetPos = { x: 0, y: 0 };
         const hpRatio = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
         const bulletDmg = BASE_STATS.bulletDamage + (this.owner.stats[StatType.BULLET_DAMAGE] * 3);
         const bulletPen = BASE_STATS.bulletPenetration + (this.owner.stats[StatType.BULLET_PENETRATION] * 5);
         const rebirthMult = this.owner.isTransformed && this.owner.isBossClass(this.owner.classType);
-        this.damage = bulletDmg * 0.9 * (rebirthMult ? Drone.REBIRTH_DRONE_DAMAGE_MULT : 1.0) * (this.owner.isSacrificing ? 1.25 : 1.0);
+        this.damage =
+            bulletDmg *
+            0.9 *
+            Drone.getOwnerDamageMult(this.owner) *
+            (rebirthMult ? Drone.REBIRTH_DRONE_DAMAGE_MULT : 1.0) *
+            (this.owner.isSacrificing ? 1.25 : 1.0);
         this.maxHealth = (30 + bulletPen * 2.5) * (rebirthMult ? Drone.REBIRTH_DRONE_HEALTH_MULT : 1.0);
+        if (engine?.gameMode === GameMode.SANDBOX) {
+            this.damage *= Math.max(0.4, engine.sandboxConfig.droneDamageScale || 1);
+            this.maxHealth *= Math.max(0.4, engine.sandboxConfig.droneDurabilityScale || 1);
+        }
         this.health = Math.min(this.maxHealth, Math.max(1, this.maxHealth * hpRatio));
         this.displayHealth = this.health;
 
@@ -1241,25 +1290,26 @@ class Drone extends Entity {
                 const commandMode = this.owner.droneCommandMode;
 
                 if (isManagerOwner) {
-                    const drones = engine.entities.filter((e: any) => e.type === EntityType.DRONE && e.owner === this.owner);
-                    const idx = Math.max(0, drones.indexOf(this));
                     const microOffset = commandMode === 'SWARM' ? 10 : (this.owner.autoFire ? 18 : 8);
-                    const offsetAngle = (idx / Math.max(1, drones.length)) * Math.PI * 2 + Date.now() * 0.002;
+                    const offsetAngle = (siblingIndex / siblingCount) * Math.PI * 2 + Date.now() * 0.002;
                     targetPos.x = cursorWorld.x + Math.cos(offsetAngle) * microOffset;
                     targetPos.y = cursorWorld.y + Math.sin(offsetAngle) * microOffset;
                 } else if (commandMode === 'REPEL') {
                     const away = Vector.normalize(Vector.sub(this.owner.pos, cursorWorld));
                     targetPos = Vector.add(this.owner.pos, Vector.mult(away, this.orbitDistance + 120));
                 } else if (commandMode === 'SWARM') {
-                    const drones = engine.entities.filter((e: any) => e.type === EntityType.DRONE && e.owner === this.owner);
-                    const idx = Math.max(0, drones.indexOf(this));
-                    const swirl = Date.now() * 0.004 + idx * 0.45;
+                    const swirl = Date.now() * 0.004 + siblingIndex * 0.45;
                     targetPos = {
                         x: cursorWorld.x + Math.cos(swirl) * 28,
                         y: cursorWorld.y + Math.sin(swirl) * 28
                     };
                 } else {
-                    targetPos = cursorWorld;
+                    const formationRadius = Drone.getFormationRadius(this.owner);
+                    const slotAngle = (siblingIndex / siblingCount) * Math.PI * 2 + Date.now() * 0.0014;
+                    targetPos = {
+                        x: cursorWorld.x + Math.cos(slotAngle) * formationRadius,
+                        y: cursorWorld.y + Math.sin(slotAngle) * formationRadius,
+                    };
                 }
             }
         }
@@ -1272,15 +1322,30 @@ class Drone extends Entity {
             if (isColossalOwner) speedMult = 1.0;
             const speed = (BASE_STATS.bulletSpeed + this.owner.stats[StatType.BULLET_SPEED] * 0.8) * speedMult;
             this.acc = Vector.mult(dir, speed * 0.1);
+            if (engine && siblingCount > 1) {
+                let separation = { x: 0, y: 0 };
+                const desiredSpacing = this.radius * 2.8;
+                for (const sibling of siblingDrones) {
+                    if (sibling === this) continue;
+                    const away = Vector.sub(this.pos, sibling.pos);
+                    const dist = Vector.mag(away);
+                    if (dist <= 0.0001 || dist >= desiredSpacing) continue;
+                    const weight = 1 - dist / desiredSpacing;
+                    separation = Vector.add(separation, Vector.mult(Vector.normalize(away), weight));
+                }
+                if (Vector.mag(separation) > 0.001) {
+                    const separationStrength = isManagerOwner ? 0.2 : 0.28;
+                    this.acc = Vector.add(this.acc, Vector.mult(Vector.normalize(separation), separationStrength));
+                }
+            }
             this.rotation = Math.atan2(dir.y, dir.x);
             if (isManagerOwner && Math.random() < 0.06) {
                 engine.particles.push(new Particle(this.pos.x, this.pos.y, 'rgba(110,255,220,0.22)', 5, 12, 'GAS'));
             }
         } else {
             // Swarm Orbiting logic
-            const drones = engine ? engine.entities.filter((e: any) => e.type === EntityType.DRONE && e.owner === this.owner) : [];
-            const idx = drones.indexOf(this);
-            const total = Math.max(1, drones.length);
+            const idx = siblingIndex;
+            const total = siblingCount;
             
             const slice = (Math.PI * 2) / total;
             const orbitRate = this.owner.classType === TankClass.OVERLORD
@@ -4043,15 +4108,15 @@ class Tank extends Entity {
                             tip.y,
                             Vector.mult(forward, bSpeed),
                             this,
-                            0.58,
-                            0.85,
-                            0.52,
+                            1.42,
+                            1.25,
+                            0.74,
                             0
                         );
-                        bullet.maxHealth *= 1.35;
+                        bullet.maxHealth *= 1.85;
                         bullet.health = bullet.maxHealth;
                         engine.entities.push(bullet);
-                        turret.cooldown = Math.max(85, (BASE_STATS.reload - this.stats[StatType.RELOAD] * 2.5) * 14.5 + idx * 5);
+                        turret.cooldown = Math.max(62, (BASE_STATS.reload - this.stats[StatType.RELOAD] * 2.5) * 11.5 + idx * 4);
 
                         if (this === engine.player || engine.isOnScreen(this.pos)) {
                             engine.particles.push(new Particle(tip.x, tip.y, 'rgba(216,180,254,0.62)', 7, 7, 'FLASH'));
@@ -4326,7 +4391,7 @@ class Tank extends Entity {
   override takeDamage(amount: number, sourceId: number | null = null, isBodyDamage: boolean = false) {
     let adjusted = amount;
     if (this.isBossClass(this.classType)) {
-      const mitigation = this.classType === TankClass.CELESTIAL ? 0.3 : this.classType === TankClass.OBLITERATOR ? 0.34 : 0.22;
+      const mitigation = this.classType === TankClass.CELESTIAL ? 0.14 : this.classType === TankClass.OBLITERATOR ? 0.18 : 0.1;
       adjusted *= (1 - mitigation);
       // Dampen rapid projectile chip in late-game.
       if (sourceId !== null) {
@@ -4371,21 +4436,28 @@ class Tank extends Entity {
     this.drainAuraDamage = 0;
     this.drainLifestealEfficiency = 0;
 
-    // Upgraded formulas for Body Damage and Max Health calculation:
-    // We incorporate a physical inertial weight factor and a dynamic level component for richer gameplay.
-    const inertiaFactor = 0.85 + (this.radius / 20) * 0.15;
-    const levelFactor = 1.0 + (this.level - 1) * 0.015;
+    // Body-damage scaling should feel meaningful without turning contact into instant deletion.
+    const inertiaFactor = 0.94 + (this.radius / 20) * 0.06;
+    const bodyLevelFactor = 1.0 + (this.level - 1) * 0.0075;
 
-    if (this.isTransformed) {
-        this.maxHealth = 100000;
-        this.damage = 60; 
-        this.radius *= 1.5;
-    } else if (isBoss) {
+    if (isBoss) {
         this.team = Team.NONE;
-        // Boss Stats: Maxed and Higher Health
-        this.maxHealth = 9500 + (this.level * 210);
-        this.maxShield = 1280;
-        this.damage = 198;
+        // Rebirth boss chassis: dangerous, durable, but now killable.
+        const bossBaseHealth =
+            this.classType === TankClass.COLOSSAL ? 5200 :
+            this.classType === TankClass.LEVIATHAN ? 4600 :
+            this.classType === TankClass.WARLORD ? 5000 :
+            this.classType === TankClass.CELESTIAL ? 4300 :
+            4100;
+        const bossLevelHealth =
+            this.classType === TankClass.COLOSSAL ? 92 :
+            this.classType === TankClass.LEVIATHAN ? 84 :
+            this.classType === TankClass.WARLORD ? 88 :
+            this.classType === TankClass.CELESTIAL ? 80 :
+            86;
+        this.maxHealth = bossBaseHealth + (this.level * bossLevelHealth);
+        this.maxShield = Math.round(this.maxHealth * 0.1);
+        this.damage = 108;
         this.radius *= this.classType === TankClass.CELESTIAL ? 2.25 : this.classType === TankClass.OBLITERATOR ? 2.68 : 2.55;
         if (this.classType === TankClass.WARLORD) this.radius *= 1.08;
         
@@ -4396,16 +4468,21 @@ class Tank extends Entity {
         if (this.classType === TankClass.COLOSSAL) this.stats[StatType.MOVEMENT_SPEED] = 2;
         if (this.classType === TankClass.LEVIATHAN) this.stats[StatType.MOVEMENT_SPEED] = 2;
         if (this.classType === TankClass.WARLORD) this.stats[StatType.MOVEMENT_SPEED] = this.isSiegeMode ? 0 : 1;
+        this.stats[StatType.RELOAD] = Math.max(this.stats[StatType.RELOAD], 7);
+        this.stats[StatType.BULLET_PENETRATION] = Math.max(this.stats[StatType.BULLET_PENETRATION], 7);
+        this.stats[StatType.BULLET_DAMAGE] = Math.max(this.stats[StatType.BULLET_DAMAGE], 7);
+        this.stats[StatType.BULLET_SPEED] = Math.max(this.stats[StatType.BULLET_SPEED], 5);
         if (this.classType === TankClass.CELESTIAL) {
             this.stats[StatType.MOVEMENT_SPEED] = 5;
             this.stats[StatType.BULLET_SPREAD] = 8;
             this.stats[StatType.RELOAD] = 8;
+            this.stats[StatType.BULLET_PENETRATION] = 8;
         }
         if (this.classType === TankClass.OBLITERATOR) {
             this.stats[StatType.MOVEMENT_SPEED] = 1;
             this.stats[StatType.BULLET_SPREAD] = 8;
-            this.stats[StatType.RELOAD] = 5;
-            this.stats[StatType.BULLET_SPEED] = 5;
+            this.stats[StatType.RELOAD] = 7;
+            this.stats[StatType.BULLET_SPEED] = 6;
             this.stats[StatType.BULLET_DAMAGE] = 8;
             this.stats[StatType.BULLET_PENETRATION] = 8;
         }
@@ -4416,14 +4493,20 @@ class Tank extends Entity {
             this.drainAuraDamage = 72 + this.level * 0.9;
             this.drainLifestealEfficiency = 0.38;
         }
+    } else if (this.isTransformed) {
+        // Temporary boss-override transformation only.
+        this.maxHealth = 2600;
+        this.maxShield = 240;
+        this.damage = 60; 
+        this.radius *= 1.5;
     } else if (this.type === EntityType.ELITE_TANK) {
         this.team = Team.NONE;
         this.maxHealth = ELITE_TANK_HEALTH_BASE + (this.level * ELITE_TANK_HEALTH_PER_LEVEL);
         this.maxShield = ELITE_TANK_SHIELD_BASE + this.level * 4;
-        this.damage = Math.round((BASE_STATS.bodyDamage + 54) * (1.05 + (this.level - 1) * 0.01));
+        this.damage = Math.round((BASE_STATS.bodyDamage + 38) * (1.03 + (this.level - 1) * 0.006));
         this.radius *= 1.42;
         this.mass = this.radius * 3.2;
-        this.stats[StatType.MOVEMENT_SPEED] = Math.min(this.stats[StatType.MOVEMENT_SPEED], 1);
+        this.stats[StatType.MOVEMENT_SPEED] = 0;
         this.stats[StatType.BODY_DAMAGE] = Math.max(this.stats[StatType.BODY_DAMAGE], 4);
         this.stats[StatType.MAX_HEALTH] = Math.max(this.stats[StatType.MAX_HEALTH], 6);
         this.stats[StatType.BULLET_DAMAGE] = Math.max(this.stats[StatType.BULLET_DAMAGE], 6);
@@ -4437,7 +4520,7 @@ class Tank extends Entity {
         this.maxShield = (this.stats[StatType.MAX_SHIELD] + statBonus) * 65; // Extra shield
         
         // Body Damage scales poorly but integrates kinetic weight and levels
-        this.damage = Math.round((BASE_STATS.bodyDamage + (this.stats[StatType.BODY_DAMAGE] + statBonus) * 14) * inertiaFactor * levelFactor);
+        this.damage = Math.round((BASE_STATS.bodyDamage + (this.stats[StatType.BODY_DAMAGE] + statBonus) * 8) * inertiaFactor * bodyLevelFactor);
         
         // Healing Stats
         const baseRadius = this.classType === TankClass.PACIFIST_TRAINEE ? 180 : 
@@ -4458,7 +4541,7 @@ class Tank extends Entity {
         this.maxShield = (this.stats[StatType.MAX_SHIELD] + statBonus) * 55;
         
         // Body Damage scales with upgraded kinetic factors
-        this.damage = Math.round((BASE_STATS.bodyDamage + (this.stats[StatType.BODY_DAMAGE] + statBonus) * 22) * inertiaFactor * levelFactor);
+        this.damage = Math.round((BASE_STATS.bodyDamage + (this.stats[StatType.BODY_DAMAGE] + statBonus) * 10.5) * inertiaFactor * bodyLevelFactor);
         
         // Draining Stats
         const baseRadius = this.classType === TankClass.DRAINER_TRAINEE ? 160 : 
@@ -4492,7 +4575,7 @@ class Tank extends Entity {
         // Standard Scaling Upgraded
         this.maxHealth = BASE_STATS.health + (this.stats[StatType.MAX_HEALTH] + statBonus) * 105 + (this.level - 1) * 8;
         this.maxShield = (this.stats[StatType.MAX_SHIELD] + statBonus) * 50; 
-        this.damage = Math.round((BASE_STATS.bodyDamage + (this.stats[StatType.BODY_DAMAGE] + statBonus) * 26) * inertiaFactor * levelFactor);
+        this.damage = Math.round((BASE_STATS.bodyDamage + (this.stats[StatType.BODY_DAMAGE] + statBonus) * 12) * inertiaFactor * bodyLevelFactor);
     }
 
     if (!isBoss && !isPacifist && hasRestorationSector) {
@@ -4750,7 +4833,7 @@ class Tank extends Entity {
         }
     }
 
-    if (this.isTransformed) {
+    if (this.isTransformed && !this.hasRebirthed && this.transformationTimer > 0) {
         this.transformationTimer -= dt;
         if (this.transformationTimer <= 0) {
             this.isTransformed = false;
@@ -4811,57 +4894,59 @@ class Tank extends Entity {
             // Skip if it's a bot and bots are disabled
             if (isBot && botsDisabled) return;
 
-            if (!this.autoFire) { // Manual control toggle via E (handled in handleInput)
-                const neighbors = engine.spatialGrid.getNeighbors(this);
-                const closeDefenseRange = turret.targetId !== null ? 980 : 880;
-                const targets = neighbors.filter((e: any) =>
-                    e.team !== this.team &&
-                    (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER || e.type === EntityType.ELITE_TANK || e.type === EntityType.GUARDIAN || e.type === EntityType.SHAPE || e.type === EntityType.BOSS || e.type === EntityType.CRASHER) &&
-                    Vector.dist(this.pos, e.pos) <= closeDefenseRange
-                );
-                const target = targets.sort((a: Entity, b: Entity) => {
-                    const score = (entity: Entity): number => {
-                        if (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY || entity.type === EntityType.ELITE_TANK || entity.type === EntityType.GUARDIAN) {
-                            const hpRatio = entity.maxHealth > 0 ? entity.health / entity.maxHealth : 1;
-                            return hpRatio < 0.4 ? -0.25 : 0;
-                        }
-                        if (entity.type === EntityType.SHAPE) {
-                            const shape = entity as Shape;
-                            if (shape.shapeType === ShapeType.PENTAGON && shape.rarity === ShapeRarity.LEGENDARY) return 1;
-                            if (shape.shapeType === ShapeType.DODECAGON) return 0.82;
-                            if (shape.shapeType === ShapeType.DECAGON) return 0.96;
-                            if (shape.shapeType === ShapeType.NONAGON) return 1.12;
-                            if (shape.shapeType === ShapeType.OCTAGON) return 1.4;
-                            if (shape.shapeType === ShapeType.HEXAGON) return 1.7;
-                            if (shape.shapeType === ShapeType.HEPTAGON) return 1.9;
-                            if (shape.shapeType === ShapeType.PENTAGON) return 2;
-                            if (shape.shapeType === ShapeType.STAR) return 2.55;
-                            if (shape.shapeType === ShapeType.DIAMOND) return 3;
-                            return 4;
-                        }
-                        if (entity.type === EntityType.BOSS) return 1.3;
-                        if (entity.type === EntityType.CRASHER) return 2.35;
-                        return 5;
-                    };
-                    const diff = score(a) - score(b);
-                    return diff !== 0 ? diff : Vector.dist(this.pos, a.pos) - Vector.dist(this.pos, b.pos);
-                })[0] || null;
-                if (target) {
-                    const angle = Math.atan2(target.pos.y - this.pos.y, target.pos.x - this.pos.x);
-                    turret.rotation = angle;
-                    if (turret.cooldown <= 0) {
-                        const bSpeed = 8;
-                        const forward = Vector.fromAngle(angle);
-                        const tip = Vector.add(this.pos, Vector.mult(forward, this.radius * 1.2));
-                        const bullet = new Bullet(engine.nextId(), tip.x, tip.y, Vector.mult(forward, bSpeed), this, 0.5, 1.0, 0.8);
-                        engine.entities.push(bullet);
-                        turret.cooldown = 200;
+            const neighbors = engine.spatialGrid.getNeighbors(this);
+            const closeDefenseRange = turret.targetId !== null ? 1080 : 940;
+            const targets = neighbors.filter((e: any) =>
+                e.id !== this.id &&
+                !e.isDead &&
+                e.team !== this.team &&
+                (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER || e.type === EntityType.ELITE_TANK || e.type === EntityType.GUARDIAN || e.type === EntityType.SHAPE || e.type === EntityType.BOSS || e.type === EntityType.CRASHER) &&
+                Vector.dist(this.pos, e.pos) <= closeDefenseRange
+            );
+            const target = targets.sort((a: Entity, b: Entity) => {
+                const score = (entity: Entity): number => {
+                    if (entity.type === EntityType.PLAYER || entity.type === EntityType.ENEMY || entity.type === EntityType.ELITE_TANK || entity.type === EntityType.GUARDIAN) {
+                        const hpRatio = entity.maxHealth > 0 ? entity.health / entity.maxHealth : 1;
+                        return hpRatio < 0.45 ? -1.2 : -0.2;
                     }
-                } else {
-                    turret.rotation += dt * 2;
+                    if (entity.type === EntityType.BOSS) return -0.1;
+                    if (entity.type === EntityType.CRASHER) return 1.4;
+                    if (entity.type === EntityType.SHAPE) {
+                        const shape = entity as Shape;
+                        if (shape.shapeType === ShapeType.DODECAGON) return 1.0;
+                        if (shape.shapeType === ShapeType.DECAGON) return 1.1;
+                        if (shape.shapeType === ShapeType.NONAGON) return 1.2;
+                        if (shape.shapeType === ShapeType.OCTAGON) return 1.45;
+                        if (shape.shapeType === ShapeType.HEXAGON) return 1.7;
+                        if (shape.shapeType === ShapeType.PENTAGON) return 1.95;
+                        return 3;
+                    }
+                    return 4;
+                };
+                const diff = score(a) - score(b);
+                return diff !== 0 ? diff : Vector.dist(this.pos, a.pos) - Vector.dist(this.pos, b.pos);
+            })[0] || null;
+            if (target) {
+                turret.targetId = target.id;
+                const projectileSpeed = (BASE_STATS.bulletSpeed + this.stats[StatType.BULLET_SPEED] * 0.8) * 1.92;
+                const aimPoint = engine.getInterceptPoint(this.pos, projectileSpeed, target.pos, target.vel || { x: 0, y: 0 });
+                const angle = Math.atan2(aimPoint.y - this.pos.y, aimPoint.x - this.pos.x);
+                let diff = angle - turret.rotation;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                turret.rotation += diff * Math.min(1, dt * 9.5);
+                if (turret.cooldown <= 0 && Math.abs(diff) < 0.42) {
+                    const forward = Vector.fromAngle(turret.rotation);
+                    const tip = Vector.add(this.pos, Vector.mult(forward, this.radius * 1.2));
+                    const bullet = new Bullet(engine.nextId(), tip.x, tip.y, Vector.mult(forward, projectileSpeed), this, 2.1, 1.85, 1.08);
+                    bullet.maxHealth *= 1.65;
+                    bullet.health = bullet.maxHealth;
+                    engine.entities.push(bullet);
+                    turret.cooldown = Math.max(92, (BASE_STATS.reload - this.stats[StatType.RELOAD] * 2.5) * 15.5);
                 }
             } else {
-                turret.rotation = this.rotation;
+                turret.targetId = null;
+                turret.rotation += dt * 1.8;
             }
         });
     }
@@ -5386,7 +5471,7 @@ class Boss extends Entity {
         const hpRatio = this.health / this.maxHealth;
         this.rotation += (0.8 + (1 - hpRatio) * 1.2) * dt; 
         
-        if (Date.now() - this.lastDamageTime > 10000) {
+        if (!(this as any).__bossRushBoss && Date.now() - this.lastDamageTime > 10000) {
             this.health = Math.min(this.health + 50 * dt * 60, this.maxHealth);
         }
         
@@ -5412,15 +5497,33 @@ class Boss extends Entity {
     override drawBody(ctx: CanvasRenderingContext2D) {
         const t = Date.now() / 1000;
         const hpRatio = this.health / this.maxHealth;
+        const isBossRushBoss = !!(this as any).__bossRushBoss;
+        const isAwakenedBossRush = !!(this as any).__bossRushAwakened;
+        const rushPulse = isBossRushBoss ? 1 + Math.sin(t * (isAwakenedBossRush ? 4.4 : 2.8)) * (isAwakenedBossRush ? 0.11 : 0.06) : 1;
         
         ctx.save();
-        const auraSize = this.radius * (this.archetype === 'SINGULARITY' ? 1.5 + Math.sin(t * 1.6) * 0.06 : 1.3 + Math.sin(t * 2) * 0.08);
+        const auraSize = this.radius * (this.archetype === 'SINGULARITY' ? 1.5 + Math.sin(t * 1.6) * 0.06 : 1.3 + Math.sin(t * 2) * 0.08) * rushPulse;
         const grad = ctx.createRadialGradient(0, 0, this.radius * 0.72, 0, 0, auraSize);
-        grad.addColorStop(0, this.archetype === 'SINGULARITY' ? 'rgba(72, 163, 255, 0.38)' : 'rgba(0, 85, 255, 0.4)');
+        grad.addColorStop(0, this.archetype === 'SINGULARITY' ? (isBossRushBoss ? 'rgba(160, 96, 255, 0.42)' : 'rgba(72, 163, 255, 0.38)') : isBossRushBoss ? 'rgba(255, 90, 90, 0.42)' : 'rgba(0, 85, 255, 0.4)');
         grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
         ctx.fillStyle = grad;
         ctx.beginPath(); ctx.arc(0, 0, auraSize, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
+
+        if (isBossRushBoss) {
+            ctx.save();
+            const haloAlpha = isAwakenedBossRush ? 0.4 : 0.24;
+            ctx.rotate(-t * (this.archetype === 'SINGULARITY' ? 0.36 : this.archetype === 'SWARMLORD' ? 0.52 : 0.3));
+            ctx.beginPath();
+            ctx.lineWidth = this.radius * 0.09;
+            ctx.strokeStyle =
+                this.archetype === 'SINGULARITY' ? `rgba(212, 180, 255, ${haloAlpha})` :
+                this.archetype === 'SWARMLORD' ? `rgba(110, 255, 220, ${haloAlpha})` :
+                `rgba(255, 210, 210, ${haloAlpha})`;
+            ctx.arc(0, 0, this.radius * (1.34 + (1 - hpRatio) * 0.08), 0, Math.PI * 1.32);
+            ctx.stroke();
+            ctx.restore();
+        }
 
         if (this.archetype === 'SINGULARITY') {
             for (let ring = 0; ring < 3; ring++) {
@@ -5428,7 +5531,9 @@ class Boss extends Entity {
                 ctx.rotate((ring % 2 === 0 ? 1 : -1) * t * (0.28 + ring * 0.13));
                 ctx.beginPath();
                 ctx.lineWidth = 10 - ring * 2;
-                ctx.strokeStyle = ring === 0 ? 'rgba(120, 210, 255, 0.62)' : ring === 1 ? 'rgba(84, 120, 255, 0.46)' : 'rgba(255,255,255,0.26)';
+                ctx.strokeStyle = isBossRushBoss
+                    ? (ring === 0 ? 'rgba(208, 168, 255, 0.74)' : ring === 1 ? 'rgba(128, 112, 255, 0.54)' : 'rgba(255,255,255,0.32)')
+                    : (ring === 0 ? 'rgba(120, 210, 255, 0.62)' : ring === 1 ? 'rgba(84, 120, 255, 0.46)' : 'rgba(255,255,255,0.26)');
                 ctx.arc(0, 0, this.radius * (0.72 + ring * 0.19), 0, Math.PI * (1.28 + ring * 0.2));
                 ctx.stroke();
                 ctx.restore();
@@ -5446,8 +5551,8 @@ class Boss extends Entity {
                 else ctx.lineTo(x, y);
             }
             ctx.closePath();
-            ctx.fillStyle = 'rgba(15, 28, 72, 0.88)';
-            ctx.strokeStyle = 'rgba(132, 218, 255, 0.78)';
+            ctx.fillStyle = isBossRushBoss ? 'rgba(34, 16, 74, 0.9)' : 'rgba(15, 28, 72, 0.88)';
+            ctx.strokeStyle = isBossRushBoss ? 'rgba(212, 180, 255, 0.86)' : 'rgba(132, 218, 255, 0.78)';
             ctx.lineWidth = 12;
             ctx.fill();
             ctx.stroke();
@@ -5456,8 +5561,8 @@ class Boss extends Entity {
             const corePulse = 1 + Math.sin(t * 3.6) * 0.06;
             const coreGrad = ctx.createRadialGradient(0, 0, this.radius * 0.06, 0, 0, this.radius * 0.42 * corePulse);
             coreGrad.addColorStop(0, '#ffffff');
-            coreGrad.addColorStop(0.45, '#8de9ff');
-            coreGrad.addColorStop(1, 'rgba(55, 120, 255, 0.15)');
+            coreGrad.addColorStop(0.45, isBossRushBoss ? '#e9d5ff' : '#8de9ff');
+            coreGrad.addColorStop(1, isBossRushBoss ? 'rgba(124, 58, 237, 0.18)' : 'rgba(55, 120, 255, 0.15)');
             ctx.beginPath();
             ctx.fillStyle = coreGrad;
             ctx.arc(0, 0, this.radius * 0.42 * corePulse, 0, Math.PI * 2);
@@ -5479,7 +5584,11 @@ class Boss extends Entity {
             }
             ctx.closePath();
             ctx.lineWidth = 12;
-            ctx.strokeStyle = j === 0 ? 'rgba(0, 178, 225, 0.6)' : 'rgba(118, 141, 252, 0.4)';
+            ctx.strokeStyle = isBossRushBoss
+                ? (this.archetype === 'SWARMLORD'
+                    ? (j === 0 ? 'rgba(45, 212, 191, 0.72)' : 'rgba(110, 255, 220, 0.42)')
+                    : (j === 0 ? 'rgba(255, 118, 118, 0.72)' : 'rgba(255, 190, 190, 0.42)'))
+                : (j === 0 ? 'rgba(0, 178, 225, 0.6)' : 'rgba(118, 141, 252, 0.4)');
             ctx.stroke();
             ctx.restore();
         }
@@ -5497,7 +5606,13 @@ class Boss extends Entity {
         const r = Math.floor((1 - hpRatio) * 150);
         const g = Math.floor(hpRatio * 150);
         const b = 255;
-        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        ctx.fillStyle = isBossRushBoss
+            ? (this.archetype === 'SWARMLORD'
+                ? `rgba(${40 + r}, ${160 + g}, ${180 + Math.floor((1 - hpRatio) * 45)}, 0.96)`
+                : this.archetype === 'SIEGEBREAKER'
+                    ? `rgba(${155 + r}, ${35 + g}, ${75 + Math.floor((1 - hpRatio) * 65)}, 0.96)`
+                    : `rgba(${80 + r}, ${55 + g}, ${200 + Math.floor((1 - hpRatio) * 25)}, 0.96)`)
+            : `rgb(${r}, ${g}, ${b})`;
         ctx.fill();
         
         ctx.lineWidth = 15;
@@ -6443,8 +6558,8 @@ if (this.rarity !== ShapeRarity.COMMON && this.rarity !== ShapeRarity.UNCOMMON) 
 }
 
 class Bullet extends Entity {
-  private static readonly REBIRTH_DAMAGE_MULT = 2.52;
-  private static readonly REBIRTH_PROJECTILE_HEALTH_MULT = 2.08;
+  private static readonly REBIRTH_DAMAGE_MULT = 1.45;
+  private static readonly REBIRTH_PROJECTILE_HEALTH_MULT = 1.55;
   ownerId: number;
   ownerClass: TankClass;
   barrelIndex: number;
@@ -6518,9 +6633,12 @@ class Bullet extends Entity {
     if (owner.type === EntityType.ELITE_TANK) {
         baseDamage *= 1.5;
         basePenetration *= 2.0;
+    } else if (isRebirthOwner) {
+        baseDamage *= 1.12;
+        basePenetration *= 1.35;
     } else if (owner.isTransformed) {
-        baseDamage *= 1.5;
-        basePenetration *= 2.0;
+        baseDamage *= 1.35;
+        basePenetration *= 1.7;
     }
     
     // SACRIFICIAL GOAT BUFF
@@ -6532,8 +6650,15 @@ class Bullet extends Entity {
     const penetrationMult = classProjectileMod?.penetrationMultiplier ?? 1.0;
     const projectileHealthMult = classProjectileMod?.projectileHealthMultiplier ?? 1.0;
 
-    this.damage = baseDamage * extraDamageMult;
+    const generalPenDamageBonus = Math.min(0.22, Math.max(0, (basePenetration - BASE_STATS.bulletPenetration) * 0.0125));
+    this.damage = baseDamage * extraDamageMult * (1 + generalPenDamageBonus);
     this.maxHealth = (10 + (basePenetration * penetrationMult) * 3) * extraLifeMult * projectileHealthMult; 
+
+    const liveEngine = (window as any).gameEngine as GameEngine | undefined;
+    if (liveEngine?.gameMode === GameMode.SANDBOX) {
+        this.damage *= Math.max(0.4, liveEngine.sandboxConfig.projectileDamageScale || 1);
+        this.maxHealth *= Math.max(0.4, liveEngine.sandboxConfig.projectileDurabilityScale || 1);
+    }
 
     if (isRebirthOwner) {
         this.damage *= Bullet.REBIRTH_DAMAGE_MULT;
@@ -6568,6 +6693,7 @@ class Bullet extends Entity {
     accentColor?: string;
   }) {
     this.bulletType = 'TRAP';
+    this.trapAnchored = false;
     this.friction = config?.friction ?? 0.88;
     this.trapAnchorSpeed = config?.anchorSpeed ?? 0.4;
     this.trapArmDelayMs = config?.armDelayMs ?? 180;
@@ -6576,11 +6702,11 @@ class Bullet extends Entity {
     this.trapSpinRate = config?.spinRate ?? 2.8;
     this.trapAccentColor = config?.accentColor ?? this.trapAccentColor;
     this.maxLifeTime = config?.maxLifeTime ?? this.maxLifeTime;
-    this.damage *= config?.damageMultiplier ?? 0.82;
-    this.maxHealth *= config?.healthMultiplier ?? 2.2;
+    this.damage *= config?.damageMultiplier ?? 1.02;
+    this.maxHealth *= config?.healthMultiplier ?? 2.6;
     this.health = this.maxHealth;
     this.displayHealth = this.maxHealth;
-    this.mass *= config?.massMultiplier ?? 1.75;
+    this.mass *= config?.massMultiplier ?? 2.05;
   }
 
   override update(dt: number) { 
@@ -6597,7 +6723,7 @@ class Bullet extends Entity {
 
     if (this.ownerClass === TankClass.ANNIHILATOR && !this.isDespawning) {
       const speed = Vector.mag(this.vel);
-      if (speed <= 0.35) {
+      if (this.lifeTime > this.maxLifeTime * 0.55 && speed <= 0.14) {
         this.isDespawning = true;
         this.despawnStartTime = this.lifeTime;
       }
@@ -7430,39 +7556,47 @@ class Bullet extends Entity {
     ctx.save();
     const armedAlpha = this.trapAnchored ? 1 : 0.72;
     const pulse = this.trapAnchored ? 1 + Math.sin(this.lifeTime * 0.012) * 0.08 : 1;
-    const outerRadius = this.radius * (this.trapAnchored ? 1.18 : 1.04) * pulse;
-    const innerRadius = this.radius * 0.46;
+    const outerRadius = this.radius * (this.trapAnchored ? 1.28 : 1.12) * pulse;
+    const midRadius = this.radius * 0.6;
+    const innerRadius = this.radius * 0.22;
     const teamColor = this.team === Team.NONE ? this.trapAccentColor : getTeamProjectileColor(this.team);
-    const halo = ctx.createRadialGradient(0, 0, this.radius * 0.18, 0, 0, this.radius * (this.trapAnchored ? 2.6 : 1.7));
-    halo.addColorStop(0, this.trapAnchored ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)');
-    halo.addColorStop(0.4, this.trapAnchored ? 'rgba(250,204,21,0.24)' : 'rgba(250,204,21,0.14)');
+    const halo = ctx.createRadialGradient(0, 0, this.radius * 0.12, 0, 0, this.radius * (this.trapAnchored ? 2.2 : 1.45));
+    halo.addColorStop(0, this.trapAnchored ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)');
+    halo.addColorStop(0.38, this.trapAnchored ? 'rgba(250,204,21,0.18)' : 'rgba(250,204,21,0.1)');
     halo.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = halo;
-    ctx.beginPath();
-    ctx.arc(0, 0, this.radius * (this.trapAnchored ? 2.45 : 1.7), 0, Math.PI * 2);
+    this.traceTrapStarShape(ctx, this.radius * (this.trapAnchored ? 1.95 : 1.52), this.radius * 0.58, 4, Math.PI / 4);
     ctx.fill();
 
     ctx.fillStyle = this.trapAnchored ? teamColor : '#a16207';
-    ctx.strokeStyle = COLORS.border;
-    ctx.lineWidth = Math.max(1.6, this.radius * 0.14);
     ctx.globalAlpha *= armedAlpha;
-    this.traceTrapStarShape(ctx, outerRadius, innerRadius);
+    this.traceTrapStarShape(ctx, outerRadius, innerRadius, 4, Math.PI / 4);
     ctx.fill();
-    ctx.stroke();
 
-    ctx.strokeStyle = this.trapAnchored ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.38)';
-    ctx.lineWidth = Math.max(0.9, this.radius * 0.08);
+    const bladeGradient = ctx.createLinearGradient(-outerRadius, -outerRadius, outerRadius, outerRadius);
+    bladeGradient.addColorStop(0, this.trapAnchored ? 'rgba(255,255,255,0.2)' : 'rgba(255,245,200,0.14)');
+    bladeGradient.addColorStop(0.52, 'rgba(255,255,255,0.02)');
+    bladeGradient.addColorStop(1, this.trapAnchored ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.1)');
+    ctx.fillStyle = bladeGradient;
+    this.traceTrapStarShape(ctx, outerRadius * 0.9, midRadius, 4, Math.PI / 4);
+    ctx.fill();
+
+    ctx.fillStyle = this.trapAnchored ? 'rgba(255,255,255,0.92)' : 'rgba(255,244,214,0.78)';
     ctx.beginPath();
-    ctx.arc(0, 0, this.radius * 0.2, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.moveTo(this.radius * 0.36, 0);
+    ctx.lineTo(0, this.radius * 0.36);
+    ctx.lineTo(-this.radius * 0.36, 0);
+    ctx.lineTo(0, -this.radius * 0.36);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
-  private traceTrapStarShape(ctx: CanvasRenderingContext2D, outerRadius: number, innerRadius: number) {
+  private traceTrapStarShape(ctx: CanvasRenderingContext2D, outerRadius: number, innerRadius: number, points = 5, rotationOffset = 0) {
     ctx.beginPath();
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < points * 2; i++) {
       const radius = i % 2 === 0 ? outerRadius : innerRadius;
-      const angle = (i * Math.PI) / 5;
+      const angle = rotationOffset + (i * Math.PI) / points;
       const x = Math.cos(angle) * radius;
       const y = Math.sin(angle) * radius;
       if (i === 0) ctx.moveTo(x, y);
@@ -7882,6 +8016,7 @@ export class GameEngine {
   playerState: PlayerState = PlayerState.ACTIVE;
   evolutionTransitionTimer: number = 0;
   bossChoices: TankClass[] = [TankClass.COLOSSAL, TankClass.LEVIATHAN, TankClass.WARLORD, TankClass.CELESTIAL, TankClass.OBLITERATOR];
+  bossRushMode = new BossRushMode();
   rebirthSelectionPos: Vector2 | null = null;
   rebirthOptions: { classType: TankClass, pos: Vector2, rotation: number }[] = [];
   keys: Set<string> = new Set();
@@ -7925,6 +8060,7 @@ export class GameEngine {
   private readonly botChatLastLine = new Map<number, string>();
   private botDeathTauntGlobalCooldownUntil = 0;
   private playerDeathPresentation: PlayerDeathPresentation | null = null;
+  private playerDeathKillerRef: PlayerDeathKillerRef | null = null;
   private elapsedMs = 0;
   attractMode: boolean = true;
   spectateTarget: Tank | null = null;
@@ -7948,7 +8084,7 @@ export class GameEngine {
       spawningEnabled: true,
       noAbilityCooldown: false,
       shapeSpawnRate: 1.0,
-      shapeMaxCount: 300,
+      shapeMaxCount: 420,
       enabledShapes: {
           [ShapeType.SQUARE]: true,
           [ShapeType.DIAMOND]: true,
@@ -7963,7 +8099,11 @@ export class GameEngine {
           [ShapeType.DODECAGON]: true,
       },
       cleanupActive: true,
-      showSpawnNotifications: false
+      showSpawnNotifications: true,
+      projectileDamageScale: 1.0,
+      projectileDurabilityScale: 1.0,
+      droneDamageScale: 1.0,
+      droneDurabilityScale: 1.0,
   };
 
   transformationReadyClass: TankClass | null = null;
@@ -8008,6 +8148,7 @@ export class GameEngine {
   private tdmAiSystem: TDMAISystem = new TDMAISystem();
   private perfSampleAccumulator: number = 0;
   private perfSampleFrames: number = 0;
+  private recentBodyCollisionAt: Map<string, number> = new Map();
   private perfBucketMsTotal: number = 0;
   private perfUpdateMsTotal: number = 0;
   private perfAiEntitiesProcessedTotal: number = 0;
@@ -8130,8 +8271,10 @@ export class GameEngine {
     (window as any).gameEngine = this;
     this.initSpawnZones();
 
-    for (let i = 0; i < 150; i++) this.spawnShape();
-    this.seedTeamFarmFields();
+    if (this.gameMode !== GameMode.BOSS_RUSH) {
+      for (let i = 0; i < 150; i++) this.spawnShape();
+      this.seedTeamFarmFields();
+    }
     if (this.gameMode === GameMode.DOMINION) {
       this.spawnDominionObjectives();
     }
@@ -8556,16 +8699,19 @@ export class GameEngine {
   }
 
   private getShapePopulationLimit(): number {
+    if (this.gameMode === GameMode.BOSS_RUSH) return 0;
     if (this.gameMode === GameMode.SANDBOX && this.sandboxConfig) return this.sandboxConfig.shapeMaxCount;
     return Number.POSITIVE_INFINITY;
   }
 
   private getCommonShapeActiveLimit(): number {
+    if (this.gameMode === GameMode.BOSS_RUSH) return 0;
     if (this.gameMode === GameMode.SANDBOX && this.sandboxConfig) return this.commonShapeMaxActive;
     return Number.POSITIVE_INFINITY;
   }
 
   private getCommonShapeSpawnCooldown(): number {
+    if (this.gameMode === GameMode.BOSS_RUSH) return 9999;
     if (this.gameMode === GameMode.DOMINION) return 0.12;
     if (this.gameMode === GameMode.TEAMS) return 0.14;
     if (this.gameMode === GameMode.FFA) return 0.18;
@@ -8838,6 +8984,9 @@ export class GameEngine {
       if (mode !== GameMode.DOMINION) {
           this.resetDominionState();
       }
+      if (mode !== GameMode.BOSS_RUSH) {
+          this.bossRushMode.reset();
+      }
       if (fromMode === GameMode.SANDBOX && mode !== GameMode.SANDBOX) {
           this.hardResetSandboxLeakedProgress(mode);
       }
@@ -8848,6 +8997,10 @@ export class GameEngine {
           this.entities = this.entities.filter(e => e.type !== EntityType.GUARDIAN && e.type !== EntityType.BASE_DEFENSE_DRONE);
           this.clearBaseDefenseDrones();
           this.spawnDominionObjectives();
+      } else if (mode === GameMode.BOSS_RUSH) {
+          this.entities = this.entities.filter(e => e === this.player);
+          this.clearBaseDefenseDrones();
+          this.resetDominionState();
       } else if (mode === GameMode.SANDBOX) {
           this.clearBaseDefenseDrones();
           this.cleanupForSandbox();
@@ -8899,14 +9052,14 @@ export class GameEngine {
           invincible: false,
           infiniteAmmo: false,
           knockbackEnabled: true,
-          botsEnabled: false,
+          botsEnabled: true,
           gameSpeed: 1.0,
           showHitboxes: false,
           freezeAll: false,
-          spawningEnabled: false,
+          spawningEnabled: true,
           noAbilityCooldown: false,
-          shapeSpawnRate: 1.0,
-          shapeMaxCount: 300,
+          shapeSpawnRate: 1.2,
+          shapeMaxCount: 420,
           enabledShapes: {
               [ShapeType.SQUARE]: true,
               [ShapeType.DIAMOND]: true,
@@ -8921,7 +9074,11 @@ export class GameEngine {
               [ShapeType.DODECAGON]: true,
           },
           cleanupActive: true,
-          showSpawnNotifications: false
+          showSpawnNotifications: true,
+          projectileDamageScale: 1.0,
+          projectileDurabilityScale: 1.0,
+          droneDamageScale: 1.0,
+          droneDurabilityScale: 1.0,
       };
       
       this.addNotification("SANDBOX_CLEAN_BOOT // PROTOCOL_READY", "#00ffff");
@@ -8957,6 +9114,16 @@ export class GameEngine {
       this.attractMode = true;
       this.manualSpectateMode = true;
       return !!this.ensureValidSpectateTarget(true);
+  }
+
+  spectateEntityById(targetId: number | null | undefined): boolean {
+      if (targetId == null) return false;
+      const target = this.getSpectateCandidates().find((bot) => bot.id === targetId) ?? null;
+      if (!target) return false;
+      this.attractMode = true;
+      this.manualSpectateMode = true;
+      this.spectateTarget = target;
+      return true;
   }
 
   exitSpectateMode() {
@@ -9056,7 +9223,12 @@ export class GameEngine {
       if (type === 'ALL') {
           this.entities = this.entities.filter(e => e.type === EntityType.PLAYER);
       } else if (type === 'BULLETS') {
-          this.entities = this.entities.filter(e => e.type !== EntityType.BULLET);
+          this.entities = this.entities.filter(e =>
+            e.type !== EntityType.BULLET &&
+            e.type !== EntityType.DRONE &&
+            e.type !== EntityType.MINI_TANK &&
+            e.type !== EntityType.BASE_DEFENSE_DRONE
+          );
       } else if (type === 'SHAPES') {
           this.entities = this.entities.filter(e => e.type !== EntityType.SHAPE && e.type !== EntityType.BOSS);
       } else if (type === 'ENEMIES') {
@@ -9304,6 +9476,25 @@ export class GameEngine {
     this.sound.playRoar();
   }
 
+  createBossRushBoss(definition: BossRushBossDefinition) {
+    const boss = new Boss(this.nextId(), definition.archetype);
+    boss.name = definition.name;
+    boss.color = definition.color;
+    boss.maxHealth = definition.maxHealth;
+    boss.health = definition.maxHealth;
+    boss.displayHealth = definition.maxHealth;
+    boss.radius = definition.radius;
+    boss.damage = definition.contactDamage;
+    boss.mass = definition.radius * 120;
+    boss.pos = { ...definition.arenaAnchor };
+    boss.vel = { x: 0, y: 0 };
+    boss.acc = { x: 0, y: 0 };
+    (boss as any).__bossRushBoss = true;
+    (boss as any).__bossRushKey = definition.key;
+    this.entities.push(boss);
+    return boss as any;
+  }
+
   handleTransformation() {
       if (this.transformationReadyTimer > 0 && this.transformationReadyClass) {
           this.player.isTransformed = true;
@@ -9327,11 +9518,13 @@ export class GameEngine {
   }
 
   resetPlayer(preserveWorld: boolean = false) {
+    if (this.gameMode === GameMode.BOSS_RUSH) preserveWorld = false;
     this.player.isDead = false; 
     this.player.shouldRemove = false;
     this.player.lastDamageSourceId = null;
     this.gameOverSignaled = false; 
     this.playerDeathPresentation = null;
+    this.playerDeathKillerRef = null;
     this.botChats = [];
     this.botDeathTauntGlobalCooldownUntil = 0;
     this.player.invulnerableTime = 3000; // 3 seconds spawn protection
@@ -9379,6 +9572,11 @@ export class GameEngine {
         this.player.color = getTeamColor(this.player.team);
         this.player.setSkin(this.preferredSkinId, this.preferredDonorRank);
         this.player.pos = this.getSpawnPos(this.player.team);
+    } else if (this.gameMode === GameMode.BOSS_RUSH) {
+        this.player.team = Team.BLUE;
+        this.player.color = COLORS.player;
+        this.player.setSkin(this.preferredSkinId, this.preferredDonorRank);
+        this.player.pos = { x: BOSS_RUSH_ARENA.center.x, y: BOSS_RUSH_ARENA.center.y + BOSS_RUSH_ARENA.height * 0.28 };
     }
     else { 
         this.player.team = Team.BLUE; 
@@ -9387,6 +9585,9 @@ export class GameEngine {
     }
     this.player.vel = { x: 0, y: 0 }; 
     this.resetTankClassAndProgression(this.player, TankClass.BASIC);
+    if (this.gameMode === GameMode.BOSS_RUSH) {
+        this.instantLevel(45);
+    }
     this.player.health = this.player.maxHealth; 
     this.player.displayHealth = this.player.maxHealth; 
     this.player.visualScale = 1;
@@ -9398,9 +9599,11 @@ export class GameEngine {
     this.player.invulnerableTime = 3000; 
     if (!this.entities.includes(this.player)) this.entities.push(this.player);
     if (!preserveWorld) { 
-        this.entities = this.entities.filter(e => e.type === EntityType.SHAPE || e === this.player); 
+        this.entities = this.gameMode === GameMode.BOSS_RUSH
+          ? [this.player]
+          : this.entities.filter(e => e.type === EntityType.SHAPE || e === this.player);
         this.currentShapeCount = this.entities.filter(e => e.type === EntityType.SHAPE).length;
-        this.killFeed = []; this.floatingTexts = []; this.particles = []; this.bossSpawnTimer = 0; this.eliteSpawnTimer = 0; if (this.gameMode === GameMode.TEAMS) { this.spawnGuardians(); this.spawnBaseDefenseDrones(); } else if (this.gameMode === GameMode.DOMINION) { this.spawnDominionObjectives(); }
+        this.killFeed = []; this.floatingTexts = []; this.particles = []; this.bossSpawnTimer = 0; this.eliteSpawnTimer = 0; if (this.gameMode === GameMode.TEAMS) { this.spawnGuardians(); this.spawnBaseDefenseDrones(); } else if (this.gameMode === GameMode.DOMINION) { this.spawnDominionObjectives(); } else if (this.gameMode === GameMode.BOSS_RUSH) { this.bossRushMode.start(this as any); }
     }
     if (this.gameMode !== GameMode.TEAMS) {
       this.entities = this.entities.filter(e => e.type !== EntityType.GUARDIAN);
@@ -9413,6 +9616,8 @@ export class GameEngine {
     if (this.gameMode === GameMode.SANDBOX) {
         this.instantLevel(MAX_LEVEL);
         this.addNotification("VEXTOR SANDBOX INITIALIZED", "#00ffff");
+    } else if (this.gameMode === GameMode.BOSS_RUSH && preserveWorld) {
+        this.bossRushMode.start(this as any);
     }
   }
 
@@ -9528,39 +9733,124 @@ export class GameEngine {
             this.addNotification(`ABILITY COOLDOWN: ${Math.ceil(player.healingBurstCooldown)}s`, "#ff4444");
         }
     } else if (this.isBloodSectorActive(player)) {
-        if (player.drainBurstCooldown <= 0 || noCooldown) {
-            const cfg = CLASS_ABILITY_CONFIG.blood;
-            const burstRadius = player.drainAuraRadius * cfg.burstRadiusMultiplier;
-            const damageAmount = player.maxHealth * cfg.burstDamageHealthRatio;
-            const sacrifice = Math.max(1, player.health * cfg.healthSacrificeRatio);
-             
-            const targets = this.entities.filter(e => e.id !== player.id && e.team !== player.team && (e.type === EntityType.PLAYER || e.type === EntityType.ENEMY || e.type === EntityType.SHAPE || e.type === EntityType.BOSS) && Vector.dist(player.pos, e.pos) < burstRadius);
-             
-            let totalDamage = 0;
-            player.takeDamage(sacrifice, player.id);
-            targets.forEach(t => {
-                const actualDamage = Math.min(t.health, damageAmount);
-                t.takeDamage(actualDamage, player.id);
-                totalDamage += actualDamage;
-                if (t instanceof Tank) {
-                    t.applyDrainDot(cfg.burstDrainDotStacks, cfg.decayStackDuration, player.id);
-                }
-            });
-             
-            // Lifesteal from burst
-            player.health = Math.min(player.health + totalDamage * cfg.burstHealRatio, player.maxHealth);
-            player.bloodPactActiveTimer = cfg.activeSeconds;
-            player.statusAbilityUntil = Date.now() + cfg.activeSeconds * 1000;
-             
-            this.particles.push(new Particle(player.pos.x, player.pos.y, '#ef4444', 30, 40, 'RING'));
-            const cooldownReduction = (player.stats[StatType.DRAIN_BURST] || 0) * 0.8; // 0.8s per point
-            player.drainBurstCooldown = noCooldown ? 0 : Math.max(4, cfg.cooldownSeconds - cooldownReduction);
-            this.addNotification("SANGUINE PACT!", "#ef4444");
-            this.sound.playBloodBurst(this.getAudioSpatialOptions(player.pos, true));
-        } else {
-            this.addNotification(`ABILITY COOLDOWN: ${Math.ceil(player.drainBurstCooldown)}s`, "#ff4444");
-        }
+        this.triggerBloodSectorAbility(player, noCooldown);
     }
+  }
+
+  private triggerBloodSectorAbility(player: Tank, noCooldown: boolean) {
+      if (player.drainBurstCooldown > 0 && !noCooldown) {
+          this.addNotification(`ABILITY COOLDOWN: ${Math.ceil(player.drainBurstCooldown)}s`, "#ff4444");
+          return;
+      }
+
+      const cfg = CLASS_ABILITY_CONFIG.blood;
+      const worldMouse = this.getWorldMousePos();
+      const aimVector = Vector.sub(worldMouse, player.pos);
+      const aimDir = Vector.mag(aimVector) > 0.001 ? Vector.normalize(aimVector) : Vector.fromAngle(player.rotation);
+      const laneDir = Vector.normalize(aimDir);
+      const normal = { x: -laneDir.y, y: laneDir.x };
+      const strikeRange = Math.max(cfg.baseStrikeMinRange, player.drainAuraRadius * cfg.strikeRangeMultiplier);
+      const strikeHalfWidth =
+          cfg.baseStrikeHalfWidth +
+          player.radius * 0.35 +
+          (player.stats[StatType.BULLET_PENETRATION] || 0) * 4;
+      const sacrifice = Math.max(1, player.maxHealth * 0.045, player.health * cfg.healthSacrificeRatio);
+
+      const damageBase =
+          player.maxHealth * cfg.strikeDamageHealthRatio +
+          player.drainAuraDamage * cfg.strikeAuraDamageScalar +
+          (player.stats[StatType.BULLET_DAMAGE] || 0) * cfg.strikeStatDamageScalar;
+
+      const candidates = this.entities
+          .filter(e =>
+              !e.isDead &&
+              e.id !== player.id &&
+              e.team !== player.team &&
+              (
+                  e.type === EntityType.PLAYER ||
+                  e.type === EntityType.ENEMY ||
+                  e.type === EntityType.SHAPE ||
+                  e.type === EntityType.BOSS ||
+                  e.type === EntityType.CRASHER ||
+                  e.type === EntityType.GUARDIAN ||
+                  e.type === EntityType.DOMINION_TANK
+              )
+          )
+          .map(target => {
+              const toTarget = Vector.sub(target.pos, player.pos);
+              const forward = Vector.dot(toTarget, laneDir);
+              const lateral = Math.abs(Vector.dot(toTarget, normal));
+              return { target, forward, lateral };
+          })
+          .filter(({ target, forward, lateral }) =>
+              forward > player.radius * 0.55 &&
+              forward < strikeRange + target.radius &&
+              lateral <= strikeHalfWidth + target.radius * 0.65
+          )
+          .sort((a, b) => a.forward - b.forward);
+
+      player.takeDamage(sacrifice, player.id);
+
+      let totalDamage = 0;
+      let hitCount = 0;
+      let pierceScale = 1;
+      candidates.forEach(({ target, forward }) => {
+          const rangeFalloff = Math.max(0.62, 1 - forward / (strikeRange * 1.18));
+          const targetTypeMult =
+              target.type === EntityType.SHAPE ? 1.12 :
+              target.type === EntityType.CRASHER ? 1.04 :
+              target.type === EntityType.BOSS || target.type === EntityType.GUARDIAN || target.type === EntityType.DOMINION_TANK ? 0.7 :
+              1.0;
+          const plannedDamage = damageBase * rangeFalloff * pierceScale * targetTypeMult;
+          const actualDamage = Math.min(target.health, plannedDamage);
+          if (actualDamage <= 0) return;
+
+          target.takeDamage(actualDamage, player.id);
+          totalDamage += actualDamage;
+          hitCount += 1;
+
+          if (target instanceof Tank) {
+              target.applyDrainDot(cfg.strikeDrainDotStacks, cfg.decayStackDuration, player.id);
+              target.markDrainingStatus(1200);
+          }
+
+          if (Math.random() < 0.7) {
+              const p = new Particle(target.pos.x, target.pos.y, '#ef4444', 4, 22, 'AURA');
+              p.vel = Vector.mult(Vector.normalize(Vector.sub(player.pos, target.pos)), 7.5);
+              this.particles.push(p);
+          }
+
+          pierceScale *= cfg.strikePierceFalloff;
+      });
+
+      player.health = Math.min(player.health + totalDamage * cfg.strikeHealRatio, player.maxHealth);
+      player.markDrainingStatus(1400);
+      player.bloodPactActiveTimer = cfg.activeSeconds;
+      player.statusAbilityUntil = Date.now() + cfg.activeSeconds * 1000;
+
+      for (let i = 0; i < 12; i += 1) {
+          const travel = strikeRange * (0.22 + i / 12 * 0.78);
+          const offset = (Math.random() - 0.5) * strikeHalfWidth * 1.15;
+          this.particles.push(new Particle(
+              player.pos.x + laneDir.x * travel + normal.x * offset,
+              player.pos.y + laneDir.y * travel + normal.y * offset,
+              i < 4 ? '#fee2e2' : '#ef4444',
+              i < 4 ? 6 : 4,
+              18 + i,
+              'AURA'
+          ));
+      }
+      this.particles.push(new Particle(player.pos.x, player.pos.y, '#ef4444', 24, 34, 'RING'));
+
+      const cooldownReduction = (player.stats[StatType.DRAIN_BURST] || 0) * 0.8;
+      player.drainBurstCooldown = noCooldown ? 0 : Math.max(4, cfg.cooldownSeconds - cooldownReduction);
+
+      if (hitCount > 0) {
+          this.addNotification(`CRIMSON REND x${hitCount}`, "#ef4444");
+      } else {
+          this.addNotification("CRIMSON REND", "#ef4444");
+      }
+      this.sound.playBloodBurst(this.getAudioSpatialOptions(player.pos, true));
   }
 
   private getWorldMousePos(): Vector2 {
@@ -9854,15 +10144,15 @@ export class GameEngine {
 
                   if (tank.autoTurretCooldown <= 0 && Math.abs(diff) < 0.4) {
                       const baseReloadTimeMs = (BASE_STATS.reload - (tank.stats[StatType.RELOAD] * 2.5)) * 16;
-                      const cooldownVal = Math.max(72, baseReloadTimeMs * 0.74);
+                      const cooldownVal = Math.max(54, baseReloadTimeMs * 0.6);
                       tank.autoTurretCooldown = cooldownVal;
 
                       const forward = Vector.fromAngle(tank.autoTurretRotation);
                       const tip = Vector.add(tank.pos, Vector.mult(forward, tank.radius * 0.9));
                       
-                      const bulletSpeedMult = 1.65;
-                      const bulletDamageMult = 0.74;
-                      const bulletSizeMult = 0.65;
+                      const bulletSpeedMult = 1.78;
+                      const bulletDamageMult = 0.92;
+                      const bulletSizeMult = 0.72;
 
                       this.entities.push(new Bullet(
                           this.nextId(), 
@@ -9871,7 +10161,7 @@ export class GameEngine {
                           Vector.mult(forward, (BASE_STATS.bulletSpeed + tank.stats[StatType.BULLET_SPEED] * 0.8) * bulletSpeedMult), 
                           tank, 
                           bulletDamageMult, 
-                          1.0, 
+                          1.18, 
                           bulletSizeMult
                       ));
 
@@ -10293,7 +10583,7 @@ export class GameEngine {
 
     if (!this.inVoid) {
         this.portalSpawnTimer += dt;
-        if (this.portalSpawnTimer > 300 && this.gameMode !== GameMode.SANDBOX) {
+        if (this.portalSpawnTimer > 300 && this.gameMode !== GameMode.SANDBOX && this.gameMode !== GameMode.BOSS_RUSH) {
             const pos = Vector.randomRange(2000, CANVAS_WIDTH - 2000);
             const pos2 = Vector.randomRange(2000, CANVAS_HEIGHT - 2000);
             this.entities.push(new VoidPortal(this.nextId(), pos, pos2));
@@ -10302,7 +10592,7 @@ export class GameEngine {
         }
 
         this.eliteSpawnTimer += dt;
-        if (this.eliteSpawnTimer > 145 && this.gameMode !== GameMode.SANDBOX) { 
+        if (this.eliteSpawnTimer > 145 && this.gameMode !== GameMode.SANDBOX && this.gameMode !== GameMode.BOSS_RUSH) { 
             this.spawnElite();
             this.eliteSpawnTimer = 0;
         }
@@ -10321,10 +10611,10 @@ export class GameEngine {
     }
 
     this.bossSpawnTimer += dt;
-    if (this.bossSpawnTimer > 120 && !this.inVoid && this.gameMode !== GameMode.SANDBOX) { this.spawnBoss(); this.bossSpawnTimer = 0; }
+    if (this.bossSpawnTimer > 120 && !this.inVoid && this.gameMode !== GameMode.SANDBOX && this.gameMode !== GameMode.BOSS_RUSH) { this.spawnBoss(); this.bossSpawnTimer = 0; }
 
     this.crasherSpawnTimer += dt;
-    if (this.crasherSpawnTimer > 5 && !this.inVoid && this.gameMode !== GameMode.SANDBOX) {
+    if (this.crasherSpawnTimer > 5 && !this.inVoid && this.gameMode !== GameMode.SANDBOX && this.gameMode !== GameMode.BOSS_RUSH) {
         const nestRadius = 1500;
         const count = 3 + Math.floor(Math.random() * 3);
         const center = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
@@ -10344,7 +10634,7 @@ export class GameEngine {
         this.crasherSpawnTimer = 0;
     }
 
-    if (currentBoss && !this.sandboxConfig.freezeAll) {
+    if (currentBoss && !this.sandboxConfig.freezeAll && this.gameMode !== GameMode.BOSS_RUSH) {
         this.bossDefenseTimer += dt;
         if (this.bossDefenseTimer > 4) {
             const playersNearby = aliveCombatTanks.filter(e => Vector.dist(e.pos, currentBoss.pos) < 1200);
@@ -10357,6 +10647,10 @@ export class GameEngine {
         }
     }
 
+    if (this.gameMode === GameMode.BOSS_RUSH && !this.sandboxConfig.freezeAll) {
+        this.bossRushMode.update(this as any, dt);
+    }
+
     if (!this.attractMode) {
         const distToCenter = Vector.dist(this.player.pos, {x: CANVAS_WIDTH/2, y: CANVAS_HEIGHT/2});
         if (distToCenter < 1450 && !this.inNest && !this.inVoid) {
@@ -10366,6 +10660,10 @@ export class GameEngine {
             this.inNest = false;
         }
     }
+
+    const bossRushCameraOverride = this.gameMode === GameMode.BOSS_RUSH
+        ? this.bossRushMode.getCameraOverride(this as any)
+        : null;
 
     if (this.attractMode) {
         if (this.manualSpectateMode) {
@@ -10380,6 +10678,11 @@ export class GameEngine {
         this.cameraPos.y += (targetPos.y - this.cameraPos.y) * attractFollow;
         this.cameraZoom = this.manualSpectateMode ? 0.72 : 0.6;
         this.player.pos = { x: -1000, y: -1000 };
+    } else if (bossRushCameraOverride?.active) {
+        const cinematicFollow = 1 - Math.exp(-dt * 4.8);
+        this.cameraPos.x += (bossRushCameraOverride.targetPos.x - this.cameraPos.x) * cinematicFollow;
+        this.cameraPos.y += (bossRushCameraOverride.targetPos.y - this.cameraPos.y) * cinematicFollow;
+        this.cameraZoom += (bossRushCameraOverride.zoom - this.cameraZoom) * cinematicFollow;
     } else {
         // Velocity-independent centered follow.
         const follow = 1 - Math.exp(-dt * 10.5);
@@ -10439,9 +10742,9 @@ export class GameEngine {
     
     let enemyLimit = this.gameMode === GameMode.TEAMS ? 60 : this.gameMode === GameMode.DOMINION ? 72 : 18;
     if (this.attractMode) enemyLimit += 10;
-    if (this.gameMode === GameMode.SANDBOX) enemyLimit = 0; 
+    if (this.gameMode === GameMode.SANDBOX || this.gameMode === GameMode.BOSS_RUSH) enemyLimit = 0; 
 
-    if (this.gameMode !== GameMode.SANDBOX && aliveEnemies.length < enemyLimit) { 
+    if (this.gameMode !== GameMode.SANDBOX && this.gameMode !== GameMode.BOSS_RUSH && aliveEnemies.length < enemyLimit) { 
         const spawnProb = this.gameMode === GameMode.TEAMS ? 0.08 : this.gameMode === GameMode.DOMINION ? 0.09 : 0.025; 
         if(Math.random() < spawnProb) this.spawnEnemy(); 
     }
@@ -10475,7 +10778,7 @@ export class GameEngine {
     }
 
     if (!this.sandboxConfig.freezeAll) {
-        const canUpdateAI = this.gameMode !== GameMode.SANDBOX || this.sandboxConfig.botsEnabled;
+        const canUpdateAI = (this.gameMode !== GameMode.SANDBOX || this.sandboxConfig.botsEnabled) && this.gameMode !== GameMode.BOSS_RUSH;
         let aiEntitiesProcessed = 0;
 
         this.entities.forEach(e => {
@@ -10492,7 +10795,7 @@ export class GameEngine {
                     else if (e.type === EntityType.ELITE_TANK && !e.isDead) this.updateEliteAI(e as EliteTank, dt);
                     else if (e.type === EntityType.GUARDIAN) this.updateGuardianAI(e as Guardian, dt);
                     else if (e.type === EntityType.CRASHER) this.updateCrasherAI(e as Crasher, dt);
-                    else if (e.type === EntityType.BOSS && !e.isDead) this.updateBossAI(e as Boss, dt);
+                    else if (e.type === EntityType.BOSS && !e.isDead && !this.bossRushMode.ownsBoss(e.id)) this.updateBossAI(e as Boss, dt);
                     aiEntitiesProcessed++;
                 }
             }
@@ -10767,7 +11070,9 @@ export class GameEngine {
         dominionOwnedCount: this.gameMode === GameMode.DOMINION ? { ...this.dominionOwnedCount } : undefined,
         dominionTimeRemaining: this.gameMode === GameMode.DOMINION ? this.dominionMatchTimer : undefined,
         dominionZones: this.gameMode === GameMode.DOMINION ? this.getDominionZoneStates() : undefined,
+        bossRush: this.gameMode === GameMode.BOSS_RUSH ? this.bossRushMode.getHud(this as any) : undefined,
         deathPresentation: this.getDeathPresentationState(),
+        deathKiller: this.getDeathKillerSnapshot(),
       });
     }
 
@@ -11237,7 +11542,7 @@ export class GameEngine {
       }
 
       elite.orbitPhase += dt * 0.9;
-      elite.acc = Vector.limit(steering, 2.35);
+      this.applyTankMovement(elite, Vector.limit(steering, 1));
   }
 
   getInterceptPoint(shooterPos: Vector2, bulletSpeed: number, targetPos: Vector2, targetVel: Vector2): Vector2 {
@@ -11554,9 +11859,9 @@ export class GameEngine {
     if (classType === TankClass.TWIN) return 0.62;
     if (classType === TankClass.TWIN_FLANK) return 0.66;
     if (classType === TankClass.TRIPLE_SHOT) return 0.56;
-    if (classType === TankClass.TRIPLE_TANK) return 0.58;
+    if (classType === TankClass.TRIPLE_TANK) return 0.52;
     if (classType === TankClass.TRIPLE_TWIN) return 0.7;
-    if (classType === TankClass.SPRAYER) return 0.64;
+    if (classType === TankClass.SPRAYER) return 0.56;
     if (classType === TankClass.SPREAD_SHOT) return 0.54;
     return 1.0;
   }
@@ -11565,10 +11870,13 @@ export class GameEngine {
     if (classType === TankClass.TWIN) return 22;
     if (classType === TankClass.TWIN_FLANK) return 24;
     if (classType === TankClass.TRIPLE_SHOT) return 18;
-    if (classType === TankClass.TRIPLE_TANK) return 20;
+    if (classType === TankClass.TRIPLE_TANK) return 16;
     if (classType === TankClass.TRIPLE_TWIN) return 26;
-    if (classType === TankClass.SPRAYER) return 22;
+    if (classType === TankClass.SPRAYER) return 18;
     if (classType === TankClass.SPREAD_SHOT) return 28;
+    if (classType === TankClass.GUNNER) return 20;
+    if (classType === TankClass.AUTO_GUNNER) return 17;
+    if (classType === TankClass.STREAMLINER) return 14;
     return 40;
   }
 
@@ -11609,110 +11917,110 @@ export class GameEngine {
       case TankClass.DUAL_TRAPPER:
         return {
           speed: 0.74,
-          damage: 1.02,
-          life: 2.45,
+          damage: 1.16,
+          life: 2.72,
           size: 1.12,
           cooldown: 1.86,
-          maxLifeTime: 7600,
-          friction: 0.87,
-          anchorSpeed: 0.36,
+          maxLifeTime: 8600,
+          friction: 0.89,
+          anchorSpeed: 0.33,
           armDelayMs: 155,
-          damageMultiplier: 0.86,
-          healthMultiplier: 2.48,
-          massMultiplier: 1.94,
+          damageMultiplier: 1.08,
+          healthMultiplier: 2.95,
+          massMultiplier: 2.22,
           spinRate: 2.35,
           activeTrapCap: 12,
           firePattern: 'dual',
           spreadMultiplier: 0.64,
-          travelDistance: 212,
+          travelDistance: 276,
         };
       case TankClass.MACHINE_GUN_TRAPPER:
         return {
           speed: 0.68,
-          damage: 0.78,
-          life: 1.8,
+          damage: 0.94,
+          life: 2.16,
           size: 1.0,
           cooldown: 0.78,
-          maxLifeTime: 6200,
-          friction: 0.84,
-          anchorSpeed: 0.44,
+          maxLifeTime: 6900,
+          friction: 0.86,
+          anchorSpeed: 0.4,
           armDelayMs: 95,
-          damageMultiplier: 0.68,
-          healthMultiplier: 1.34,
-          massMultiplier: 1.42,
+          damageMultiplier: 0.92,
+          healthMultiplier: 1.8,
+          massMultiplier: 1.68,
           spinRate: 3.1,
           activeTrapCap: 14,
           firePattern: 'single',
           spreadMultiplier: 1.18,
-          travelDistance: 172,
+          travelDistance: 244,
         };
       case TankClass.OCTO_TRAPPER:
         return {
           speed: 0.62,
-          damage: 0.88,
-          life: 2.0,
+          damage: 1.04,
+          life: 2.34,
           size: 1.02,
           cooldown: 2.02,
-          maxLifeTime: 7000,
-          friction: 0.85,
-          anchorSpeed: 0.42,
+          maxLifeTime: 7900,
+          friction: 0.87,
+          anchorSpeed: 0.38,
           armDelayMs: 105,
-          damageMultiplier: 0.72,
-          healthMultiplier: 1.62,
-          massMultiplier: 1.66,
+          damageMultiplier: 0.96,
+          healthMultiplier: 2.08,
+          massMultiplier: 1.9,
           spinRate: 2.7,
           activeTrapCap: 18,
           firePattern: 'radial',
           spreadMultiplier: 0.22,
-          travelDistance: 184,
+          travelDistance: 248,
         };
       case TankClass.TRIPLE_TRAPPER:
         return {
           speed: 0.72,
-          damage: 0.98,
-          life: 2.2,
+          damage: 1.14,
+          life: 2.48,
           size: 1.08,
           cooldown: 1.72,
-          maxLifeTime: 7100,
-          friction: 0.86,
-          anchorSpeed: 0.4,
+          maxLifeTime: 8100,
+          friction: 0.88,
+          anchorSpeed: 0.36,
           armDelayMs: 145,
-          damageMultiplier: 0.8,
-          healthMultiplier: 1.76,
-          massMultiplier: 1.76,
+          damageMultiplier: 1.02,
+          healthMultiplier: 2.24,
+          massMultiplier: 2.0,
           spinRate: 2.55,
           activeTrapCap: 15,
           firePattern: 'triple',
           spreadMultiplier: 0.68,
-          travelDistance: 214,
+          travelDistance: 286,
         };
       case TankClass.TRAPPER:
       default:
         return {
           speed: 0.74,
-          damage: 1.2,
-          life: 2.65,
+          damage: 1.34,
+          life: 2.9,
           size: 1.24,
           cooldown: 1.68,
-          maxLifeTime: 7600,
-          friction: 0.87,
-          anchorSpeed: 0.38,
+          maxLifeTime: 8600,
+          friction: 0.89,
+          anchorSpeed: 0.34,
           armDelayMs: 150,
-          damageMultiplier: 0.92,
-          healthMultiplier: 2.72,
-          massMultiplier: 1.96,
+          damageMultiplier: 1.14,
+          healthMultiplier: 3.1,
+          massMultiplier: 2.28,
           spinRate: 2.45,
           activeTrapCap: 10,
           firePattern: 'single',
           spreadMultiplier: 0.8,
-          travelDistance: 228,
+          travelDistance: 302,
         };
     }
   }
 
   private getTrapTravelDistance(owner: Tank, baseDistance: number): number {
     const trapRangeStat = Math.max(0, owner.stats[StatType.BULLET_SPEED] || 0);
-    return Math.max(90, baseDistance + trapRangeStat * 24);
+    return Math.max(120, baseDistance + trapRangeStat * 42);
   }
 
   private getActiveTrapsForTank(ownerId: number): Bullet[] {
@@ -11968,15 +12276,15 @@ export class GameEngine {
         [TankClass.OCTO_TRAPPER]: 1.72,
         [TankClass.TRIPLE_TRAPPER]: 1.58,
         [TankClass.DESTROYER]: 1.58,
-        [TankClass.SPRAYER]: 0.98,
+        [TankClass.SPRAYER]: 0.82,
         [TankClass.TRI_ANGLE]: 0.84,
         [TankClass.HUNTER]: 1.08,
-        [TankClass.GUNNER]: 0.72,
+        [TankClass.GUNNER]: 0.66,
         [TankClass.DOCTOR]: 1.0,
         [TankClass.OVERSEER]: 0.9,
         [TankClass.TRIPLE_TWIN]: 0.96,
         [TankClass.OCTO_TANK]: 0.9,
-        [TankClass.TRIPLE_TANK]: 0.88,
+        [TankClass.TRIPLE_TANK]: 0.76,
         [TankClass.PENTA_SHOT]: 0.85,
         [TankClass.SPREAD_SHOT]: 0.9,
         [TankClass.RANGER]: 1.4,
@@ -11985,9 +12293,9 @@ export class GameEngine {
         [TankClass.HYBRID]: 1.28,
         [TankClass.BOOSTER]: 0.86,
         [TankClass.FIGHTER]: 0.86,
-        [TankClass.STREAMLINER]: 0.58,
+        [TankClass.STREAMLINER]: 0.48,
         [TankClass.X_HUNTER]: 1.02,
-        [TankClass.AUTO_GUNNER]: 0.64,
+        [TankClass.AUTO_GUNNER]: 0.6,
         [TankClass.OVERLORD]: 0.94,
         [TankClass.MANAGER]: 0.92,
         [TankClass.PLAGUE_DOCTOR]: 1.04,
@@ -12097,7 +12405,7 @@ export class GameEngine {
 
         // Hybrid support system: maintain a small drone cloud while firing Destroyer-class shells.
         const currentDrones = this.entities.filter(e => e.type === EntityType.DRONE && (e as Drone).owner === tank).length;
-        const droneLimit = 4;
+        const droneLimit = 5;
         if (droneReady && currentDrones < droneLimit) {
             const droneBarrel = tank.barrels[droneBarrelIndex] || tank.barrels[0];
             const [dLen, , , dAngleOff] = droneBarrel;
@@ -12105,7 +12413,7 @@ export class GameEngine {
             const dTip = Vector.add(tank.pos, Vector.mult(Vector.fromAngle(dAngle), tank.radius * dLen));
             this.entities.push(new Drone(this.nextId(), dTip.x, dTip.y, tank));
 
-            const droneCd = Math.max(280, baseReloadTimeMs * 2.4);
+            const droneCd = Math.max(210, baseReloadTimeMs * 1.95);
             if (!this.sandboxConfig.infiniteAmmo) {
                 tank.barrelCooldowns[droneBarrelIndex] = droneCd;
                 tank.barrelMaxCooldowns[droneBarrelIndex] = droneCd;
@@ -12123,7 +12431,7 @@ export class GameEngine {
             const isSpecialLarge = true;
             const stability = tank.stats[StatType.BULLET_SPREAD] || 0;
 
-            let bulletSpeedMult = 2.05, bulletDamageMult = 5.4, bulletLifeMult = 1.7, bulletSizeMult = this.sandboxConfig?.spawningEnabled ? 2.35 : 2.05;
+            let bulletSpeedMult = 2.2, bulletDamageMult = 6.25, bulletLifeMult = 1.95, bulletSizeMult = this.sandboxConfig?.spawningEnabled ? 2.28 : 2.08;
             if (!isSpecialLarge) {
                 bulletSizeMult *= widthScale;
                 bulletDamageMult *= widthScale;
@@ -12151,6 +12459,9 @@ export class GameEngine {
                 bulletSizeMult,
                 mainBarrelIndex
             );
+            b.maxHealth *= 1.18;
+            b.health = b.maxHealth;
+            b.damage *= 1.08;
             this.entities.push(b);
 
             tank.barrelHeat[mainBarrelIndex] = 1.0;
@@ -12162,14 +12473,14 @@ export class GameEngine {
                 this.particles.push(new Particle(tip.x, tip.y, 'rgba(255, 235, 255, 0.5)', (tank.radius * 0.4) * bulletSizeMult, 6, 'FLASH'));
             }
 
-            const recoilPower = 2.8;
+            const recoilPower = 3.15;
             if (this.sandboxConfig.knockbackEnabled) {
                 tank.vel = Vector.sub(tank.vel, Vector.mult(forward, recoilPower));
                 const recoilComp = Math.min(0.45, stability * 0.035);
                 tank.vel = Vector.add(tank.vel, Vector.mult(forward, recoilPower * recoilComp));
             }
 
-            const cooldownVal = Math.max(52, baseReloadTimeMs * delayMultiplier * 1.25);
+            const cooldownVal = Math.max(44, baseReloadTimeMs * delayMultiplier * 1.08);
             if (!this.sandboxConfig.infiniteAmmo) {
                 tank.barrelCooldowns[mainBarrelIndex] = cooldownVal;
                 tank.barrelMaxCooldowns[mainBarrelIndex] = cooldownVal;
@@ -12581,7 +12892,12 @@ export class GameEngine {
             const drone = new Drone(this.nextId(), tip.x, tip.y, tank);
             this.entities.push(drone);
             
-            const cooldownVal = Math.max(250, baseReloadTimeMs * (tank.classType === TankClass.HYBRID ? 2.5 : 4.0)); 
+            const summonReloadMult =
+                tank.classType === TankClass.HYBRID ? 2.35 :
+                tank.classType === TankClass.OVERLORD ? 2.2 :
+                tank.classType === TankClass.OVERSEER ? 2.45 :
+                4.0;
+            const cooldownVal = Math.max(220, baseReloadTimeMs * summonReloadMult);
             if (!this.sandboxConfig.infiniteAmmo) {
                 tank.barrelCooldowns[idx] = cooldownVal;
                 tank.barrelMaxCooldowns[idx] = cooldownVal;
@@ -12648,7 +12964,7 @@ export class GameEngine {
         else if (tank.classType === TankClass.QUAD_TANK) { bulletSpeedMult = 1.04; bulletDamageMult = 0.9; bulletLifeMult = 1.02; bulletSizeMult = 0.9; }
         else if (tank.classType === TankClass.TWIN_FLANK) { bulletSpeedMult = 1.08; bulletDamageMult = 0.98; bulletLifeMult = 1.05; bulletSizeMult = 0.94; }
         else if (tank.classType === TankClass.TRIPLE_TWIN) { bulletSpeedMult = 1.1; bulletDamageMult = 0.96; bulletLifeMult = 1.08; bulletSizeMult = 0.92; }
-        else if (tank.classType === TankClass.TRIPLE_TANK) { bulletSpeedMult = 1.06; bulletDamageMult = 1.04; bulletLifeMult = 1.08; bulletSizeMult = 0.97; }
+        else if (tank.classType === TankClass.TRIPLE_TANK) { bulletSpeedMult = 1.14; bulletDamageMult = 1.18; bulletLifeMult = 1.16; bulletSizeMult = 1.0; }
         else if (tank.classType === TankClass.PENTA_SHOT) { bulletSpeedMult = 1.1; bulletDamageMult = 0.88; bulletLifeMult = 1.12; bulletSizeMult = 0.85; }
         else if (tank.classType === TankClass.SPREAD_SHOT) { bulletSpeedMult = 1.2; bulletDamageMult = 0.82; bulletLifeMult = 0.96; bulletSizeMult = 0.8; }
         else if (tank.classType === TankClass.SNIPER) { bulletSpeedMult = 1.5; bulletDamageMult = 1.65; bulletLifeMult = 1.3; bulletSizeMult = 0.9; }
@@ -12669,19 +12985,18 @@ export class GameEngine {
             bulletSpeedMult = 2.1; 
         }
         else if (isHybrid) {
-            // HYBRID: no longer treated like destroyer shell spam; distinct "siege-support" bullet profile.
-            bulletSizeMult = Math.max(1.3, widthScale * 0.84);
-            bulletDamageMult = 2.75;
-            bulletLifeMult = 1.38;
-            bulletSpeedMult = 1.42;
+            // HYBRID: make the shell matter again while keeping it below full destroyer pressure.
+            bulletSizeMult = Math.max(1.42, widthScale * 0.88);
+            bulletDamageMult = 3.35;
+            bulletLifeMult = 1.6;
+            bulletSpeedMult = 1.58;
         }
         else if (isAnnihilator) { 
-            // Massive, but still slightly tucked under barrel silhouette.
-            bulletSizeMult = Math.max(1.85, widthScale * (this.sandboxConfig?.spawningEnabled ? 0.96 : 0.9)); 
-            bulletDamageMult = 9.0; 
-            // Close-mid siege cannon identity: extreme impact, shorter reach.
-            bulletLifeMult = 1.75; 
-            bulletSpeedMult = 1.62; 
+            // True siege shell: brutally heavy impact, slower cadence, much better presence.
+            bulletSizeMult = Math.max(1.95, widthScale * (this.sandboxConfig?.spawningEnabled ? 0.98 : 0.92)); 
+            bulletDamageMult = 11.2; 
+            bulletLifeMult = 2.0; 
+            bulletSpeedMult = 1.78; 
         }
         else if (tank.classType === TankClass.FLANK_GUARD) { bulletSpeedMult = 1.06; bulletDamageMult = 1.0; bulletLifeMult = 1.02; bulletSizeMult = 0.94; }
         else if (tank.classType === TankClass.TRI_ANGLE) { bulletSpeedMult = 1.18; bulletDamageMult = 0.9; bulletLifeMult = 0.94; bulletSizeMult = 0.86; }
@@ -12716,24 +13031,24 @@ export class GameEngine {
         }
         else if (isSprayer) {
             if (isSprayerCoreBarrel) {
-                bulletSizeMult = 1.34;
-                bulletDamageMult = 1.34;
-                bulletLifeMult = 1.18;
-                bulletSpeedMult = 1.08;
+                bulletSizeMult = 1.38;
+                bulletDamageMult = 1.52;
+                bulletLifeMult = 1.26;
+                bulletSpeedMult = 1.12;
             } else {
-                bulletSizeMult = 0.92;
-                bulletDamageMult = 0.74;
-                bulletLifeMult = 0.88;
-                bulletSpeedMult = 1.2;
+                bulletSizeMult = 0.94;
+                bulletDamageMult = 0.84;
+                bulletLifeMult = 0.96;
+                bulletSpeedMult = 1.24;
             }
         }
         else if (tank.classType === TankClass.GUNNER || tank.classType === TankClass.AUTO_GUNNER) {
-            bulletSizeMult = tank.classType === TankClass.GUNNER ? 0.86 : 0.72;
-            bulletDamageMult = tank.classType === TankClass.GUNNER ? 0.92 : 0.82;
-            bulletSpeedMult = tank.classType === TankClass.GUNNER ? 1.74 : 1.82;
-            bulletLifeMult = tank.classType === TankClass.GUNNER ? 1.36 : 1.24;
+            bulletSizeMult = tank.classType === TankClass.GUNNER ? 0.9 : 0.78;
+            bulletDamageMult = tank.classType === TankClass.GUNNER ? 1.06 : 0.98;
+            bulletSpeedMult = tank.classType === TankClass.GUNNER ? 1.82 : 1.94;
+            bulletLifeMult = tank.classType === TankClass.GUNNER ? 1.5 : 1.4;
         }
-        else if (tank.classType === TankClass.STREAMLINER) { bulletDamageMult = 0.58; bulletSizeMult = 0.62; bulletSpeedMult = 1.95; bulletLifeMult = 1.08; }
+        else if (tank.classType === TankClass.STREAMLINER) { bulletDamageMult = 0.74; bulletSizeMult = 0.68; bulletSpeedMult = 2.08; bulletLifeMult = 1.22; }
 
         if (tank instanceof DominionTank) {
             const tuning = this.getDominionProjectileTuning(tank);
@@ -12814,9 +13129,19 @@ export class GameEngine {
             b.health = b.maxHealth;
         }
 
+        if (isHybrid) {
+            b.mass = Math.max(b.mass, 220);
+            b.maxHealth *= 1.12;
+            b.health = b.maxHealth;
+            b.damage *= 1.04;
+        }
+
         if (isAnnihilator) {
-            b.mass = 500; 
-            b.friction = 0.99; 
+            b.mass = 575; 
+            b.friction = 0.992; 
+            b.maxHealth *= 1.16;
+            b.health = b.maxHealth;
+            b.damage *= 1.08;
         }
 
         this.entities.push(b);
@@ -12912,7 +13237,7 @@ export class GameEngine {
 
         let recoilPower = 0.12; 
         if (isAnnihilator) {
-            recoilPower = 1.25; // EXTREMELY NERFED recoil for stabilization control
+            recoilPower = 1.85;
         } else if (isDestroyer) {
             recoilPower = 4.2; 
         } else if (tank.classType === TankClass.STREAMLINER) {
@@ -12930,7 +13255,7 @@ export class GameEngine {
             tank.vel = Vector.add(tank.vel, Vector.mult(forward, recoilPower * recoilComp));
         }
 
-        const annihilatorReloadNerf = isAnnihilator ? 1.6 : 1.0;
+        const annihilatorReloadNerf = isAnnihilator ? 1.34 : 1.0;
         let cooldownVal = Math.max(
             this.getClassMinCooldown(tank.classType),
             baseReloadTimeMs * delayMultiplier * annihilatorReloadNerf
@@ -13092,7 +13417,8 @@ export class GameEngine {
       }
 
       if (tank.type === EntityType.ELITE_TANK) {
-        effectiveSpeed = Math.min(effectiveSpeed, ELITE_TANK_SPEED_CAP);
+        // Keep elite bosses on a basic-bot movement profile so their threat comes from kit, not raw chase speed.
+        effectiveSpeed = ELITE_TANK_BASELINE_SPEED;
       }
 
       if (isRamClass) {
@@ -13212,12 +13538,39 @@ export class GameEngine {
     return (this.botChatCooldowns.get(botId) ?? 0) <= this.elapsedMs;
   }
 
+  private splitBotChatWords(text: string): string[] {
+    return text
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  private getBotChatRevealState(chat: ActiveBotChat): {
+    typing: boolean;
+    revealedWordCount: number;
+    totalWords: number;
+    displayText: string;
+  } {
+    const totalWords = Math.max(1, chat.words.length);
+    const elapsed = Math.max(0, this.elapsedMs - chat.createdAt);
+    const revealedWordCount = totalWords <= 1
+      ? 1
+      : Math.max(1, Math.min(totalWords, 1 + Math.floor(elapsed / Math.max(1, chat.wordDelayMs))));
+    const typing = revealedWordCount < totalWords;
+    const baseText = chat.words.slice(0, revealedWordCount).join(' ');
+    const displayText = typing && baseText.length > 0 && (Math.floor(this.elapsedMs / 180) % 2) === 0
+      ? `${baseText} _`
+      : baseText;
+    return { typing, revealedWordCount, totalWords, displayText };
+  }
+
   private queueBotChat(
     bot: Tank,
     category: BotChatCategory,
     options?: {
       text?: string;
       typingMs?: number;
+      wordDelayMs?: number;
       visibleMs?: number;
       cooldownMs?: number;
       persistAfterDeath?: boolean;
@@ -13234,7 +13587,11 @@ export class GameEngine {
     if (!this.canBotSpeak(bot.id, cooldownMs)) return null;
 
     const text = options?.text ?? this.resolveBotChatLine(category, bot);
-    const typingMs = Math.max(650, options?.typingMs ?? 1100);
+    const words = this.splitBotChatWords(text);
+    const totalWords = Math.max(1, words.length);
+    const fallbackTypingMs = Math.max(650, options?.typingMs ?? 1100);
+    const wordDelayMs = Math.max(90, Math.round(options?.wordDelayMs ?? (totalWords > 1 ? fallbackTypingMs / (totalWords - 1) : fallbackTypingMs)));
+    const typingMs = totalWords > 1 ? wordDelayMs * (totalWords - 1) : Math.max(240, Math.round(wordDelayMs * 0.7));
     const visibleMs = Math.max(700, options?.visibleMs ?? 1700);
     const createdAt = this.elapsedMs;
     const typingUntil = createdAt + typingMs;
@@ -13252,6 +13609,10 @@ export class GameEngine {
       typingUntil,
       visibleUntil,
       expiresAt,
+      words,
+      wordDelayMs,
+      lastBlipWordCount: 0,
+      onScreen: this.isOnScreen(bot.pos, bot.radius + 28),
       worldPos: { x: bot.pos.x, y: bot.pos.y - bot.radius - 34 },
       accentColor: this.getBotChatAccent(bot.team, category),
       persistAfterDeath: !!options?.persistAfterDeath,
@@ -13264,14 +13625,7 @@ export class GameEngine {
 
   private getRenderedBotChats(): BotChatBubble[] {
     return this.botChats.map((chat) => {
-      const typing = this.elapsedMs < chat.typingUntil;
-      const revealProgress = typing
-        ? Math.max(0, Math.min(1, (this.elapsedMs - chat.createdAt) / Math.max(1, chat.typingUntil - chat.createdAt)))
-        : 1;
-      const revealChars = Math.max(0, Math.floor(chat.text.length * revealProgress));
-      const displayText = typing
-        ? `${chat.text.slice(0, revealChars)}${(Math.floor(this.elapsedMs / 180) % 2) === 0 ? '_' : ''}`
-        : chat.text;
+      const reveal = this.getBotChatRevealState(chat);
       const fadeIn = Math.max(0, Math.min(1, (this.elapsedMs - chat.createdAt) / 180));
       const fadeOut = chat.visibleUntil < this.elapsedMs
         ? 1 - Math.max(0, Math.min(1, (this.elapsedMs - chat.visibleUntil) / Math.max(1, chat.expiresAt - chat.visibleUntil)))
@@ -13285,8 +13639,11 @@ export class GameEngine {
         team: chat.team,
         category: chat.category,
         text: chat.text,
-        displayText,
-        typing,
+        displayText: reveal.displayText,
+        typing: reveal.typing,
+        revealedWordCount: reveal.revealedWordCount,
+        totalWords: reveal.totalWords,
+        onScreen: chat.onScreen,
         opacity: Math.max(0, Math.min(1, fadeIn * fadeOut)),
         worldPos: chat.worldPos,
         accentColor: chat.accentColor,
@@ -13302,10 +13659,26 @@ export class GameEngine {
       const speaker = this.entities.find((entity) => entity.id === chat.botId) as Tank | undefined;
       if (speaker && !speaker.isDead) {
         chat.worldPos = { x: speaker.pos.x, y: speaker.pos.y - speaker.radius - 34 };
+        chat.onScreen = this.isOnScreen(speaker.pos, speaker.radius + 28);
       } else if (!chat.persistAfterDeath) {
         continue;
+      } else {
+        chat.onScreen = this.isOnScreen(chat.worldPos, 120);
       }
-      if (!chat.persistAfterDeath && !this.isOnScreen(chat.worldPos, 220)) continue;
+
+      const reveal = this.getBotChatRevealState(chat);
+      if (reveal.revealedWordCount > chat.lastBlipWordCount) {
+        if (chat.onScreen) {
+          const spatial = this.getAudioSpatialOptions(chat.worldPos, false);
+          const voiceKey = this.getBotChatVoiceKey(speaker ?? this.player);
+          const blipsToPlay = Math.min(2, reveal.revealedWordCount - chat.lastBlipWordCount);
+          for (let blip = 0; blip < blipsToPlay; blip++) {
+            this.sound.playDialogueBlip(spatial, voiceKey as 'default' | 'support' | 'sniper' | 'rusher' | 'boss');
+          }
+        }
+        chat.lastBlipWordCount = reveal.revealedWordCount;
+      }
+
       next.push(chat);
     }
     this.botChats = next;
@@ -13381,21 +13754,61 @@ export class GameEngine {
 
   private resolveTankOwner(source: Entity | null | undefined): Tank | null {
     if (!source) return null;
-    if (source.type === EntityType.PLAYER || source.type === EntityType.ENEMY) return source as Tank;
+    if (source.type === EntityType.PLAYER || source.type === EntityType.ENEMY || source.type === EntityType.ELITE_TANK) return source as Tank;
     if (source.type === EntityType.BULLET) {
       const ownerId = (source as Bullet).ownerId;
       const owner = this.entities.find((entity) => entity.id === ownerId);
-      return owner && (owner.type === EntityType.PLAYER || owner.type === EntityType.ENEMY) ? owner as Tank : null;
+      return owner && (owner.type === EntityType.PLAYER || owner.type === EntityType.ENEMY || owner.type === EntityType.ELITE_TANK) ? owner as Tank : null;
     }
     if (source.type === EntityType.DRONE || source.type === EntityType.MINI_TANK) {
       const owner = (source as Drone | MiniTank).owner;
-      return owner && (owner.type === EntityType.PLAYER || owner.type === EntityType.ENEMY) ? owner : null;
+      return owner && (owner.type === EntityType.PLAYER || owner.type === EntityType.ENEMY || owner.type === EntityType.ELITE_TANK) ? owner : null;
     }
     return null;
   }
 
+  private rememberPlayerKiller(killer: Entity | null): void {
+    const killerTank = this.resolveTankOwner(killer);
+    this.playerDeathKillerRef = {
+      killerEntityId: killer?.id ?? null,
+      killerSpectateTargetId: killerTank?.id ?? null,
+      fallbackName: killerTank?.name || killer?.name || 'Unknown',
+      fallbackTeam: killerTank?.team ?? killer?.team ?? Team.NONE,
+      fallbackClassType: killerTank?.classType ?? null,
+      fallbackLevel: killerTank?.level ?? null,
+    };
+  }
+
+  private getDeathKillerSnapshot(): DeathKillerSnapshot | null {
+    if (!this.player.isDead || !this.playerDeathKillerRef) return null;
+
+    const ref = this.playerDeathKillerRef;
+    const trackedId = ref.killerSpectateTargetId ?? ref.killerEntityId;
+    const entity = trackedId === null ? null : this.entities.find((candidate) => candidate.id === trackedId) ?? null;
+    const tankLike = entity instanceof Tank ? entity : null;
+    const canSpectate = !!tankLike && tankLike.isBot && !tankLike.isDead;
+
+    return {
+      entityId: entity?.id ?? ref.killerEntityId,
+      spectateTargetId: canSpectate ? tankLike!.id : null,
+      name: tankLike?.name || entity?.name || ref.fallbackName,
+      classType: tankLike?.classType ?? ref.fallbackClassType,
+      team: tankLike?.team ?? entity?.team ?? ref.fallbackTeam,
+      level: tankLike?.level ?? ref.fallbackLevel,
+      score: tankLike?.score ?? null,
+      health: tankLike?.displayHealth ?? tankLike?.health ?? null,
+      maxHealth: tankLike?.maxHealth ?? null,
+      shield: tankLike?.shield ?? null,
+      maxShield: tankLike?.maxShield ?? null,
+      isBot: !!tankLike?.isBot,
+      isAlive: !!entity && !entity.isDead,
+      canSpectate,
+    };
+  }
+
   private beginPlayerDeathPresentation(killer: Entity | null): void {
     const killerTank = this.resolveTankOwner(killer);
+    this.rememberPlayerKiller(killer);
     const killerIsBot = !!killerTank && killerTank.isBot;
     const killerIsEliteStyle = !!killerTank && (killerTank.isTransformed || this.isBossClass(killerTank.classType));
     const canTaunt =
@@ -13418,6 +13831,8 @@ export class GameEngine {
           completeAt: this.elapsedMs,
           fadeSeconds: 0.18,
           killerBotId: killerTank.id,
+          killerEntityId: killer?.id ?? killerTank.id,
+          killerSpectateTargetId: killerTank.id,
         };
         return;
       }
@@ -13429,6 +13844,8 @@ export class GameEngine {
         completeAt: this.elapsedMs + BOT_DEATH_TAUNT_DELAY_MS,
         fadeSeconds: BOT_DEATH_TAUNT_FADE_MS / 1000,
         killerBotId: killerTank.id,
+        killerEntityId: killer?.id ?? killerTank.id,
+        killerSpectateTargetId: killerTank.id,
       };
       return;
     }
@@ -13440,6 +13857,8 @@ export class GameEngine {
       completeAt: this.elapsedMs,
       fadeSeconds: 0.18,
       killerBotId: killerTank?.id ?? null,
+      killerEntityId: killer?.id ?? null,
+      killerSpectateTargetId: killerTank?.id ?? null,
     };
   }
 
@@ -13847,16 +14266,23 @@ export class GameEngine {
                  
                 if (a.type === EntityType.BULLET && (a as Bullet).ownerId === b.id) continue;
                 if (b.type === EntityType.BULLET && (b as Bullet).ownerId === a.id) continue;
-                
+                 
                 const aIsSummon = a.type === EntityType.DRONE || a.type === EntityType.MINI_TANK;
                 const bIsSummon = b.type === EntityType.DRONE || b.type === EntityType.MINI_TANK;
+                const aIsBullet = a.type === EntityType.BULLET;
+                const bIsBullet = b.type === EntityType.BULLET;
 
                 if (aIsSummon && bIsSummon) {
                     const ownerA = (a as Drone | MiniTank).owner;
                     const ownerB = (b as Drone | MiniTank).owner;
                     if (ownerA.id === ownerB.id) continue;
                 }
-                
+
+                // Let a tank's own bullets pass through its own drones/minitanks.
+                // This fixes Hybrid destroyer shells getting clipped by Hybrid support drones.
+                if (aIsBullet && bIsSummon && (a as Bullet).ownerId === (b as Drone | MiniTank).owner.id) continue;
+                if (bIsBullet && aIsSummon && (b as Bullet).ownerId === (a as Drone | MiniTank).owner.id) continue;
+                 
                 if (aIsSummon && b.id === (a as Drone | MiniTank).owner.id) continue;
                 if (bIsSummon && a.id === (b as Drone | MiniTank).owner.id) continue;
 
@@ -13872,9 +14298,19 @@ export class GameEngine {
          (((a as Bullet).team !== Team.NONE) && (a as Bullet).team === (b as Bullet).team));
      if (friendlyBulletPair) return;
      const dir = Vector.normalize(Vector.sub(a.pos, b.pos)), distVal = Vector.dist(a.pos, b.pos), overlap = (a.radius + b.radius) - distVal;
+     const aIsShape = a.type === EntityType.SHAPE;
+     const bIsShape = b.type === EntityType.SHAPE;
+     const aIsProjectileLike = a.type === EntityType.BULLET || a.type === EntityType.DRONE || a.type === EntityType.MINI_TANK;
+     const bIsProjectileLike = b.type === EntityType.BULLET || b.type === EntityType.DRONE || b.type === EntityType.MINI_TANK;
+     const passThroughShapeCollision = (aIsProjectileLike && bIsShape) || (bIsProjectileLike && aIsShape);
      let ratioA = 0.5, ratioB = 0.5, pcf = 1.0; 
      if (a.type === EntityType.BULLET || b.type === EntityType.BULLET) pcf = 0.05; 
      if (a.type === EntityType.DRONE || b.type === EntityType.DRONE || a.type === EntityType.MINI_TANK || b.type === EntityType.MINI_TANK) pcf = 0.2;
+     if (passThroughShapeCollision) {
+         ratioA = 0;
+         ratioB = 0;
+         pcf = 0;
+     }
      if (a.type === EntityType.BOSS || b.type === EntityType.BOSS || a.type === EntityType.DUMMY || b.type === EntityType.DUMMY) { if (a.type === EntityType.BOSS || a.type === EntityType.DUMMY) { ratioA = 0.0; ratioB = 1.0; } else { ratioA = 1.0; ratioB = 0.0; } }
      else if (a.type === EntityType.GUARDIAN || b.type === EntityType.GUARDIAN) { if (a.type === EntityType.GUARDIAN && b.type !== EntityType.GUARDIAN) { ratioA = 0.05; ratioB = 1.0; } else if (b.type === EntityType.GUARDIAN && a.type !== EntityType.GUARDIAN) { ratioA = 1.0; ratioB = 0.05; } }
      else if (a.type === EntityType.BULLET && b.type !== EntityType.BULLET) { ratioA = 0.01; ratioB = 0.99; }
@@ -13904,6 +14340,11 @@ export class GameEngine {
 
       const filterDamage = (victim: Entity, killer: Entity, baseDmg: number): number => {
           let dmg = baseDmg;
+          const killerTankOwner = this.resolveTankOwner(killer);
+          const killerIsRebirthBossSource =
+              !!killerTankOwner &&
+              killerTankOwner.isTransformed &&
+              this.isBossClass(killerTankOwner.classType);
           if (victim.type === EntityType.DRONE || victim.type === EntityType.MINI_TANK) {
               const victimOwnerId = (victim as Drone | MiniTank).owner.id;
               const killerOwnerId = resolveOwnerId(killer);
@@ -13943,18 +14384,35 @@ export class GameEngine {
              }
          }
 
-         if (victim.type === EntityType.PLAYER && this.sandboxConfig.invincible) return 0;
+          if (victim.type === EntityType.PLAYER && this.sandboxConfig.invincible) return 0;
 
-         // Dynamic projectile durability scaling against massive entities.
-         if (killer.type === EntityType.BULLET && (victim.type === EntityType.SHAPE || victim.type === EntityType.BOSS || victim.type === EntityType.CRASHER)) {
-             const bullet = killer as Bullet;
-             const highMass = victim.maxHealth >= 180;
-             if (highMass) {
-                 const durabilityFactor = Math.min(1.0, bullet.health / Math.max(1, bullet.maxHealth));
+          if ((victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY) && killerIsRebirthBossSource) {
+              const perHitCap =
+                  killer.type === EntityType.BULLET ? victim.maxHealth * 0.38 :
+                  (killer.type === EntityType.DRONE || killer.type === EntityType.MINI_TANK) ? victim.maxHealth * 0.24 :
+                  victim.maxHealth * 0.18;
+              dmg = Math.min(dmg, perHitCap);
+          }
+
+          // Dynamic projectile durability scaling against massive entities.
+          if (killer.type === EntityType.BULLET && (victim.type === EntityType.SHAPE || victim.type === EntityType.BOSS || victim.type === EntityType.CRASHER)) {
+              const bullet = killer as Bullet;
+              const highMass = victim.maxHealth >= 180;
+              if (highMass) {
+                  const durabilityFactor = Math.min(1.0, bullet.health / Math.max(1, bullet.maxHealth));
                  const massFactor = Math.min(0.65, Math.max(0, (victim.maxHealth - 180) / 900));
-                 dmg *= 1 + massFactor + durabilityFactor * 0.3;
-             }
-         }
+                  dmg *= 1 + massFactor + durabilityFactor * 0.3;
+              }
+          }
+
+          if (killer.type === EntityType.BULLET && (killer as Bullet).bulletType === 'TRAP') {
+              const trap = killer as Bullet;
+              const anchoredBonus = trap.trapAnchored ? 1.14 : 1.0;
+              if (victim.type === EntityType.SHAPE) return dmg * 1.75 * anchoredBonus;
+              if (victim.type === EntityType.CRASHER) return dmg * 1.45 * anchoredBonus;
+              if (victim.type === EntityType.BOSS || victim.type === EntityType.GUARDIAN) return dmg * 1.18 * anchoredBonus;
+              if (victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY || victim.type === EntityType.ELITE_TANK) return dmg * 1.08 * anchoredBonus;
+          }
 
          if (killer.type === EntityType.BULLET && (killer as Bullet).bulletType === 'HEAL') {
              const healBullet = killer as Bullet;
@@ -13971,60 +14429,200 @@ export class GameEngine {
       dmgB = filterDamage(b, a, dmgB);
 
       const applyPenetrationPassThrough = (
-          bullet: Bullet,
+          attacker: Entity,
           victim: Entity,
-          incomingToBullet: number,
+          incomingToAttacker: number,
           outgoingToVictim: number
-      ): { bulletIncoming: number; victimOutgoing: number } => {
-          if (!(victim.type === EntityType.SHAPE || victim.type === EntityType.CRASHER || victim.type === EntityType.BOSS)) {
-              return { bulletIncoming: incomingToBullet, victimOutgoing: outgoingToVictim };
+      ): { attackerIncoming: number; victimOutgoing: number } => {
+          if (victim.type !== EntityType.SHAPE) {
+              return { attackerIncoming: incomingToAttacker, victimOutgoing: outgoingToVictim };
           }
 
-          const owner = this.entities.find((e) => e.id === bullet.ownerId);
+          let owner: Tank | null = null;
+          if (attacker.type === EntityType.BULLET) {
+              const maybeOwner = this.entities.find((e) => e.id === (attacker as Bullet).ownerId);
+              owner = maybeOwner instanceof Tank ? maybeOwner : null;
+          } else if (attacker.type === EntityType.DRONE || attacker.type === EntityType.MINI_TANK) {
+              owner = (attacker as Drone | MiniTank).owner;
+          }
           if (!(owner instanceof Tank)) {
-              return { bulletIncoming: incomingToBullet, victimOutgoing: outgoingToVictim };
+              return { attackerIncoming: incomingToAttacker, victimOutgoing: outgoingToVictim };
           }
 
           const penStat = Math.max(0, owner.stats[StatType.BULLET_PENETRATION] || 0);
-          const sizeFactor = Math.min(1, Math.max(0, (bullet.radius - 5.5) / 9.5));
+          const durabilityRatio = Math.min(1.25, Math.max(0.12, attacker.health / Math.max(1, attacker.maxHealth)));
+          const sizeFactor = Math.min(1, Math.max(0, (attacker.radius - 5.5) / 10.5));
+          const shapeResistance = Math.min(0.4, Math.max(0, (victim.maxHealth - 18) / 220));
+          const sandboxBonus = this.gameMode === GameMode.SANDBOX
+              ? Math.max(0, ((this.sandboxConfig.projectileDurabilityScale || 1) - 1) * 0.06)
+              : 0;
 
           let classBias = 0;
-          if (bullet.ownerClass === TankClass.DESTROYER || bullet.ownerClass === TankClass.ANNIHILATOR) classBias = 0.055;
-          else if (bullet.ownerClass === TankClass.SPREAD_SHOT || bullet.ownerClass === TankClass.PENTA_SHOT) classBias = 0.04;
-          else if (bullet.ownerClass === TankClass.HYBRID) classBias = 0.03;
+          if (owner.classType === TankClass.DESTROYER || owner.classType === TankClass.ANNIHILATOR) classBias = 0.08;
+          else if (owner.classType === TankClass.HYBRID) classBias = 0.06;
+          else if (owner.classType === TankClass.OVERSEER || owner.classType === TankClass.OVERLORD || owner.classType === TankClass.MANAGER) classBias = 0.075;
+          else if (attacker.type === EntityType.BULLET && (attacker as Bullet).bulletType === 'TRAP') classBias = 0.11;
+          else if (owner.classType === TankClass.SPREAD_SHOT || owner.classType === TankClass.PENTA_SHOT) classBias = 0.035;
 
-          // Persist bullets slightly through shapes/crashers/bosses based on penetration.
-          const passThrough = Math.min(0.42, 0.07 + penStat * 0.022 + sizeFactor * 0.08 + classBias);
-
-          // Small effective damage gain from longer overlap/lifespan, mirroring classic diep feel.
-          const victimBoost = Math.min(0.14, 0.015 + penStat * 0.008 + sizeFactor * 0.03 + classBias * 0.55);
+          const passThrough = Math.min(0.74, Math.max(
+              0.18,
+              0.2 + penStat * 0.028 + sizeFactor * 0.11 + durabilityRatio * 0.16 + classBias + sandboxBonus - shapeResistance
+          ));
+          const victimBoost = Math.min(
+              0.18,
+              Math.max(0.025, 0.02 + penStat * 0.008 + sizeFactor * 0.03 + durabilityRatio * 0.025 + classBias * 0.5 - shapeResistance * 0.12)
+          );
 
           return {
-              bulletIncoming: incomingToBullet * (1 - passThrough),
+              attackerIncoming: incomingToAttacker * (1 - passThrough),
               victimOutgoing: outgoingToVictim * (1 + victimBoost),
           };
       };
 
-      if (a.type === EntityType.BULLET && b.type !== EntityType.BULLET) {
-          const tuned = applyPenetrationPassThrough(a as Bullet, b, dmgA, dmgB);
-          dmgA = tuned.bulletIncoming;
+      if (aIsProjectileLike && !bIsProjectileLike) {
+          const tuned = applyPenetrationPassThrough(a, b, dmgA, dmgB);
+          dmgA = tuned.attackerIncoming;
           dmgB = tuned.victimOutgoing;
-      } else if (b.type === EntityType.BULLET && a.type !== EntityType.BULLET) {
-          const tuned = applyPenetrationPassThrough(b as Bullet, a, dmgB, dmgA);
-          dmgB = tuned.bulletIncoming;
+      } else if (bIsProjectileLike && !aIsProjectileLike) {
+          const tuned = applyPenetrationPassThrough(b, a, dmgB, dmgA);
+          dmgB = tuned.attackerIncoming;
           dmgA = tuned.victimOutgoing;
       }
 
-      // Ram balance: at extreme speed, ram classes are still dangerous,
-      // but they lose some collision forgiveness and take more punish damage.
-      if (a.type !== EntityType.BULLET && b.type !== EntityType.BULLET) {
-          if (isRamClass(a) && aSpeed > 7.2) {
-              dmgB *= 0.88;
-              dmgA *= 1.1;
+      const isTankLikeBodyTarget = (entity: Entity) =>
+          entity.type === EntityType.PLAYER ||
+          entity.type === EntityType.ENEMY ||
+          entity.type === EntityType.ELITE_TANK ||
+          entity.type === EntityType.BOSS ||
+          entity.type === EntityType.GUARDIAN;
+
+      const getBodyDamageBias = (entity: Entity): number => {
+          if (entity.type === EntityType.DRONE || entity.type === EntityType.MINI_TANK) return 0.58;
+          if (entity.type === EntityType.SHAPE) return 0.9;
+          if (entity.type === EntityType.CRASHER) return 1.0;
+          if (entity.type === EntityType.BOSS || entity.type === EntityType.GUARDIAN) return 0.94;
+          if (entity.type !== EntityType.PLAYER && entity.type !== EntityType.ENEMY && entity.type !== EntityType.ELITE_TANK) return 0.82;
+
+          const tank = entity as Tank;
+          if (tank.classType === TankClass.TRI_ANGLE || tank.classType === TankClass.BOOSTER || tank.classType === TankClass.FIGHTER) return 1.02;
+          if (tank.classType === TankClass.PACIFIST_TRAINEE || tank.classType === TankClass.NURSE || tank.classType === TankClass.DOCTOR || tank.classType === TankClass.PLAGUE_DOCTOR) return 0.72;
+          if (tank.classType === TankClass.DRAINER_TRAINEE || tank.classType === TankClass.LEECH || tank.classType === TankClass.VAMPIRE || tank.classType === TankClass.REAPER) return 0.9;
+          return 1.0;
+      };
+
+      const getBodyDamageCap = (attacker: Entity, victim: Entity): number => {
+          let cap =
+              victim.type === EntityType.BOSS || victim.type === EntityType.GUARDIAN ? victim.maxHealth * 0.0024 :
+              victim.type === EntityType.ELITE_TANK ? victim.maxHealth * 0.045 :
+              victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY ? victim.maxHealth * 0.1 :
+              victim.type === EntityType.CRASHER ? victim.maxHealth * 0.12 :
+              victim.type === EntityType.SHAPE ? victim.maxHealth * 0.18 :
+              victim.maxHealth * 0.12;
+
+          if (attacker.type === EntityType.PLAYER && this.sandboxConfig.invincible && isTankLikeBodyTarget(victim)) {
+              cap = Math.min(cap, victim.maxHealth * (victim.type === EntityType.BOSS || victim.type === EntityType.GUARDIAN ? 0.0015 : 0.035));
           }
-          if (isRamClass(b) && bSpeed > 7.2) {
-              dmgA *= 0.88;
-              dmgB *= 1.1;
+
+          if (attacker.type === EntityType.PLAYER || attacker.type === EntityType.ENEMY || attacker.type === EntityType.ELITE_TANK) {
+              const tank = attacker as Tank;
+              if (isRamClass(tank) && isTankLikeBodyTarget(victim)) {
+                  const ramCap =
+                      victim.type === EntityType.BOSS || victim.type === EntityType.GUARDIAN ? victim.maxHealth * 0.002 :
+                      victim.type === EntityType.ELITE_TANK ? victim.maxHealth * 0.03 :
+                      victim.maxHealth * 0.085;
+                  cap = Math.min(cap, ramCap);
+              }
+          }
+
+          return cap;
+      };
+
+      const computeBodyCollisionDamage = (attacker: Entity, victim: Entity, baseDamage: number, attackerSpeed: number, victimSpeed: number): number => {
+          const speedFactor = Vector.clamp(0.24 + attackerSpeed * 0.085 + Math.max(0, attackerSpeed - victimSpeed) * 0.03, 0.28, 1.02);
+          const massFactor = Vector.clamp(Math.pow(attacker.mass / Math.max(1, victim.mass), 0.24), 0.66, 1.12);
+          const durabilityFactor = Vector.clamp(attacker.health / Math.max(1, attacker.maxHealth), 0.4, 1.0);
+          const raw = baseDamage * 0.14 * speedFactor * massFactor * durabilityFactor * getBodyDamageBias(attacker);
+          return Math.min(raw, getBodyDamageCap(attacker, victim));
+      };
+
+      const computeDroneCollisionDamage = (attacker: Drone, victim: Entity, baseDamage: number, attackerSpeed: number, victimSpeed: number): number => {
+          const owner = attacker.owner;
+          const penStat = Math.max(0, owner.stats[StatType.BULLET_PENETRATION] || 0);
+          const dmgStat = Math.max(0, owner.stats[StatType.BULLET_DAMAGE] || 0);
+          const speedStat = Math.max(0, owner.stats[StatType.BULLET_SPEED] || 0);
+          const durabilityFactor = Vector.clamp(attacker.health / Math.max(1, attacker.maxHealth), 0.45, 1.05);
+          const chaseFactor = Vector.clamp(0.9 + attackerSpeed * 0.05 + Math.max(0, attackerSpeed - victimSpeed) * 0.028, 0.82, 1.3);
+          const statFactor = 1 + penStat * 0.04 + dmgStat * 0.025 + speedStat * 0.012;
+
+          let scalar = 0.42;
+          let cap = victim.maxHealth * 0.12;
+          if (victim.type === EntityType.SHAPE) {
+              scalar = 0.94;
+              cap = victim.maxHealth * 0.32;
+          } else if (victim.type === EntityType.CRASHER) {
+              scalar = 0.7;
+              cap = victim.maxHealth * 0.2;
+          } else if (victim.type === EntityType.DRONE || victim.type === EntityType.MINI_TANK) {
+              scalar = 0.48;
+              cap = victim.maxHealth * 0.2;
+          } else if (victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY) {
+              scalar = 0.36;
+              cap = victim.maxHealth * 0.1;
+          } else if (victim.type === EntityType.ELITE_TANK) {
+              scalar = 0.3;
+              cap = victim.maxHealth * 0.07;
+          } else if (victim.type === EntityType.BOSS || victim.type === EntityType.GUARDIAN) {
+              scalar = 0.18;
+              cap = victim.maxHealth * 0.016;
+          }
+
+          const raw = baseDamage * scalar * chaseFactor * durabilityFactor * statFactor;
+          return Math.min(raw, cap);
+      };
+
+      // Rework body collisions so they are bursty and readable instead of multi-frame deletion beams.
+      if (a.type !== EntityType.BULLET && b.type !== EntityType.BULLET) {
+          const pairKey = a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
+          const now = this.elapsedMs;
+          const involvesHeavyContact =
+              a.type === EntityType.BOSS ||
+              b.type === EntityType.BOSS ||
+              a.type === EntityType.GUARDIAN ||
+              b.type === EntityType.GUARDIAN ||
+              ((a.type === EntityType.PLAYER || a.type === EntityType.ENEMY || a.type === EntityType.ELITE_TANK) && isRamClass(a as Tank)) ||
+              ((b.type === EntityType.PLAYER || b.type === EntityType.ENEMY || b.type === EntityType.ELITE_TANK) && isRamClass(b as Tank));
+          const cooldownMs = involvesHeavyContact ? 180 : 120;
+          const lastAt = this.recentBodyCollisionAt.get(pairKey) ?? -Infinity;
+          const coolingDown = now - lastAt < cooldownMs;
+
+          if (coolingDown) {
+              dmgA = 0;
+              dmgB = 0;
+          } else {
+              this.recentBodyCollisionAt.set(pairKey, now);
+              if (this.recentBodyCollisionAt.size > 2500) {
+                  for (const [key, stamp] of this.recentBodyCollisionAt) {
+                      if (now - stamp > 1500) this.recentBodyCollisionAt.delete(key);
+                  }
+              }
+
+              const bodyDmgToA = b.type === EntityType.DRONE
+                  ? computeDroneCollisionDamage(b as Drone, a, dmgA, bSpeed, aSpeed)
+                  : computeBodyCollisionDamage(b, a, dmgA, bSpeed, aSpeed);
+              const bodyDmgToB = a.type === EntityType.DRONE
+                  ? computeDroneCollisionDamage(a as Drone, b, dmgB, aSpeed, bSpeed)
+                  : computeBodyCollisionDamage(a, b, dmgB, aSpeed, bSpeed);
+              dmgA = bodyDmgToA;
+              dmgB = bodyDmgToB;
+
+              if (isRamClass(a) && aSpeed > 7.2) {
+                  dmgB *= 1.02;
+                  dmgA *= 1.01;
+              }
+              if (isRamClass(b) && bSpeed > 7.2) {
+                  dmgA *= 1.02;
+                  dmgB *= 1.01;
+              }
           }
       }
 
@@ -14309,10 +14907,11 @@ export class GameEngine {
       if (victim.type === EntityType.BOSS) {
           const vBoss = victim as Boss;
           this.addNotification(`${vBoss.name} DESTROYED`, "#22d3ee");
+          const isBossRushBoss = !!(vBoss as any).__bossRushBoss;
           let totalBossDamage = 0;
           vBoss.damageDealtBy.forEach((value) => { totalBossDamage += value; });
 
-          if (totalBossDamage > 0) {
+          if (totalBossDamage > 0 && !isBossRushBoss) {
               type BossDamageContributor = { tank: Tank; damage: number };
               let bestContributor: BossDamageContributor | null = null;
 
@@ -14627,6 +15226,9 @@ export class GameEngine {
 
     this.ctx.translate(window.innerWidth / 2, window.innerHeight / 2); this.ctx.scale(this.cameraZoom, this.cameraZoom); this.ctx.translate(-this.cameraPos.x, -this.cameraPos.y);
     this.drawGrid(this.ctx); 
+    if (this.gameMode === GameMode.BOSS_RUSH) {
+      this.bossRushMode.renderWorld(this.ctx);
+    }
     this.ctx.strokeStyle = '#555'; this.ctx.lineWidth = 10; this.ctx.strokeRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     const visibleEntities = this.visibleEntitiesBuffer;
     visibleEntities.length = 0;
@@ -14810,7 +15412,7 @@ export class GameEngine {
           this.drawDominionZoneFields(ctx);
       }
 
-      if (!this.inVoid) {
+      if (!this.inVoid && this.gameMode !== GameMode.BOSS_RUSH) {
           this.drawPentagonNestBiome(ctx);
       }
 

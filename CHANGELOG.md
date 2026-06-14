@@ -1,18 +1,19 @@
 # VEXTOR Changelog
 
-## v1.9.2 - Sector Systems and Menu Sync
+## v1.9.2 - Sector Systems, Menu Gate, and Dominion Pass
 Date: 12/06/26
 Theme: Sectors / Sandbox / Audio / UI / AI
 
-This build turns Blood and Restoration into secondary sectors, simplifies the click-to-play flow, fixes aura and music issues, and gives Dominion a better balance and bot pass.
+This is the later v1.9.2 pass for today. It follows the earlier sector rework with the actual menu-gate cleanup, aura fixes, music rotation fix, and Dominion balance plus AI improvements that landed in the afternoon build.
 
 ### Highlights
-- Blood and Restoration now sit on top of your main class as secondary sectors instead of replacing your chassis path.
-- Level 30 opens sector choice while normal class progression continues, which removes old stat-transfer weirdness during deaths, swaps, and upgrades.
-- The click-to-play screen and menu flow were simplified and cleaned up, with audio gate, visualizer, spacing, and scrolling fixes.
-- Restoration and Blood aura visuals now show correctly after selection.
-- Menu music now rotates between tracks properly instead of sticking after one song ends.
-- Dominion no longer gets pentagon nest pressure, and Dominion bots now defend, regroup, stage, and contest objectives more intelligently.
+- Blood and Restoration remain the core progression change: they now sit on top of your main class as secondary sectors instead of replacing your chassis path.
+- Level 30 sector choice now plays more cleanly with the rest of progression, avoiding the old stat-transfer weirdness on deaths, swaps, and upgrades.
+- The click-to-play screen was simplified into a cleaner audio unlock gate, with layout, spacing, scrolling, and visualizer fixes around the menu handoff.
+- Restoration and Blood aura visuals now show correctly after selection, so those sector picks finally read properly in live play.
+- Menu music now swaps between both tracks correctly when one ends instead of stalling on a single loop.
+- Dominion no longer gets pentagon nest pressure, reducing the mode’s central imbalance.
+- Dominion bots now defend owned objectives better, regroup more often, and stop running into hopeless fights as blindly.
 
 ### Notes
 - This changelog is intentionally short for webhook safety.

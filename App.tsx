@@ -21,15 +21,7 @@ import { ClickToPlayGate } from './components/ClickToPlayGate';
 import { BackgroundMusic, BackgroundMusicVisualizerFrame } from './Background Music';
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
-
-const SUPPORT_RANK_META: Record<User['supporterRank'], { label: string; accent: string; glow: string; tone: string }> = {
-  standard: { label: 'Standard', accent: '#67e8f9', glow: 'rgba(103,232,249,0.16)', tone: 'Field access' },
-  rank1: { label: 'Sovereign', accent: '#fbbf24', glow: 'rgba(251,191,36,0.2)', tone: 'Primary resonance' },
-  rank2: { label: 'Elite', accent: '#a78bfa', glow: 'rgba(167,139,250,0.18)', tone: 'Command resonance' },
-  rank3: { label: 'Patron', accent: '#34d399', glow: 'rgba(52,211,153,0.18)', tone: 'Support resonance' },
-};
-
-const SUPPORT_OPTIONS = [5, 25, 100] as const;
+type MenuBootPhase = 'locked' | 'unlocking' | 'revealing' | 'ready';
 
 const DEFAULT_SETTINGS: GameSettings = {
     volume: 0.15,
@@ -110,8 +102,6 @@ const App: React.FC = () => {
   const selectedReleaseExportRef = useRef<HTMLTextAreaElement | null>(null);
   const fullArchiveExportRef = useRef<HTMLTextAreaElement | null>(null);
   const [showSupport, setShowSupport] = useState(false);
-  const [supportTxnBusy, setSupportTxnBusy] = useState(false);
-  const [supportTxnMsg, setSupportTxnMsg] = useState<string>('');
   const [showAchievements, setShowAchievements] = useState(false);
   
   const [newlyUnlocked, setNewlyUnlocked] = useState<Achievement[]>([]);
@@ -124,9 +114,8 @@ const App: React.FC = () => {
   const [selectedTeam, setSelectedTeam] = useState<Team>(Team.BLUE);
   const [isSpectating, setIsSpectating] = useState(false);
   const [menuMusicSnapshot, setMenuMusicSnapshot] = useState<BackgroundMusicVisualizerFrame | null>(null);
-  const [menuBootUnlocked, setMenuBootUnlocked] = useState(false);
+  const [menuBootPhase, setMenuBootPhase] = useState<MenuBootPhase>('locked');
   const [menuBootOverlayVisible, setMenuBootOverlayVisible] = useState(true);
-  const [menuBootUnlocking, setMenuBootUnlocking] = useState(false);
   const [menuMousePos, setMenuMousePos] = useState({ x: 0, y: 0 });
   const lastUnmutedVolumesRef = useRef<{ volume: number; musicVolume: number }>({
     volume: DEFAULT_SETTINGS.volume,
@@ -135,12 +124,32 @@ const App: React.FC = () => {
   const menuMusicRef = useRef<BackgroundMusic | null>(null);
   const isPlayingRef = useRef(false);
   const menuBootFadeTimeoutRef = useRef<number | null>(null);
+  const menuBootSettleTimeoutRef = useRef<number | null>(null);
+  const menuBootActivationLockRef = useRef(false);
+  const menuBootTransitionRunRef = useRef(0);
   const previousCurrencyRef = useRef<number | null>(null);
   const currencyHydratedRef = useRef(false);
+  const suppressNextCreditToastRef = useRef(false);
+  const menuBootVisualActive = menuBootPhase !== 'locked';
+  const menuBootMusicActive = menuBootPhase === 'ready';
+  const menuBootMenuVisible = menuBootPhase === 'revealing' || menuBootPhase === 'ready';
+  const menuBootUnlocking = menuBootPhase === 'unlocking';
+  const menuBootTransitioning = menuBootPhase === 'revealing';
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  const clearMenuBootTimers = useCallback(() => {
+    if (menuBootFadeTimeoutRef.current != null) {
+      window.clearTimeout(menuBootFadeTimeoutRef.current);
+      menuBootFadeTimeoutRef.current = null;
+    }
+    if (menuBootSettleTimeoutRef.current != null) {
+      window.clearTimeout(menuBootSettleTimeoutRef.current);
+      menuBootSettleTimeoutRef.current = null;
+    }
+  }, []);
 
   const silenceMenuMusic = useCallback(() => {
     const music = menuMusicRef.current;
@@ -149,38 +158,60 @@ const App: React.FC = () => {
     setMenuMusicSnapshot(music.getVisualizerFrame());
   }, []);
 
-  const unlockMenuBoot = useCallback(async () => {
-    if (menuBootUnlocked || menuBootUnlocking || isPlayingRef.current) return;
+  const primeMenuMusicSnapshot = useCallback(async () => {
+    const music = menuMusicRef.current;
+    if (!music) return null;
 
-    setMenuBootUnlocking(true);
+    let snapshot = music.getVisualizerFrame();
+    setMenuMusicSnapshot(snapshot);
+    if (!snapshot.paused) return snapshot;
+
+    for (let i = 0; i < 4; i += 1) {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      snapshot = music.getVisualizerFrame();
+      setMenuMusicSnapshot(snapshot);
+      if (!snapshot.paused) break;
+    }
+
+    return snapshot;
+  }, []);
+
+  const unlockMenuBoot = useCallback(async () => {
+    if (menuBootActivationLockRef.current || menuBootMenuVisible || isPlayingRef.current) return;
+
+    const transitionRun = menuBootTransitionRunRef.current + 1;
+    menuBootTransitionRunRef.current = transitionRun;
+    menuBootActivationLockRef.current = true;
+    setMenuBootPhase('unlocking');
     try {
       engine?.sound.enable();
       const music = menuMusicRef.current;
       if (music) {
-        try {
-          await music.resume();
-        } catch {
-          // Fail silently so the menu never gets stuck behind the unlock gate.
-        }
         setMenuMusicSnapshot(music.getVisualizerFrame());
       }
     } finally {
-      setMenuBootUnlocked(true);
-      if (menuBootFadeTimeoutRef.current != null) {
-        window.clearTimeout(menuBootFadeTimeoutRef.current);
-      }
+      if (menuBootTransitionRunRef.current !== transitionRun) return;
+
+      clearMenuBootTimers();
       menuBootFadeTimeoutRef.current = window.setTimeout(() => {
+        if (menuBootTransitionRunRef.current !== transitionRun) return;
         setMenuBootOverlayVisible(false);
+        setMenuBootPhase('revealing');
         menuBootFadeTimeoutRef.current = null;
-      }, 420);
-      setMenuBootUnlocking(false);
+      }, 2000);
+      menuBootSettleTimeoutRef.current = window.setTimeout(() => {
+        if (menuBootTransitionRunRef.current !== transitionRun) return;
+        setMenuBootPhase('ready');
+        menuBootActivationLockRef.current = false;
+        menuBootSettleTimeoutRef.current = null;
+      }, 5000);
     }
-  }, [engine, menuBootUnlocked, menuBootUnlocking]);
+  }, [clearMenuBootTimers, engine, menuBootMenuVisible]);
 
   const handleMenuBootOverlayActivate = useCallback(() => {
-    if (menuBootUnlocked || menuBootUnlocking || isPlayingRef.current) return;
+    if (menuBootActivationLockRef.current || menuBootMenuVisible || isPlayingRef.current) return;
     void unlockMenuBoot();
-  }, [menuBootUnlocked, menuBootUnlocking, unlockMenuBoot]);
+  }, [menuBootMenuVisible, unlockMenuBoot]);
 
   // Tooltip State
   const [tooltip, setTooltip] = useState<{ label: string; desc?: string; visible: boolean }>({
@@ -193,6 +224,21 @@ const App: React.FC = () => {
     const y = (menuMousePos.y / window.innerHeight - 0.5) * 2;
     return { x, y };
   }, [menuMousePos]);
+
+  const menuBootLoadProgress = useMemo(() => {
+    const energy = Math.max(0, Math.min(1, menuMusicSnapshot?.energy ?? 0.28));
+    const reactor = Math.max(0, Math.min(1, menuMusicSnapshot?.reactorPulse ?? 0.22));
+    if (menuBootPhase === 'unlocking') return Math.min(0.78, 0.18 + energy * 0.2 + reactor * 0.16);
+    if (menuBootPhase === 'revealing') return Math.min(0.99, 0.84 + energy * 0.07 + reactor * 0.05);
+    if (menuBootPhase === 'ready') return 1;
+    return 0.08;
+  }, [menuBootPhase, menuMusicSnapshot?.energy, menuMusicSnapshot?.reactorPulse]);
+
+  const menuBootLoadLabel = useMemo(() => {
+    if (menuBootPhase === 'unlocking') return 'Bootstrapping audio core and reactor telemetry';
+    if (menuBootPhase === 'revealing') return 'Finalizing command deck render and live uplink';
+    return 'Standing by';
+  }, [menuBootPhase]);
 
   const activeColor = useMemo(() => {
       if (user && user.equippedItem) {
@@ -225,18 +271,6 @@ const App: React.FC = () => {
   const selectedUpdate = useMemo<UpdateLogEntry | undefined>(() => {
     return filteredUpdateLog.find((entry) => entry.id === selectedUpdateId) ?? filteredUpdateLog[0];
   }, [filteredUpdateLog, selectedUpdateId]);
-
-  const supportRankMeta = useMemo(() => {
-    const rank = user?.supporterRank || 'standard';
-    return SUPPORT_RANK_META[rank];
-  }, [user?.supporterRank]);
-
-  const supportStatusText = useMemo(() => {
-    if (!user) return 'Sign in to track backing and activate supporter resonance.';
-    if (supportTxnBusy) return 'Processing uplink transaction...';
-    if (supportTxnMsg) return supportTxnMsg;
-    return `Live supporter standing: ${supportRankMeta.label}. Top 3 backing totals receive active skin resonance.`;
-  }, [supportRankMeta.label, supportTxnBusy, supportTxnMsg, user]);
 
   const selectedUpdateClipboardText = useMemo(() => {
     if (!selectedUpdate) return '';
@@ -318,7 +352,7 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || isPlaying || !menuBootUnlocked) return;
+    if (typeof window === 'undefined' || isPlaying || !menuBootVisualActive) return;
     let rafId = 0;
     let lastVisualTick = 0;
     const tick = (timestamp: number) => {
@@ -331,7 +365,7 @@ const App: React.FC = () => {
     };
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, [isPlaying, menuBootUnlocked]);
+  }, [isPlaying, menuBootVisualActive]);
 
   useEffect(() => {
     const music = menuMusicRef.current;
@@ -343,21 +377,23 @@ const App: React.FC = () => {
     const music = menuMusicRef.current;
     if (!music) return;
 
-    if (isPlaying || !menuBootUnlocked) {
+    if (isPlaying || !menuBootMusicActive) {
       silenceMenuMusic();
       return;
     }
 
-    music.resume().catch(() => undefined);
-  }, [isPlaying, menuBootUnlocked, silenceMenuMusic]);
+    music.resume()
+      .then(() => primeMenuMusicSnapshot())
+      .catch(() => undefined);
+  }, [isPlaying, menuBootMusicActive, primeMenuMusicSnapshot, silenceMenuMusic]);
 
   useEffect(() => {
     return () => {
-      if (menuBootFadeTimeoutRef.current != null) {
-        window.clearTimeout(menuBootFadeTimeoutRef.current);
-      }
+      menuBootTransitionRunRef.current += 1;
+      menuBootActivationLockRef.current = false;
+      clearMenuBootTimers();
     };
-  }, []);
+  }, [clearMenuBootTimers]);
 
   useEffect(() => {
     if (playerName) localStorage.setItem('vextor_pilot_name', playerName);
@@ -414,11 +450,15 @@ const App: React.FC = () => {
     const previousCurrency = previousCurrencyRef.current ?? currentCurrency;
     if (currentCurrency > previousCurrency) {
       const gain = currentCurrency - previousCurrency;
-      setCreditToast({
-        id: Date.now(),
-        amount: gain,
-        total: currentCurrency,
-      });
+      if (suppressNextCreditToastRef.current) {
+        suppressNextCreditToastRef.current = false;
+      } else {
+        setCreditToast({
+          id: Date.now(),
+          amount: gain,
+          total: currentCurrency,
+        });
+      }
     }
 
     previousCurrencyRef.current = currentCurrency;
@@ -616,6 +656,7 @@ const App: React.FC = () => {
     engine?.setAttractMode(true);
     
     if (user) {
+        suppressNextCreditToastRef.current = true;
         // Prepare session stats to add
         const sessionStats: Partial<UserStats> = {
             totalScore: stats.score,
@@ -681,21 +722,6 @@ const App: React.FC = () => {
         hideTT();
     }
   };
-
-  const handleSupportAction = useCallback(async (amount: number) => {
-    if (!user || supportTxnBusy) return;
-    setSupportTxnBusy(true);
-    setSupportTxnMsg('');
-    const res = await BackendService.addSupportContribution(amount);
-    if (res.success && res.user) {
-      const hydrated = await hydrateSupportRank(res.user);
-      setUser(hydrated);
-      setSupportTxnMsg(`Support uplink confirmed (+${amount}). Total backing: ${hydrated.supportTotal}.`);
-    } else {
-      setSupportTxnMsg(res.error || 'Support uplink failed.');
-    }
-    setSupportTxnBusy(false);
-  }, [user, supportTxnBusy]);
 
   const handleCopyUpdateLog = useCallback(async (text: string, label: string, exportRef?: React.RefObject<HTMLTextAreaElement | null>) => {
     if (!text.trim()) {
@@ -768,51 +794,78 @@ const App: React.FC = () => {
         {creditToast && (
           <motion.div
             key={creditToast.id}
-            initial={{ opacity: 0, y: -28, scale: 0.92 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -18, scale: 0.96 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 22 }}
-            className="absolute top-5 left-1/2 z-[320] -translate-x-1/2"
+            initial={{ opacity: 0, x: 24, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 18, y: 8, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 260, damping: 24 }}
+            className="pointer-events-none absolute right-4 top-4 z-[320] w-[min(92vw,360px)] sm:right-6 sm:top-6"
           >
             <div
               role="status"
               aria-live="polite"
               onClick={() => handleCreditToastClick(creditToast)}
-              className="min-w-[260px] cursor-pointer rounded-2xl border border-amber-300/35 bg-[linear-gradient(135deg,rgba(24,18,6,0.96),rgba(54,40,10,0.94))] px-4 py-3 shadow-[0_20px_60px_rgba(255,140,0,0.06)] hover:scale-[1.01] transition-transform duration-160 pointer-events-auto flex items-center gap-3"
+              className="pointer-events-auto cursor-pointer overflow-hidden rounded-[1.4rem] border border-amber-300/16 bg-[linear-gradient(145deg,rgba(7,16,28,0.96),rgba(6,12,22,0.98))] shadow-[0_24px_80px_rgba(0,0,0,0.52)] backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:border-amber-300/26"
             >
-              <div className="flex-shrink-0 scale-95">
-                <svg className="h-10 w-10 text-amber-400 drop-shadow-[0_6px_18px_rgba(255,160,50,0.12)]" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                  <circle cx="12" cy="12" r="9" fill="url(#g)" />
-                  <defs>
-                    <linearGradient id="g" x1="0" x2="1">
-                      <stop offset="0" stopColor="#FFC857" />
-                      <stop offset="1" stopColor="#FF9F1C" />
-                    </linearGradient>
-                  </defs>
-                  <path d="M12 8.5v7M9.25 11.25h5.5" stroke="#4b2e00" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </div>
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/60 to-transparent" />
+              <div className="absolute inset-y-0 left-0 w-1 bg-[linear-gradient(180deg,#f59e0b,#facc15)]" />
+              <div className="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-amber-300/10 blur-3xl" />
 
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200/70">Credit Uplink</div>
-                <motion.div className="mt-1 flex items-baseline gap-3" initial={{ scale: 0.96 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }}>
-                  <div className="text-2xl font-black tracking-tight text-amber-300">+{creditToast.amount.toLocaleString()} Credits</div>
-                  <div className="text-sm font-black text-white/60">-</div>
-                  <div className="text-sm font-black text-white/80">{creditToast.total.toLocaleString()}</div>
-                </motion.div>
-              </div>
+              <div className="relative flex items-start gap-4 px-4 py-4 sm:px-5">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-amber-300/18 bg-[radial-gradient(circle_at_30%_30%,rgba(255,215,100,0.28),rgba(255,159,28,0.08))]">
+                  <svg className="h-7 w-7 text-amber-300" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                    <circle cx="12" cy="12" r="8.5" fill="url(#credit-toast-gain)" />
+                    <path d="M12 8v8M8.25 12h7.5" stroke="#3b2500" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                    <defs>
+                      <linearGradient id="credit-toast-gain" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                        <stop stopColor="#FDE68A" />
+                        <stop offset="1" stopColor="#F59E0B" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                </div>
 
-              <div className="flex-shrink-0 text-right">
-                <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">Balance</div>
-                <div className="mt-1 text-sm font-black text-white flex items-center justify-end gap-2">
-                  {creditCopiedId === creditToast.id ? (
-                    <span className="text-xs font-bold text-emerald-300">Copied</span>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                      <rect x="9" y="9" width="11" height="11" rx="2" />
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                    </svg>
-                  )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[10px] font-black uppercase tracking-[0.26em] text-amber-100/66">Credits Added</div>
+                    <div className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white/46">
+                      Click to copy balance
+                    </div>
+                  </div>
+
+                  <motion.div
+                    className="mt-2 flex items-end justify-between gap-4"
+                    initial={{ opacity: 0.85, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[clamp(1.45rem,3vw,2rem)] font-black tracking-tight text-amber-300">
+                        +{creditToast.amount.toLocaleString()}
+                      </div>
+                      <div className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-white/42">
+                        Command reserve updated
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 text-right">
+                      <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/36">New Balance</div>
+                      <div className="mt-1 text-lg font-black text-white">{creditToast.total.toLocaleString()}</div>
+                    </div>
+                  </motion.div>
+
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                      <motion.div
+                        className="h-full rounded-full bg-[linear-gradient(90deg,#f59e0b,#facc15,#fde68a)] shadow-[0_0_18px_rgba(250,204,21,0.3)]"
+                        initial={{ width: '12%' }}
+                        animate={{ width: '100%' }}
+                        transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1] }}
+                      />
+                    </div>
+                    <div className="min-w-[62px] text-right text-xs font-bold uppercase tracking-[0.12em] text-white/58">
+                      {creditCopiedId === creditToast.id ? 'Copied' : 'Ready'}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -822,7 +875,29 @@ const App: React.FC = () => {
       
       {isPlaying && gameState && !isSpectating && (
         <OverlayErrorBoundary onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }}>
-          <UIOverlay gameState={gameState} onUpgradeStat={(s) => engine?.upgradeStat(engine.player, s)} onUpgradeClass={(c) => engine?.upgradeClass(c)} onUpgradeSector={(sector) => engine?.upgradeSecondarySector(sector)} onRestart={() => { setLastDeathReport(null); engine?.resetPlayer(true); }} onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }} highScores={displayHighScores} playHover={playHover} engine={engine} settings={settings} deathReport={lastDeathReport} />
+          <UIOverlay
+            gameState={gameState}
+            onUpgradeStat={(s) => engine?.upgradeStat(engine.player, s)}
+            onUpgradeClass={(c) => engine?.upgradeClass(c)}
+            onUpgradeSector={(sector) => engine?.upgradeSecondarySector(sector)}
+            onRestart={() => { setLastDeathReport(null); engine?.resetPlayer(true); }}
+            onExit={() => { setIsPlaying(false); engine?.setAttractMode(true); }}
+            onSpectateKiller={() => {
+              const targetId = gameState.deathKiller?.spectateTargetId;
+              if (!engine || targetId == null) return;
+              const locked = engine.spectateEntityById(targetId);
+              if (!locked) return;
+              playSelect();
+              setIsPlaying(true);
+              setIsSpectating(true);
+              hideTT();
+            }}
+            highScores={displayHighScores}
+            playHover={playHover}
+            engine={engine}
+            settings={settings}
+            deathReport={lastDeathReport}
+          />
         </OverlayErrorBoundary>
       )}
 
@@ -888,7 +963,7 @@ const App: React.FC = () => {
       )}
 
       {/* Main Menu Tooltip Layer */}
-      {!isPlaying && menuBootUnlocked && (
+      {!isPlaying && menuBootPhase === 'ready' && (
           <TacticalTooltip 
             label={tooltip.label} 
             desc={tooltip.desc} 
@@ -898,40 +973,243 @@ const App: React.FC = () => {
           />
       )}
 
-      <MainMenu 
-        isPlaying={isPlaying}
-        bootUnlocked={menuBootUnlocked}
-        playerName={playerName}
-        setPlayerName={setPlayerName}
-        user={user}
-        setUser={setUser}
-        highScores={displayHighScores}
-        gameMode={gameMode}
-        setGameMode={setGameMode}
-        selectedTeam={selectedTeam}
-        setSelectedTeam={setSelectedTeam}
-        handleStartGame={handleStartGame}
-        handleSpectate={handleSpectate}
-        spectateAvailable={engine?.hasSpectateTargets() ?? false}
-        musicSnapshot={menuMusicSnapshot}
-        showTT={showTT}
-        hideTT={hideTT}
-        playClick={playClick}
-        playHover={playHover}
-        playSelect={playSelect}
-        setShowLogin={setShowLogin}
-        setShowSettings={setShowSettings}
-        setShowAlmanac={setShowAlmanac}
-        setShowShop={setShowShop}
-        setShowUpdateHistory={setShowUpdateHistory}
-        setShowAchievements={setShowAchievements}
-        setShowSupport={setShowSupport}
-        updateLog={UPDATE_LOG}
-        parallax={parallax}
-        activeColor={activeColor}
-        teamCounts={teamCounts}
-        canJoinTeam={(t) => engine?.canJoinTeam(t) ?? true}
-      />
+      {!isPlaying && menuBootPhase === 'ready' && (
+        <MainMenu 
+          isPlaying={isPlaying}
+          bootPhase={menuBootPhase}
+          playerName={playerName}
+          setPlayerName={setPlayerName}
+          user={user}
+          setUser={setUser}
+          highScores={displayHighScores}
+          gameMode={gameMode}
+          setGameMode={setGameMode}
+          selectedTeam={selectedTeam}
+          setSelectedTeam={setSelectedTeam}
+          handleStartGame={handleStartGame}
+          handleSpectate={handleSpectate}
+          spectateAvailable={engine?.hasSpectateTargets() ?? false}
+          musicSnapshot={menuMusicSnapshot}
+          showTT={showTT}
+          hideTT={hideTT}
+          playClick={playClick}
+          playHover={playHover}
+          playSelect={playSelect}
+          setShowLogin={setShowLogin}
+          setShowSettings={setShowSettings}
+          setShowAlmanac={setShowAlmanac}
+          setShowShop={setShowShop}
+          setShowUpdateHistory={setShowUpdateHistory}
+          setShowAchievements={setShowAchievements}
+          setShowSupport={setShowSupport}
+          updateLog={UPDATE_LOG}
+          parallax={parallax}
+          activeColor={activeColor}
+          teamCounts={teamCounts}
+          canJoinTeam={(t) => engine?.canJoinTeam(t) ?? true}
+        />
+      )}
+
+      <AnimatePresence>
+        {!isPlaying && (menuBootPhase === 'unlocking' || menuBootPhase === 'revealing') && (
+          <motion.div
+            key={`menu-boot-loading-${menuBootPhase}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute inset-0 z-[90] overflow-hidden bg-[radial-gradient(circle_at_50%_24%,rgba(34,211,238,0.14),transparent_24%),radial-gradient(circle_at_50%_78%,rgba(96,165,250,0.08),transparent_34%),linear-gradient(180deg,rgba(2,8,20,0.96),rgba(1,5,14,0.99))]"
+          >
+            <div className="pointer-events-none absolute inset-0 opacity-[0.12] [background-image:linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.06)_1px,transparent_1px)] [background-size:44px_44px]" />
+            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent_22%,transparent_78%,rgba(255,255,255,0.02))]" />
+            <div className="absolute inset-0 flex items-center justify-center px-6 py-8">
+              <div className="w-full max-w-[860px] overflow-hidden rounded-[2.2rem] border border-cyan-300/16 bg-[linear-gradient(180deg,rgba(5,18,34,0.82),rgba(2,9,20,0.92))] shadow-[0_30px_120px_rgba(0,0,0,0.5)] backdrop-blur-2xl">
+                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/70 to-transparent" />
+                <div className="grid gap-0 lg:grid-cols-[minmax(280px,0.42fr)_minmax(0,0.58fr)]">
+                  <div className="relative border-b border-cyan-300/8 px-8 py-8 lg:border-b-0 lg:border-r">
+                    <div className="pointer-events-none absolute right-6 top-6 h-28 w-28 rounded-full bg-cyan-400/10 blur-3xl" />
+                    <div className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200/74">
+                      {menuBootPhase === 'unlocking' ? 'System Bootstrap' : 'Command Deck Render'}
+                    </div>
+                    <h2 className="mt-4 text-[clamp(2rem,4vw,3.3rem)] font-black uppercase leading-[0.95] tracking-[0.1em] text-white">
+                      {menuBootPhase === 'unlocking' ? 'Loading Systems' : 'Menu Uplink Ready'}
+                    </h2>
+                    <p className="mt-4 max-w-[24rem] text-[0.98rem] leading-7 text-cyan-100/60">
+                      {menuBootPhase === 'unlocking'
+                        ? 'Waking the audio core, sampling live frequency bands, and calibrating the interface shell.'
+                        : 'Command deck assets are locked in. Final display checks are clearing before full control is handed over.'}
+                    </p>
+
+                    <div className="mt-7 grid gap-3">
+                      {[
+                        { label: 'Audio Core', value: menuBootPhase === 'unlocking' ? 'Active' : 'Stable' },
+                        { label: 'Visualizer Sync', value: menuMusicSnapshot?.paused ? 'Waiting' : 'Live' },
+                        { label: 'Interface Status', value: menuBootPhase === 'unlocking' ? 'Compiling' : 'Deploying' },
+                      ].map((item, index) => (
+                        <div key={item.label} className="flex items-center justify-between rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/44">{item.label}</div>
+                          <div className="flex items-center gap-2">
+                            <motion.span
+                              className="h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_14px_rgba(103,232,249,0.85)]"
+                              animate={{ opacity: [0.45, 1, 0.45], scale: [1, 1.14, 1] }}
+                              transition={{ duration: 1 + index * 0.15, repeat: Infinity, ease: 'easeInOut' }}
+                            />
+                            <span className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-100/82">{item.value}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="relative px-8 py-8">
+                    <div className="rounded-[1.8rem] border border-cyan-300/12 bg-black/18 p-6">
+                      <div className="mb-6 flex items-center justify-center">
+                        <div className="relative flex h-[176px] w-[176px] items-center justify-center">
+                          <motion.div
+                            aria-hidden="true"
+                            className="absolute inset-0 rounded-full border border-cyan-300/10"
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
+                            style={{ borderTopColor: 'rgba(103,232,249,0.55)', borderRightColor: 'rgba(103,232,249,0.2)' }}
+                          />
+                          <motion.div
+                            aria-hidden="true"
+                            className="absolute inset-[14px] rounded-full border border-amber-300/10"
+                            animate={{ rotate: -360 }}
+                            transition={{ duration: 7.4, repeat: Infinity, ease: 'linear' }}
+                            style={{ borderLeftColor: 'rgba(251,191,36,0.5)', borderBottomColor: 'rgba(251,191,36,0.18)' }}
+                          />
+                          <motion.div
+                            aria-hidden="true"
+                            className="absolute inset-[32px] rounded-full border border-violet-300/12"
+                            animate={{ rotate: 360, scale: [1, 1.02, 1] }}
+                            transition={{ rotate: { duration: 5.2, repeat: Infinity, ease: 'linear' }, scale: { duration: 2.2, repeat: Infinity, ease: 'easeInOut' } }}
+                            style={{ borderTopColor: 'rgba(167,139,250,0.46)' }}
+                          />
+                          <div className="absolute inset-[46px] rounded-full bg-[radial-gradient(circle,rgba(8,25,42,0.96),rgba(2,10,22,0.98))] shadow-[inset_0_0_48px_rgba(0,0,0,0.52)]" />
+                          <motion.div
+                            className="absolute inset-[64px] rounded-full"
+                            animate={{ scale: [0.96, 1.06, 0.96], opacity: [0.55, 0.9, 0.55] }}
+                            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                            style={{ background: 'radial-gradient(circle, rgba(34,211,238,0.28), rgba(167,139,250,0.12) 55%, transparent 76%)' }}
+                          />
+                          <motion.div
+                            className="relative h-4 w-4 rounded-full bg-cyan-300 shadow-[0_0_28px_rgba(103,232,249,0.95)]"
+                            animate={{ scale: [1, 1.22, 1], opacity: [0.72, 1, 0.72] }}
+                            transition={{ duration: 1.05, repeat: Infinity, ease: 'easeInOut' }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-300/68">Initialization Progress</div>
+                          <div className="mt-2 text-sm leading-6 text-white/54">{menuBootLoadLabel}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/34">Completion</div>
+                          <div className="mt-1 text-2xl font-black text-white">{Math.round(menuBootLoadProgress * 100)}%</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-6 overflow-hidden rounded-full border border-cyan-300/12 bg-white/[0.04] p-1">
+                        <div className="relative h-4 overflow-hidden rounded-full bg-[linear-gradient(180deg,rgba(6,18,32,0.8),rgba(4,12,24,0.92))]">
+                          <motion.div
+                            className="absolute inset-y-0 left-0 rounded-full bg-[linear-gradient(90deg,#22d3ee,#2dd4bf_48%,#a78bfa_100%)] shadow-[0_0_22px_rgba(34,211,238,0.34)]"
+                            animate={{ width: `${Math.max(8, Math.round(menuBootLoadProgress * 100))}%` }}
+                            transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+                          >
+                            <motion.div
+                              className="absolute inset-y-0 right-0 w-20 bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.45),transparent)]"
+                              animate={{ x: ['-130%', '220%'] }}
+                              transition={{ duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
+                            />
+                          </motion.div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-10 gap-1.5">
+                        {Array.from({ length: 10 }, (_, index) => {
+                          const active = index / 10 < menuBootLoadProgress;
+                          return (
+                            <motion.div
+                              key={`boot-segment-${index}`}
+                              className="h-2 rounded-full"
+                              animate={{
+                                opacity: active ? [0.68, 1, 0.82] : 0.18,
+                                scaleY: active ? [1, 1.12, 1] : 1,
+                              }}
+                              transition={{
+                                duration: 0.9,
+                                repeat: active ? Infinity : 0,
+                                ease: 'easeInOut',
+                                delay: index * 0.03,
+                              }}
+                              style={{
+                                background: active
+                                  ? index > 7
+                                    ? 'linear-gradient(90deg, rgba(167,139,250,0.95), rgba(96,165,250,0.72))'
+                                    : index > 4
+                                      ? 'linear-gradient(90deg, rgba(45,212,191,0.95), rgba(34,211,238,0.72))'
+                                      : 'linear-gradient(90deg, rgba(255,213,79,0.95), rgba(45,212,191,0.72))'
+                                  : 'rgba(255,255,255,0.08)',
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+
+                      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                        {[
+                          { label: 'Signal', value: menuMusicSnapshot?.sectionLabel ?? 'Idle' },
+                          { label: 'Energy', value: `${Math.round((menuMusicSnapshot?.energy ?? 0.28) * 100)}%` },
+                          { label: 'Phase', value: menuBootPhase === 'unlocking' ? 'Stage 1/2' : 'Stage 2/2' },
+                        ].map((item) => (
+                          <div key={item.label} className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">{item.label}</div>
+                            <div className="mt-2 text-sm font-black uppercase tracking-[0.08em] text-white/84">{item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-6">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200/70">Live Spectrum Feed</div>
+                          <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/32">Reactive</div>
+                        </div>
+                        <div className="flex h-[88px] items-end gap-1.5">
+                          {(menuMusicSnapshot?.bars?.slice(0, 18) ?? new Array(18).fill(0.22)).map((value, index) => (
+                            <motion.div
+                              key={`boot-loading-bar-${index}`}
+                              className="flex-1 rounded-t-full"
+                              animate={{
+                                height: `${16 + Math.max(0.14, value) * 70}px`,
+                                opacity: [0.42, 0.88, 0.42],
+                              }}
+                              transition={{
+                                duration: 0.9 + index * 0.04,
+                                repeat: Infinity,
+                                ease: 'easeInOut',
+                              }}
+                              style={{
+                                background: index % 4 === 0
+                                  ? 'linear-gradient(180deg, rgba(255,213,79,0.98), rgba(34,211,238,0.2))'
+                                  : index % 2 === 0
+                                    ? 'linear-gradient(180deg, rgba(34,211,238,0.95), rgba(45,212,191,0.22))'
+                                    : 'linear-gradient(180deg, rgba(167,139,250,0.92), rgba(96,165,250,0.18))',
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {!isPlaying && menuBootOverlayVisible && (
@@ -1182,8 +1460,8 @@ const App: React.FC = () => {
                                 </svg>
                             </div>
                             <div>
-                                <div className="text-[10px] font-black uppercase tracking-[0.32em] text-cyan-300/70">Support Terminal</div>
-                                <h2 className="mt-1 text-2xl md:text-3xl font-black uppercase tracking-[0.06em] text-white">Command Backing</h2>
+                                <div className="text-[10px] font-black uppercase tracking-[0.32em] text-cyan-300/70">Community Terminal</div>
+                                <h2 className="mt-1 text-2xl md:text-3xl font-black uppercase tracking-[0.06em] text-white">Need Help Or Company?</h2>
                             </div>
                         </div>
                         <button
@@ -1200,28 +1478,28 @@ const App: React.FC = () => {
                         <section className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_42%),linear-gradient(180deg,rgba(4,12,24,0.96),rgba(4,8,18,0.98))] px-6 py-6 md:px-8 lg:border-b-0 lg:border-r">
                             <div className="flex flex-wrap items-center gap-3">
                                 <span className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200">
-                                  Live Rank: {supportRankMeta.label}
+                                  Discord Help Hub
                                 </span>
                                 <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-white/55">
-                                  {supportRankMeta.tone}
+                                  Talk, ask, connect
                                 </span>
                             </div>
 
                             <div className="mt-6 grid gap-4 sm:grid-cols-3">
                                 <div className="rounded-[1.4rem] border border-white/10 bg-white/[0.035] p-4">
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Backing Total</div>
-                                    <div className="mt-2 text-3xl font-black text-white">{(user?.supportTotal || 0).toLocaleString()}</div>
-                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/35">Points committed</div>
+                                    <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Live Support</div>
+                                    <div className="mt-2 text-3xl font-black text-white">Discord</div>
+                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/35">Fastest place to reach me</div>
                                 </div>
-                                <div className="rounded-[1.4rem] border p-4" style={{ borderColor: `${supportRankMeta.accent}40`, background: supportRankMeta.glow }}>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: `${supportRankMeta.accent}` }}>Active Resonance</div>
-                                    <div className="mt-2 text-2xl font-black text-white">{supportRankMeta.label}</div>
-                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/50">Skin blend tier</div>
+                                <div className="rounded-[1.4rem] border border-cyan-300/25 bg-cyan-300/10 p-4">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200">Best For</div>
+                                    <div className="mt-2 text-2xl font-black text-white">Help + Community</div>
+                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/50">Questions, bugs, and people to talk to</div>
                                 </div>
                                 <div className="rounded-[1.4rem] border border-white/10 bg-white/[0.035] p-4">
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Network Status</div>
-                                    <div className="mt-2 text-lg font-black text-white">{user ? 'Linked' : 'Offline'}</div>
-                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/35">{user ? 'Account recognised' : 'Sign in required'}</div>
+                                    <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Availability</div>
+                                    <div className="mt-2 text-lg font-black text-white">Open</div>
+                                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white/35">Jump in whenever you need it</div>
                                 </div>
                             </div>
 
@@ -1229,17 +1507,17 @@ const App: React.FC = () => {
                                 <div className="flex items-center justify-between gap-4">
                                     <div>
                                         <div className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-300/70">Terminal Brief</div>
-                                        <h3 className="mt-2 text-xl font-black text-white">Keep development active and visible.</h3>
+                                        <h3 className="mt-2 text-xl font-black text-white">A direct line when someone needs help.</h3>
                                     </div>
                                     <div className="hidden md:flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-white/45">
-                                        Top 3 = live rank holders
+                                        Community first
                                     </div>
                                 </div>
                                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                                     {[
-                                      { title: 'Resonance', body: 'Top supporters receive rank-based skin blending tied to their live standing.' },
-                                      { title: 'Visibility', body: 'Backing totals contribute to the active supporter leaderboard and recognition systems.' },
-                                      { title: 'Continuity', body: 'Your backing total stays on the account and updates the moment the uplink confirms.' }
+                                      { title: 'Ask For Help', body: 'If something feels broken, confusing, or frustrating, Discord is the quickest place to ask.' },
+                                      { title: 'Find People', body: 'Players who want someone to talk to or queue with can jump into the community server.' },
+                                      { title: 'Stay Updated', body: 'Important fixes, changes, and direct responses can all be shared there in one place.' }
                                     ].map((item) => (
                                       <div key={item.title} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
                                           <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/42">{item.title}</div>
@@ -1254,56 +1532,44 @@ const App: React.FC = () => {
                             <div className="rounded-[1.75rem] border border-cyan-300/18 bg-white/[0.03] p-5">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
-                                        <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-300/65">Contribution Uplink</div>
-                                        <h3 className="mt-2 text-lg font-black text-white">Choose a backing packet</h3>
+                                        <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-300/65">Discord Relay</div>
+                                        <h3 className="mt-2 text-lg font-black text-white">Open the community server</h3>
                                     </div>
-                                    <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${supportTxnBusy ? 'bg-amber-400/14 text-amber-200 border border-amber-300/20' : 'bg-emerald-400/12 text-emerald-200 border border-emerald-300/20'}`}>
-                                      {supportTxnBusy ? 'Processing' : 'Ready'}
+                                    <div className="rounded-full border border-emerald-300/20 bg-emerald-400/12 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">
+                                      Available
                                     </div>
                                 </div>
 
-                                <div className="mt-5 grid grid-cols-3 gap-3">
-                                    {SUPPORT_OPTIONS.map((amt) => (
-                                      <button
-                                        key={amt}
-                                        onClick={() => handleSupportAction(amt)}
-                                        disabled={!user || supportTxnBusy}
-                                        className="group rounded-[1.15rem] border border-cyan-300/25 bg-cyan-400/[0.06] px-3 py-4 text-left transition-all hover:border-cyan-200/40 hover:bg-cyan-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
-                                      >
-                                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-200/60">Packet</div>
-                                        <div className="mt-2 text-2xl font-black text-white">+{amt}</div>
-                                        <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35 group-hover:text-white/55">Backing pts</div>
-                                      </button>
-                                    ))}
-                                </div>
-
-                                <div className={`mt-5 rounded-[1.2rem] border px-4 py-3 ${supportTxnMsg ? 'border-cyan-300/20 bg-cyan-300/10' : 'border-white/10 bg-white/[0.03]'}`}>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/40">Uplink Status</div>
-                                    <p className="mt-2 text-sm leading-6 text-white/72">{supportStatusText}</p>
+                                <div className="mt-5 rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/40">What you can use it for</div>
+                                    <p className="mt-2 text-sm leading-6 text-white/72">
+                                      Need support, want to report a bug, or just want people to talk to? The Discord server is the main place to reach out.
+                                    </p>
                                 </div>
 
                                 <div className="mt-5 rounded-[1.35rem] border border-white/10 bg-black/20 p-4">
-                                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/42">Live Rank Ladder</div>
+                                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/42">Quick reasons to join</div>
                                     <div className="mt-3 space-y-2">
-                                      {(['rank1', 'rank2', 'rank3'] as const).map((rankKey, idx) => {
-                                        const meta = SUPPORT_RANK_META[rankKey];
-                                        return (
-                                          <div key={rankKey} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
+                                      {[
+                                        { title: 'Bug Help', note: 'Get answers or report issues fast', accent: '#67e8f9' },
+                                        { title: 'Community', note: 'Talk with players and hang out', accent: '#34d399' },
+                                        { title: 'Updates', note: 'See what is changing and when', accent: '#a78bfa' },
+                                      ].map((item, idx) => (
+                                          <div key={item.title} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
                                               <div className="flex items-center gap-3">
-                                                  <span className="flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-black text-black" style={{ background: meta.accent }}>
+                                                  <span className="flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-black text-black" style={{ background: item.accent }}>
                                                     {idx + 1}
                                                   </span>
                                                   <div>
-                                                      <div className="text-sm font-black text-white">{meta.label}</div>
-                                                      <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/35">{meta.tone}</div>
+                                                      <div className="text-sm font-black text-white">{item.title}</div>
+                                                      <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/35">{item.note}</div>
                                                   </div>
                                               </div>
-                                              <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color: meta.accent }}>
-                                                Top {idx + 1}
+                                              <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color: item.accent }}>
+                                                Live
                                               </span>
                                           </div>
-                                        );
-                                      })}
+                                      ))}
                                     </div>
                                 </div>
                             </div>
@@ -1315,7 +1581,7 @@ const App: React.FC = () => {
                                   rel="noopener noreferrer"
                                   className="flex items-center justify-center rounded-[1.25rem] border border-cyan-300/25 bg-cyan-500/85 px-5 py-4 text-center text-[11px] font-black uppercase tracking-[0.28em] text-white transition hover:bg-cyan-400"
                                 >
-                                  Open Discord Relay
+                                  Open Discord Help Hub
                                 </a>
                                 <button
                                   onClick={() => setShowSupport(false)}

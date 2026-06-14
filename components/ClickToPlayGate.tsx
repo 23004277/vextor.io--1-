@@ -18,14 +18,13 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
       initial={{ opacity: 1 }}
       animate={{
         opacity: activating ? 0 : 1,
-        scale: activating ? 1.04 : 1,
       }}
       exit={{
         opacity: 0,
-        transition: { duration: 0.32, ease: GATE_EASE },
+        transition: { duration: 0.24, ease: GATE_EASE },
       }}
       transition={{
-        duration: activating ? 0.46 : 0.28,
+        duration: activating ? 0.3 : 0.28,
         ease: GATE_EASE,
       }}
       className="absolute inset-0 z-[120] flex cursor-pointer items-center justify-center overflow-hidden bg-[#020617] outline-none disabled:cursor-default"
@@ -35,27 +34,28 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
         className="absolute inset-0"
         animate={{
           background: activating
-            ? [
-                'radial-gradient(circle at center, rgba(34,211,238,0.16), rgba(2,6,23,1) 58%)',
-                'radial-gradient(circle at center, rgba(129,140,248,0.30), rgba(2,6,23,1) 72%)',
-                'radial-gradient(circle at center, rgba(255,255,255,0.92), rgba(34,211,238,0.24) 18%, rgba(2,6,23,1) 76%)',
-              ]
+            ? 'radial-gradient(circle at center, rgba(34,211,238,0.06), rgba(2,6,23,0.96) 58%)'
             : 'radial-gradient(circle at center, rgba(34,211,238,0.12), rgba(2,6,23,1) 62%)',
         }}
-        transition={{ duration: 0.72, ease: 'easeOut' }}
+        transition={{ duration: 0.3, ease: 'easeOut' }}
       />
 
-      <div className="pointer-events-none absolute inset-0 opacity-[0.18] [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:44px_44px]" />
+      <motion.div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:44px_44px]"
+        animate={{ opacity: activating ? 0 : 0.18 }}
+        transition={{ duration: activating ? 0.12 : 0.24, ease: 'easeOut' }}
+      />
 
       <motion.div
         aria-hidden="true"
         className="absolute h-[34rem] w-[34rem] rounded-full border border-cyan-300/20"
         animate={{
-          scale: activating ? [1, 1.38, 2.4] : [1, 1.06, 1],
-          opacity: activating ? [0.55, 0.88, 0] : [0.35, 0.62, 0.35],
+          scale: activating ? 1.06 : [1, 1.06, 1],
+          opacity: activating ? 0 : [0.35, 0.62, 0.35],
         }}
         transition={{
-          duration: activating ? 0.78 : 2.4,
+          duration: activating ? 0.12 : 2.4,
           repeat: activating ? 0 : Infinity,
           ease: 'easeInOut',
         }}
@@ -65,11 +65,11 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
         aria-hidden="true"
         className="absolute h-[21rem] w-[21rem] rounded-full border border-indigo-300/20"
         animate={{
-          scale: activating ? [1, 0.78, 2.1] : [1.04, 1, 1.04],
-          opacity: activating ? [0.4, 0.96, 0] : [0.22, 0.44, 0.22],
+          scale: activating ? 1.02 : [1.04, 1, 1.04],
+          opacity: activating ? 0 : [0.22, 0.44, 0.22],
         }}
         transition={{
-          duration: activating ? 0.68 : 2,
+          duration: activating ? 0.1 : 2,
           repeat: activating ? 0 : Infinity,
           ease: 'easeInOut',
         }}
@@ -78,12 +78,10 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
       <motion.div
         className="relative flex max-w-[90vw] flex-col items-center gap-6 px-6 text-center"
         animate={{
-          scale: activating ? [1, 0.97, 1.14] : [1, 1.02, 1],
-          opacity: activating ? [1, 1, 0] : 1,
-          filter: activating ? ['blur(0px)', 'blur(0px)', 'blur(12px)'] : 'blur(0px)',
+          opacity: activating ? 0 : 1,
         }}
         transition={{
-          duration: activating ? 0.7 : 2,
+          duration: activating ? 0.08 : 2,
           repeat: activating ? 0 : Infinity,
           ease: GATE_EASE,
         }}
@@ -116,15 +114,6 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
           Click anywhere or press Enter / Space
         </div>
       </motion.div>
-
-      {activating && (
-        <motion.div
-          className="absolute inset-0 bg-white"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: [0, 0.9, 0] }}
-          transition={{ duration: 0.4, ease: 'easeOut', delay: 0.18 }}
-        />
-      )}
     </motion.button>
   );
 }

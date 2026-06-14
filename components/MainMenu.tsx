@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, Variants } from 'motion/react';
 import { BookOpen, ChevronRight, Eye, HeartHandshake, Pencil, Radar, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
 
@@ -10,7 +10,7 @@ import { MenuMusicVisualizer } from './MenuMusicVisualizer';
 
 interface MainMenuProps {
   isPlaying: boolean;
-  bootUnlocked: boolean;
+  bootPhase: 'locked' | 'unlocking' | 'revealing' | 'ready';
   playerName: string;
   setPlayerName: (name: string) => void;
   user: User | null;
@@ -106,6 +106,15 @@ const MODE_META: Record<GameMode, ModeMeta> = {
     glow: 'rgba(255, 209, 92, 0.22)',
     fill: 'rgba(180, 83, 9, 0.16)',
   },
+  [GameMode.BOSS_RUSH]: {
+    title: 'Boss Rush',
+    code: 'BRS',
+    desc: 'Five scripted bosses. One arena. No random filler. Just the gauntlet.',
+    color: UI.rose,
+    border: 'rgba(255, 95, 134, 0.46)',
+    glow: 'rgba(255, 95, 134, 0.22)',
+    fill: 'rgba(127, 29, 29, 0.18)',
+  },
   [GameMode.SANDBOX]: {
     title: 'Sandbox',
     code: 'SBX',
@@ -155,7 +164,7 @@ const TEAM_META: Record<Team, TeamMeta> = {
   },
 };
 
-const MODE_CHOICES = [GameMode.FFA, GameMode.TEAMS, GameMode.DOMINION, GameMode.SANDBOX] as const;
+const MODE_CHOICES = [GameMode.FFA, GameMode.TEAMS, GameMode.DOMINION, GameMode.BOSS_RUSH, GameMode.SANDBOX] as const;
 const SPRING_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
 const safeNumber = (value: unknown, fallback = 0) => {
@@ -219,6 +228,37 @@ const Scanlines: React.FC = () => (
     }}
   />
 );
+
+const bootRevealBackdropTransition = { duration: 0.42, ease: 'easeOut' } as const;
+const bootRevealContainerTransition = { duration: 0.46, ease: SPRING_EASE } as const;
+const MENU_COLUMN_DELAYS = {
+  left: 0.08,
+  center: 0.14,
+  right: 0.2,
+} as const;
+
+const MenuBootRevealOverlay = React.memo(function MenuBootRevealOverlay() {
+  return (
+    <motion.div
+      initial={{ opacity: 0.3 }}
+      animate={{ opacity: 0 }}
+      exit={{ opacity: 0 }}
+      transition={bootRevealContainerTransition}
+      className="pointer-events-none absolute inset-0 z-[6] overflow-hidden"
+    >
+      <motion.div
+        aria-hidden="true"
+        className="absolute inset-0"
+        initial={{ opacity: 0.3 }}
+        animate={{
+          opacity: [0.3, 0.14, 0],
+          background: 'linear-gradient(180deg, rgba(2,6,23,0.32), rgba(2,6,23,0.12) 48%, rgba(2,6,23,0))',
+        }}
+        transition={bootRevealBackdropTransition}
+      />
+    </motion.div>
+  );
+});
 
 const Panel: React.FC<{
   title?: string;
@@ -501,7 +541,7 @@ const PolicyModal: React.FC<{ open: boolean; type: 'privacy' | 'terms'; onClose:
 
 export const MainMenu: React.FC<MainMenuProps> = ({
   isPlaying,
-  bootUnlocked,
+  bootPhase,
   playerName,
   setPlayerName,
   user,
@@ -536,6 +576,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTos, setShowTos] = useState(false);
   const compactHeight = useMediaQuery('(max-height: 820px)');
+  const bootVisible = bootPhase !== 'locked';
+  const bootInteractive = bootPhase === 'ready';
+  const bootTransitioning = bootPhase === 'unlocking' || bootPhase === 'revealing';
   const logoPulse = clampValue((musicSnapshot?.logoPulse ?? 0), 0, 1.3);
   const reactorPulse = clampValue((musicSnapshot?.reactorPulse ?? 0), 0, 1.6);
   const backgroundGlow = clampValue((musicSnapshot?.backgroundGlow ?? 0), 0, 1.2);
@@ -591,24 +634,38 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   );
 
   const containerVar: Variants = {
-    hidden: { opacity: 0 },
-    visible: { opacity: 1, transition: { staggerChildren: 0.04, delayChildren: 0.03 } },
+    hidden: {
+      opacity: 0,
+      scale: 0.992,
+      y: 18,
+      filter: 'blur(0px)',
+      transition: { duration: 0.2, ease: SPRING_EASE },
+    },
+    visible: {
+      opacity: 1,
+      scale: 1,
+      y: 0,
+      filter: 'blur(0px)',
+      transition: { duration: 0.46, ease: SPRING_EASE },
+    },
     exit: { opacity: 0, transition: { duration: 0.2 } },
   };
 
+  const menuVisualState = bootVisible ? 'visible' : 'hidden';
+
   const panelVar: Variants = {
     hidden: { opacity: 0, y: 14 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: SPRING_EASE } },
+    visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: SPRING_EASE, delay: MENU_COLUMN_DELAYS.center } },
   };
 
   const slideLeft: Variants = {
-    hidden: { opacity: 0, x: -18 },
-    visible: { opacity: 1, x: 0, transition: { duration: 0.5, ease: SPRING_EASE } },
+    hidden: { opacity: 0, x: -20, y: 12 },
+    visible: { opacity: 1, x: 0, y: 0, transition: { duration: 0.48, ease: SPRING_EASE, delay: MENU_COLUMN_DELAYS.left } },
   };
 
   const slideRight: Variants = {
-    hidden: { opacity: 0, x: 18 },
-    visible: { opacity: 1, x: 0, transition: { duration: 0.5, ease: SPRING_EASE } },
+    hidden: { opacity: 0, x: 20, y: 12 },
+    visible: { opacity: 1, x: 0, y: 0, transition: { duration: 0.48, ease: SPRING_EASE, delay: MENU_COLUMN_DELAYS.right } },
   };
 
   const submitHandler = (event: React.FormEvent) => {
@@ -636,16 +693,22 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       {!isPlaying && (
         <motion.div
           variants={containerVar}
-          initial={bootUnlocked ? 'hidden' : false}
-          animate={bootUnlocked ? 'visible' : undefined}
+          initial="hidden"
+          animate={menuVisualState}
           exit="exit"
-          className={`vextor-menu absolute inset-0 z-50 h-full max-h-full overflow-hidden select-none transition-[filter,opacity,transform] duration-500 ${bootUnlocked ? 'pointer-events-auto opacity-100 blur-0 brightness-100 saturate-100 scale-100' : 'pointer-events-none opacity-90 blur-[10px] brightness-[0.62] saturate-[0.72] scale-[0.992]'}`}
+          className={`vextor-menu absolute inset-0 z-50 h-full max-h-full overflow-hidden select-none transition-[opacity,transform] duration-500 ${bootInteractive ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-100'}`}
           style={{
             color: UI.ink,
             background:
               'radial-gradient(circle at 50% 0%, rgba(14, 116, 144, 0.22), transparent 38%), radial-gradient(circle at 100% 10%, rgba(124, 58, 237, 0.14), transparent 34%), linear-gradient(160deg, #020617 0%, #03111f 48%, #020617 100%)',
           }}
         >
+          <AnimatePresence>
+            {bootTransitioning && (
+              <MenuBootRevealOverlay key="menu-boot-overlay" />
+            )}
+          </AnimatePresence>
+
           <Scanlines />
 
           <div className="pointer-events-none absolute inset-0 z-0">

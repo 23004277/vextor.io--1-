@@ -16,6 +16,7 @@ interface UIOverlayProps {
   onUpgradeSector: (sector: SecondarySector) => void;
   onRestart: () => void;
   onExit: () => void;
+  onSpectateKiller?: () => void;
   highScores: HighScoreEntry[];
   playHover?: () => void;
   engine?: any;
@@ -182,15 +183,15 @@ const getSandboxPreviewPose = (cls: TankClass): { turretRotation: number; chassi
   return { turretRotation: -6, chassisRotation: 2 };
 };
 
-export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, onUpgradeClass, onUpgradeSector, onRestart, onExit, highScores, playHover, engine, settings, deathReport }) => {
+export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, onUpgradeClass, onUpgradeSector, onRestart, onExit, onSpectateKiller, highScores, playHover, engine, settings, deathReport }) => {
   const { 
     score, level, xp, maxXp, stats, availableStatPoints, mainClass, currentClass, secondarySector, isDead, fps, killFeed, 
     leaderboard, health, maxHealth, camera, mapSize, gameMode, 
     notifications, inVoid, voidTimeRemaining, isTransformed, transformationTime, 
     transformationReady, activeBuffs, minimapMarkers, sandboxConfig, primedSpawn, abilityHud,
     playerState, evolutionTransitionRemaining, bossChoices, enemyZoneWarningLevel, enemyZoneWarningText,
-    bloodDrainLive, bloodDrainStacks, bloodDrainSession, rebirthEligible, dominionScores, dominionOwnedCount, dominionTimeRemaining, dominionZones,
-    botChatBubbles = [], deathPresentation,
+    bloodDrainLive, bloodDrainStacks, bloodDrainSession, rebirthEligible, dominionScores, dominionOwnedCount, dominionTimeRemaining, dominionZones, bossRush,
+    botChatBubbles = [], deathPresentation, deathKiller,
     voidTransitStage, voidTransitProgress
   } = gameState;
 
@@ -342,6 +343,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   const deathFadeProgress = deathPresentation?.fadeProgress ?? 1;
   const botBubbleRenderData = useMemo(() => {
     return botChatBubbles
+      .filter((bubble) => bubble.onScreen)
       .map((bubble) => {
         const x = (bubble.worldPos.x - camera.x) * camera.zoom + viewportSize.width * 0.5;
         const y = (bubble.worldPos.y - camera.y) * camera.zoom + viewportSize.height * 0.5;
@@ -459,7 +461,71 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
               </div>
             </div>
           )}
+          {deathKiller && (
+            <div className="mb-6 rounded-xl border border-rose-300/18 bg-rose-400/10 px-4 py-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.18em] text-rose-200/76">Killed By</div>
+                  <div className="mt-1 text-xl font-black text-white">{formatDisplayName(deathKiller.name)}</div>
+                </div>
+                <div className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${deathKiller.isAlive ? 'border-emerald-300/20 bg-emerald-400/12 text-emerald-100' : 'border-white/10 bg-white/5 text-white/55'}`}>
+                  {deathKiller.isAlive ? 'Target Alive' : 'Target Lost'}
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+                  <div className="text-[9px] uppercase tracking-[0.18em] text-white/42 font-bold">Class</div>
+                  <div className="mt-1 text-sm font-black leading-tight text-white">{deathKiller.classType || 'Unknown'}</div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+                  <div className="text-[9px] uppercase tracking-[0.18em] text-white/42 font-bold">Level</div>
+                  <div className="mt-1 text-xl font-black text-cyan-200">{deathKiller.level ?? '--'}</div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+                  <div className="text-[9px] uppercase tracking-[0.18em] text-white/42 font-bold">Score</div>
+                  <div className="mt-1 text-xl font-black text-white">{deathKiller.score != null ? formatScoreValue(deathKiller.score, settings.compactScoreNotation) : '--'}</div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+                  <div className="text-[9px] uppercase tracking-[0.18em] text-white/42 font-bold">Team</div>
+                  <div className="mt-1 text-sm font-black uppercase" style={{ color: getTeamAccent(deathKiller.team) }}>{deathKiller.team}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-[9px] font-black uppercase tracking-[0.18em] text-white/42">
+                    <span>Health</span>
+                    <span>{deathKiller.health != null && deathKiller.maxHealth != null ? `${Math.max(0, Math.round(deathKiller.health))} / ${Math.round(deathKiller.maxHealth)}` : '--'}</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-white/8">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-rose-400 to-orange-300 transition-all duration-200"
+                      style={{ width: `${deathKiller.health != null && deathKiller.maxHealth ? Math.max(0, Math.min(100, (deathKiller.health / Math.max(1, deathKiller.maxHealth)) * 100)) : 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-[9px] font-black uppercase tracking-[0.18em] text-white/42">
+                    <span>Shield</span>
+                    <span>{deathKiller.shield != null && deathKiller.maxShield != null ? `${Math.max(0, Math.round(deathKiller.shield))} / ${Math.round(deathKiller.maxShield)}` : '--'}</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-white/8">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-blue-400 transition-all duration-200"
+                      style={{ width: `${deathKiller.shield != null && deathKiller.maxShield ? Math.max(0, Math.min(100, (deathKiller.shield / Math.max(1, deathKiller.maxShield)) * 100)) : 0}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="flex flex-col gap-3 mb-1">
+              {deathKiller?.canSpectate && onSpectateKiller && (
+                <button onClick={onSpectateKiller} className="w-full rounded-xl border border-amber-300/24 bg-amber-400/12 px-6 py-3 text-base font-black uppercase tracking-[0.08em] text-amber-50 transition hover:bg-amber-400/18 hover:scale-[1.01] active:scale-[0.985]">
+                  Spectate Killer
+                </button>
+              )}
               <button onClick={onRestart} className="w-full rounded-xl bg-gradient-to-r from-cyan-400 to-blue-500 px-6 py-3.5 text-lg font-black uppercase tracking-[0.08em] text-black shadow-[0_12px_28px_rgba(14,165,233,0.35)] transition hover:brightness-110 hover:scale-[1.01] active:scale-[0.985]">RESPAWN</button>
               <button onClick={onExit} className="w-full rounded-xl border border-white/15 bg-white/5 px-6 py-3 text-base font-black uppercase tracking-[0.08em] text-white/90 transition hover:bg-white/10 hover:text-white active:scale-[0.985]">MAIN MENU</button>
           </div>
@@ -513,12 +579,96 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     : abilityHud?.id === 'sanguine_pact'
       ? Droplets
       : MousePointer2;
+  const bossRushCinematic = bossRush?.cinematic;
 
   return (
     <div 
         className="absolute inset-0 pointer-events-none p-6 flex flex-col justify-between overflow-hidden font-sans select-none z-[100]"
         style={{ transform: `scale(${settings.uiScale})`, transformOrigin: 'center center' }}
     >
+      <AnimatePresence>
+        {gameMode === GameMode.BOSS_RUSH && bossRushCinematic?.active && (
+          <motion.div
+            key={`${bossRushCinematic.mode}-${bossRushCinematic.speaker}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[190] pointer-events-none"
+          >
+            {bossRushCinematic.mode === 'awakening' && (
+              <>
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    opacity: bossRushCinematic.flash,
+                    background: `radial-gradient(circle at 50% 42%, ${bossRushCinematic.color}55 0%, rgba(255,255,255,0.12) 18%, rgba(255,255,255,0) 58%)`,
+                    mixBlendMode: 'screen',
+                  }}
+                />
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    opacity: bossRushCinematic.chromatic,
+                    background:
+                      'linear-gradient(90deg, rgba(255,64,96,0.14), transparent 22%, transparent 78%, rgba(96,180,255,0.14))',
+                    filter: `blur(${8 + bossRushCinematic.chromatic * 18}px)`,
+                  }}
+                />
+              </>
+            )}
+            <motion.div
+              className="absolute left-0 right-0 top-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.92),rgba(0,0,0,0.78),rgba(0,0,0,0))]"
+              animate={{ height: `${10 + bossRushCinematic.barsProgress * 12}%` }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+            />
+            <motion.div
+              className="absolute left-0 right-0 bottom-0 bg-[linear-gradient(0deg,rgba(0,0,0,0.94),rgba(0,0,0,0.82),rgba(0,0,0,0))]"
+              animate={{ height: `${12 + bossRushCinematic.barsProgress * 14}%` }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+            />
+
+            <div className="absolute inset-x-0 top-6 flex justify-center px-8">
+              <div className="w-full max-w-5xl rounded-[1.4rem] border border-white/10 bg-[linear-gradient(180deg,rgba(0,0,0,0.84),rgba(0,0,0,0.7))] px-5 py-3 backdrop-blur-md shadow-[0_16px_44px_rgba(0,0,0,0.35)]">
+                <div
+                  className="text-center text-[11px] font-black uppercase tracking-[0.34em]"
+                  style={{ color: bossRushCinematic.accent }}
+                >
+                  {bossRushCinematic.title}
+                </div>
+              </div>
+            </div>
+
+            <div className="absolute inset-x-0 bottom-[4.5%] flex justify-center px-8">
+              <div className="w-full max-w-5xl rounded-[1.4rem] border border-white/10 bg-[linear-gradient(180deg,rgba(0,0,0,0.88),rgba(0,0,0,0.76))] px-5 py-4 shadow-[0_22px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div
+                      className="text-[10px] font-black uppercase tracking-[0.34em]"
+                      style={{ color: bossRushCinematic.accent }}
+                    >
+                      {bossRushCinematic.speaker}
+                    </div>
+                    <div className="mt-2 text-lg font-black leading-8 text-white md:text-[1.65rem] md:leading-10">
+                      {bossRushCinematic.displayLine}
+                      {bossRushCinematic.progress < 1 && <span className="ml-1 inline-block h-6 w-[2px] animate-pulse bg-white/80 align-middle" />}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 h-1.5 rounded-full bg-white/8 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-[linear-gradient(90deg,rgba(255,255,255,0.25),rgba(255,255,255,0.95),rgba(255,255,255,0.25))]"
+                    style={{
+                      width: `${Math.max(6, bossRushCinematic.progress * 100)}%`,
+                      boxShadow: `0 0 24px ${bossRushCinematic.color}66`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {botBubbleLayer}
       
       {/* Notifications Layer */}
@@ -775,10 +925,45 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                      </div>
                    ))}
                  </div>
-               </div>
-             )}
+                </div>
+              )}
 
-             {settings.showLeaderboard && gameMode !== GameMode.DOMINION && (
+             {gameMode === GameMode.BOSS_RUSH && bossRush && (
+                <div className="w-full rounded-2xl border border-rose-400/20 bg-[#12060a]/86 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
+                  <div className="px-3 py-2 border-b border-white/10 bg-rose-500/[0.08] flex items-center justify-between gap-3">
+                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-200/90">Boss Rush</span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-white/55">{Math.min(bossRush.bossIndex, bossRush.bossCount)} / {bossRush.bossCount}</span>
+                  </div>
+                  <div className="px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="break-words text-[15px] font-black uppercase tracking-[0.08em] text-white">{bossRush.bossName}</div>
+                        <div className="mt-1 break-words text-[10px] font-bold uppercase tracking-[0.14em] text-rose-100/55">{bossRush.bossSubtitle}</div>
+                      </div>
+                      <div className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${bossRush.awakened ? 'border-amber-300/25 bg-amber-400/14 text-amber-100' : 'border-white/10 bg-white/5 text-white/55'}`}>
+                        {bossRush.awakened ? 'Awakened' : `Phase ${bossRush.phase}/${bossRush.phaseCount}`}
+                      </div>
+                    </div>
+                    <div className="mt-3 h-3 rounded-full bg-white/8 overflow-hidden border border-white/8">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-300 ${bossRush.victory ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-500' : 'bg-gradient-to-r from-rose-500 via-red-400 to-orange-300'}`}
+                        style={{ width: `${Math.max(0, Math.min(100, (bossRush.health / Math.max(1, bossRush.maxHealth)) * 100))}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-white/52">
+                      <span>{Math.max(0, Math.round(bossRush.health)).toLocaleString()} HP</span>
+                      <span>{Math.round(bossRush.maxHealth).toLocaleString()} MAX</span>
+                    </div>
+                    {bossRush.transitionText && (
+                      <div className="mt-3 rounded-xl border border-rose-300/14 bg-rose-500/[0.08] px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-rose-100/82">
+                        {bossRush.transitionText}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {settings.showLeaderboard && gameMode !== GameMode.DOMINION && (
              <div className="w-full rounded-2xl border border-cyan-400/16 bg-[#040913]/84 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
                   <div className="px-3 py-2 border-b border-white/10 bg-cyan-500/[0.05] flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-200/80">Leaderboard</span>
@@ -1010,6 +1195,53 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             </div>
                         </div>
 
+                        <div className="space-y-4 rounded-[1.6rem] border border-emerald-300/12 bg-emerald-500/[0.04] p-4">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <span className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-200/84">Combat Tuning</span>
+                                  <p className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/30">Live-control projectile and summon durability without leaving the run</p>
+                                </div>
+                                <span className="rounded-full border border-white/10 bg-black/24 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white/50">Sandbox Only</span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                {[
+                                  { key: 'projectileDamageScale', label: 'Bullet Damage', step: 0.1, min: 0.4, max: 2.6 },
+                                  { key: 'projectileDurabilityScale', label: 'Bullet Health', step: 0.1, min: 0.4, max: 3.0 },
+                                  { key: 'droneDamageScale', label: 'Drone Damage', step: 0.1, min: 0.4, max: 2.6 },
+                                  { key: 'droneDurabilityScale', label: 'Drone Health', step: 0.1, min: 0.4, max: 3.0 },
+                                ].map((item) => {
+                                  const current = (sandboxConfig as any)?.[item.key] ?? 1;
+                                  const nextDown = Math.max(item.min, Number((current - item.step).toFixed(2)));
+                                  const nextUp = Math.min(item.max, Number((current + item.step).toFixed(2)));
+                                  return (
+                                    <div key={item.key} className="rounded-[1.25rem] border border-white/8 bg-black/18 p-3">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="min-w-0">
+                                          <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/70">{item.label}</div>
+                                          <div className="mt-1 text-lg font-black text-white">{current.toFixed(1)}x</div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            onClick={() => engine.setSandboxFlag(item.key, nextDown)}
+                                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-sm font-black text-white/70 transition hover:bg-white/10 hover:text-white"
+                                          >
+                                            -
+                                          </button>
+                                          <button
+                                            onClick={() => engine.setSandboxFlag(item.key, nextUp)}
+                                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-300/25 bg-emerald-400/12 text-sm font-black text-emerald-100 transition hover:bg-emerald-400/18"
+                                          >
+                                            +
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                        </div>
+
                         {/* Dangerous Tools Section */}
                         <div className="space-y-4 rounded-[1.6rem] border border-red-400/14 bg-red-500/[0.035] p-4">
                             <div className="flex items-center gap-3">
@@ -1021,6 +1253,18 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                     <span className="text-[10px] font-black uppercase tracking-[0.18em] text-black">Max Overclock Stats</span>
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-black transform group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                                 </button>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {[30, 60, 90, 150].map((level) => (
+                                      <button
+                                        key={level}
+                                        onClick={() => engine.instantLevel(level)}
+                                        className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[9px] font-black uppercase tracking-[0.18em] text-white/60 transition-all hover:bg-white/10 hover:text-white/86"
+                                      >
+                                        Sync LVL {level}
+                                      </button>
+                                    ))}
+                                </div>
+                                <button onClick={() => engine.resetAllStats()} className="flex items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[9px] font-black uppercase tracking-[0.18em] text-white/52 transition-all hover:bg-white/10 hover:text-white/82">Reset Stat Grid</button>
                                 <div className="grid grid-cols-2 gap-3">
                                     <button onClick={() => engine.clearEntities('BULLETS')} className="flex items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[9px] font-black uppercase tracking-[0.18em] text-white/52 transition-all hover:bg-white/10 hover:text-white/82">Flush Projectiles</button>
                                     <button onClick={() => engine.clearEntities('SHAPES')} className="flex items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[9px] font-black uppercase tracking-[0.18em] text-white/52 transition-all hover:bg-white/10 hover:text-white/82">Wipe Shapes</button>
