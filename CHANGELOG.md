@@ -1,58 +1,12 @@
-# VEXTOR Changelog
+VEXTOR Changelog
 
-## v1.9.4 - Boss Rush Pattern Pass & Loadout GUI
+v1.9.5 — Boot Flow, Almanac Performance & UI Unification
 
-Date: 12/06/26
-Theme: Boss Rush / Raid Mechanics / Arena Hazards / Loadout UI
+- Loading Screen Remaster: deterministic/timeline-driven progress, removed redundant reveal overlay, click-to-play gate simplified (Enter/Space + autofocus)
+- Bullet Penetration Fix: stop visual “jump-through”, reduce shove on penetration, shorter re-hit window, remove penetration damage spikes
+- Almanac Performance Pass: dedicated Almanac CSS, removed heavy inline style/font injection, calmed motion/remounts, improved scroll behavior to avoid re-rendering, added calmer non-animated shape previews
+- Command-Deck UI Unification: shared theme tokens + unified styling across menus/panels (main menu, gameplay panels, sandbox command panel, leaderboard, boss rush class select, evolution/dominion panel, minimap, spectate card, recovery overlay, loading shell, support modal, achievements shell)
 
-This update pushes Boss Rush closer to a proper raid-style combat mode. The focus is now on readable boss patterns, fair telegraphs, arena pressure, awakening aggression, and a cleaner tank-selection flow before the fight.
+Validation: npm run build passed.
 
-### Highlights
-
-#### Boss Rush Pattern Pass
-
-* Boss Rush fights now behave more like readable raid mechanics instead of plain AI spam.
-* Added new scripted boss attacks with clearer warning patterns and punish windows.
-* Bosses now use more structured attack cycles instead of random lane pressure.
-
-#### New Scripted Attacks
-
-* **Gate Arc Beam:** sequential beam cycle with spaced telegraphs.
-* **Gate Rapid Crosshatch:** staggered smaller `#`-style lane patterns.
-* **Splitter Zigzag Lines:** angled zigzag laser lanes with safe gaps.
-* **Splitter Corrupted Cascade:** zigzag lanes combined with repeated circle pressure.
-
-#### Passive Arena Hazards
-
-* Reactor and Grand Singularity now periodically spawn delayed hazard fields.
-* Hazards avoid dropping directly on top of the player.
-* Hazard placement tries to preserve escape space so attacks feel fair instead of unavoidable.
-* Late bosses now pressure the arena even between direct attack picks.
-
-#### Boss Runtime Improvements
-
-* Passive hazards are now controlled by boss-side runtime cadence.
-* Awakening phases and later phases tighten hazard timing.
-* Added new attack IDs and passive hazard timer support.
-* Initial passive timers are now hooked into Boss Rush spawn setup.
-* New attacks are registered through the Boss Rush boss definitions.
-
-#### Fight Behaviour Improvements
-
-* Gatekeeper now has a clearer “learn the pattern, dodge, punish” flow.
-* Splitter now creates proper movement checks instead of generic lane spam.
-* Awakening versions are more aggressive through density and timing.
-* Safe pockets still exist so the fights stay readable and beatable.
-
-#### Boss Rush Tank Selection GUI
-
-* Refined the Boss Rush tank-selection screen so it feels more like a proper in-match loadout browser.
-* Upgraded the selected-class summary card with a bigger preview and clearer class label.
-* Added category badges, allocation progress, and simple pick-class guidance.
-* Cleaned up category sections with visual headers and role hints like Assault, Precision, and Tactical.
-* Improved class cards with stronger selected states, clearer preview framing, and explicit Selected / Pick badges.
-* Added helper formatting and meta utilities to keep the class picker cleaner.
-
-### Notes
-
-Passive hazards are currently focused on Reactor and Grand Singularity because they fit the arena-control role best. The next good pass would be adding poison damage-over-time to corrupted zigzag attacks, giving passive hazards unique visuals, and adding boss recovery-window UI so players can clearly see when it is time to punish.
+Website (full notes): keep the expanded version in the project changelog page (not Discord-limited).
