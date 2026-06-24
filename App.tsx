@@ -18,10 +18,15 @@ import { TankPreview } from './components/TankPreview';
 import { TacticalTooltip } from './components/TacticalTooltip';
 import { MainMenu } from './components/MainMenu';
 import { ClickToPlayGate } from './components/ClickToPlayGate';
+import { LoadingScreen } from './components/loading/LoadingScreen';
 import { BackgroundMusic, BackgroundMusicVisualizerFrame } from './Background Music';
+import { COMMAND_THEME_CLASS } from './components/uiTheme';
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
 type MenuBootPhase = 'locked' | 'unlocking' | 'revealing' | 'ready';
+
+const MENU_BOOT_UNLOCK_MS = 2000;
+const MENU_BOOT_TOTAL_MS = 5000;
 
 const DEFAULT_SETTINGS: GameSettings = {
     volume: 0.15,
@@ -76,12 +81,12 @@ class OverlayErrorBoundary extends React.Component<OverlayErrorBoundaryProps, Ov
     if (this.state.hasError) {
       return (
         <div className="absolute inset-0 z-[250] flex items-center justify-center bg-black/65 backdrop-blur-sm">
-          <div className="pointer-events-auto rounded-2xl border border-white/20 bg-[#090909] px-8 py-7 text-center">
+          <div className={`pointer-events-auto rounded-2xl px-8 py-7 text-center ${COMMAND_THEME_CLASS.shellSoft}`}>
             <h2 className="text-xl font-black tracking-wide text-white">HUD RECOVERY MODE</h2>
             <p className="mt-2 text-sm text-white/70">Overlay crashed, gameplay is still running.</p>
             <button
               onClick={this.props.onExit}
-              className="mt-5 rounded-lg bg-cyan-500 px-5 py-2 text-sm font-black text-black transition hover:bg-cyan-400"
+              className={`mt-5 rounded-lg px-5 py-2 text-sm font-black text-cyan-50 transition ${COMMAND_THEME_CLASS.button}`}
             >
               RETURN TO MENU
             </button>
@@ -138,6 +143,8 @@ const App: React.FC = () => {
   const isPlayingRef = useRef(false);
   const menuBootFadeTimeoutRef = useRef<number | null>(null);
   const menuBootSettleTimeoutRef = useRef<number | null>(null);
+  const menuBootProgressFrameRef = useRef<number | null>(null);
+  const menuBootStartedAtRef = useRef<number | null>(null);
   const menuBootActivationLockRef = useRef(false);
   const menuBootTransitionRunRef = useRef(0);
   const previousCurrencyRef = useRef<number | null>(null);
@@ -145,9 +152,10 @@ const App: React.FC = () => {
   const suppressNextCreditToastRef = useRef(false);
   const menuBootVisualActive = menuBootPhase !== 'locked';
   const menuBootMusicActive = menuBootPhase === 'ready';
-  const menuBootMenuVisible = menuBootPhase === 'revealing' || menuBootPhase === 'ready';
+  const menuBootMenuVisible = menuBootPhase === 'ready';
   const menuBootUnlocking = menuBootPhase === 'unlocking';
-  const menuBootTransitioning = menuBootPhase === 'revealing';
+  const menuBootTransitioning = menuBootPhase === 'unlocking' || menuBootPhase === 'revealing';
+  const [menuBootProgress, setMenuBootProgress] = useState(0);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -161,6 +169,10 @@ const App: React.FC = () => {
     if (menuBootSettleTimeoutRef.current != null) {
       window.clearTimeout(menuBootSettleTimeoutRef.current);
       menuBootSettleTimeoutRef.current = null;
+    }
+    if (menuBootProgressFrameRef.current != null) {
+      window.cancelAnimationFrame(menuBootProgressFrameRef.current);
+      menuBootProgressFrameRef.current = null;
     }
   }, []);
 
@@ -195,7 +207,11 @@ const App: React.FC = () => {
     const transitionRun = menuBootTransitionRunRef.current + 1;
     menuBootTransitionRunRef.current = transitionRun;
     menuBootActivationLockRef.current = true;
+    clearMenuBootTimers();
+    menuBootStartedAtRef.current = performance.now();
+    setMenuBootProgress(0);
     setMenuBootPhase('unlocking');
+    setMenuBootOverlayVisible(false);
     try {
       engine?.sound.enable();
       const music = menuMusicRef.current;
@@ -205,19 +221,17 @@ const App: React.FC = () => {
     } finally {
       if (menuBootTransitionRunRef.current !== transitionRun) return;
 
-      clearMenuBootTimers();
       menuBootFadeTimeoutRef.current = window.setTimeout(() => {
         if (menuBootTransitionRunRef.current !== transitionRun) return;
-        setMenuBootOverlayVisible(false);
         setMenuBootPhase('revealing');
         menuBootFadeTimeoutRef.current = null;
-      }, 2000);
+      }, MENU_BOOT_UNLOCK_MS);
       menuBootSettleTimeoutRef.current = window.setTimeout(() => {
         if (menuBootTransitionRunRef.current !== transitionRun) return;
         setMenuBootPhase('ready');
         menuBootActivationLockRef.current = false;
         menuBootSettleTimeoutRef.current = null;
-      }, 5000);
+      }, MENU_BOOT_TOTAL_MS);
     }
   }, [clearMenuBootTimers, engine, menuBootMenuVisible]);
 
@@ -238,19 +252,39 @@ const App: React.FC = () => {
     return { x, y };
   }, [menuMousePos]);
 
-  const menuBootLoadProgress = useMemo(() => {
-    const energy = Math.max(0, Math.min(1, menuMusicSnapshot?.energy ?? 0.28));
-    const reactor = Math.max(0, Math.min(1, menuMusicSnapshot?.reactorPulse ?? 0.22));
-    if (menuBootPhase === 'unlocking') return Math.min(0.78, 0.18 + energy * 0.2 + reactor * 0.16);
-    if (menuBootPhase === 'revealing') return Math.min(0.99, 0.84 + energy * 0.07 + reactor * 0.05);
-    if (menuBootPhase === 'ready') return 1;
-    return 0.08;
-  }, [menuBootPhase, menuMusicSnapshot?.energy, menuMusicSnapshot?.reactorPulse]);
+  useEffect(() => {
+    if (menuBootPhase === 'locked') {
+      setMenuBootProgress(0);
+      menuBootStartedAtRef.current = null;
+      return;
+    }
 
-  const menuBootLoadLabel = useMemo(() => {
-    if (menuBootPhase === 'unlocking') return 'Bootstrapping audio core and reactor telemetry';
-    if (menuBootPhase === 'revealing') return 'Finalizing command deck render and live uplink';
-    return 'Standing by';
+    if (menuBootPhase === 'ready') {
+      setMenuBootProgress(1);
+      return;
+    }
+
+    const startedAt = menuBootStartedAtRef.current ?? performance.now();
+    menuBootStartedAtRef.current = startedAt;
+
+    const updateProgress = (now: number) => {
+      const elapsed = Math.max(0, now - startedAt);
+      const nextProgress = Math.min(1, elapsed / MENU_BOOT_TOTAL_MS);
+      setMenuBootProgress((previous) => (nextProgress > previous ? nextProgress : previous));
+      if (nextProgress < 1 && (menuBootPhase === 'unlocking' || menuBootPhase === 'revealing')) {
+        menuBootProgressFrameRef.current = window.requestAnimationFrame(updateProgress);
+      } else {
+        menuBootProgressFrameRef.current = null;
+      }
+    };
+
+    menuBootProgressFrameRef.current = window.requestAnimationFrame(updateProgress);
+    return () => {
+      if (menuBootProgressFrameRef.current != null) {
+        window.cancelAnimationFrame(menuBootProgressFrameRef.current);
+        menuBootProgressFrameRef.current = null;
+      }
+    };
   }, [menuBootPhase]);
 
   const activeColor = useMemo(() => {
@@ -922,7 +956,7 @@ const App: React.FC = () => {
 
       {isPlaying && isSpectating && (
         <div className="absolute inset-x-0 bottom-10 z-50 flex flex-col items-center gap-5 animate-in fade-in slide-in-from-bottom-8 duration-700 pointer-events-none">
-            <div className="min-w-[300px] max-w-[min(92vw,560px)] rounded-[2rem] border border-cyan-400/16 bg-[linear-gradient(180deg,rgba(4,10,18,0.92),rgba(2,6,12,0.96))] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.72)] backdrop-blur-2xl pointer-events-auto">
+            <div className={`min-w-[300px] max-w-[min(92vw,560px)] rounded-[2rem] p-5 pointer-events-auto ${COMMAND_THEME_CLASS.shell}`}>
                 <div className="mb-4 flex items-center justify-between gap-3">
                     <div>
                         <div className="text-[10px] font-black uppercase tracking-[0.32em] text-cyan-300/75">Spectate Mode</div>
@@ -982,7 +1016,7 @@ const App: React.FC = () => {
       )}
 
       {/* Main Menu Tooltip Layer */}
-      {!isPlaying && menuBootPhase === 'ready' && (
+      {!isPlaying && menuBootMenuVisible && (
           <TacticalTooltip 
             label={tooltip.label} 
             desc={tooltip.desc} 
@@ -992,7 +1026,7 @@ const App: React.FC = () => {
           />
       )}
 
-      {!isPlaying && menuBootPhase === 'ready' && (
+      {!isPlaying && menuBootMenuVisible && (
         <MainMenu 
           isPlaying={isPlaying}
           bootPhase={menuBootPhase}
@@ -1029,209 +1063,14 @@ const App: React.FC = () => {
         />
       )}
 
-      <AnimatePresence>
-        {!isPlaying && (menuBootPhase === 'unlocking' || menuBootPhase === 'revealing') && (
-          <motion.div
-            key={`menu-boot-loading-${menuBootPhase}`}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute inset-0 z-[90] overflow-hidden bg-[radial-gradient(circle_at_50%_24%,rgba(34,211,238,0.14),transparent_24%),radial-gradient(circle_at_50%_78%,rgba(96,165,250,0.08),transparent_34%),linear-gradient(180deg,rgba(2,8,20,0.96),rgba(1,5,14,0.99))]"
-          >
-            <div className="pointer-events-none absolute inset-0 opacity-[0.12] [background-image:linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.06)_1px,transparent_1px)] [background-size:44px_44px]" />
-            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent_22%,transparent_78%,rgba(255,255,255,0.02))]" />
-            <div className="absolute inset-0 flex items-center justify-center px-6 py-8">
-              <div className="w-full max-w-[860px] overflow-hidden rounded-[2.2rem] border border-cyan-300/16 bg-[linear-gradient(180deg,rgba(5,18,34,0.82),rgba(2,9,20,0.92))] shadow-[0_30px_120px_rgba(0,0,0,0.5)] backdrop-blur-2xl">
-                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/70 to-transparent" />
-                <div className="grid gap-0 lg:grid-cols-[minmax(280px,0.42fr)_minmax(0,0.58fr)]">
-                  <div className="relative border-b border-cyan-300/8 px-8 py-8 lg:border-b-0 lg:border-r">
-                    <div className="pointer-events-none absolute right-6 top-6 h-28 w-28 rounded-full bg-cyan-400/10 blur-3xl" />
-                    <div className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200/74">
-                      {menuBootPhase === 'unlocking' ? 'System Bootstrap' : 'Command Deck Render'}
-                    </div>
-                    <h2 className="mt-4 text-[clamp(2rem,4vw,3.3rem)] font-black uppercase leading-[0.95] tracking-[0.1em] text-white">
-                      {menuBootPhase === 'unlocking' ? 'Loading Systems' : 'Menu Uplink Ready'}
-                    </h2>
-                    <p className="mt-4 max-w-[24rem] text-[0.98rem] leading-7 text-cyan-100/60">
-                      {menuBootPhase === 'unlocking'
-                        ? 'Waking the audio core, sampling live frequency bands, and calibrating the interface shell.'
-                        : 'Command deck assets are locked in. Final display checks are clearing before full control is handed over.'}
-                    </p>
-
-                    <div className="mt-7 grid gap-3">
-                      {[
-                        { label: 'Audio Core', value: menuBootPhase === 'unlocking' ? 'Active' : 'Stable' },
-                        { label: 'Visualizer Sync', value: menuMusicSnapshot?.paused ? 'Waiting' : 'Live' },
-                        { label: 'Interface Status', value: menuBootPhase === 'unlocking' ? 'Compiling' : 'Deploying' },
-                      ].map((item, index) => (
-                        <div key={item.label} className="flex items-center justify-between rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/44">{item.label}</div>
-                          <div className="flex items-center gap-2">
-                            <motion.span
-                              className="h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_14px_rgba(103,232,249,0.85)]"
-                              animate={{ opacity: [0.45, 1, 0.45], scale: [1, 1.14, 1] }}
-                              transition={{ duration: 1 + index * 0.15, repeat: Infinity, ease: 'easeInOut' }}
-                            />
-                            <span className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-100/82">{item.value}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="relative px-8 py-8">
-                    <div className="rounded-[1.8rem] border border-cyan-300/12 bg-black/18 p-6">
-                      <div className="mb-6 flex items-center justify-center">
-                        <div className="relative flex h-[176px] w-[176px] items-center justify-center">
-                          <motion.div
-                            aria-hidden="true"
-                            className="absolute inset-0 rounded-full border border-cyan-300/10"
-                            animate={{ rotate: 360 }}
-                            transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
-                            style={{ borderTopColor: 'rgba(103,232,249,0.55)', borderRightColor: 'rgba(103,232,249,0.2)' }}
-                          />
-                          <motion.div
-                            aria-hidden="true"
-                            className="absolute inset-[14px] rounded-full border border-amber-300/10"
-                            animate={{ rotate: -360 }}
-                            transition={{ duration: 7.4, repeat: Infinity, ease: 'linear' }}
-                            style={{ borderLeftColor: 'rgba(251,191,36,0.5)', borderBottomColor: 'rgba(251,191,36,0.18)' }}
-                          />
-                          <motion.div
-                            aria-hidden="true"
-                            className="absolute inset-[32px] rounded-full border border-violet-300/12"
-                            animate={{ rotate: 360, scale: [1, 1.02, 1] }}
-                            transition={{ rotate: { duration: 5.2, repeat: Infinity, ease: 'linear' }, scale: { duration: 2.2, repeat: Infinity, ease: 'easeInOut' } }}
-                            style={{ borderTopColor: 'rgba(167,139,250,0.46)' }}
-                          />
-                          <div className="absolute inset-[46px] rounded-full bg-[radial-gradient(circle,rgba(8,25,42,0.96),rgba(2,10,22,0.98))] shadow-[inset_0_0_48px_rgba(0,0,0,0.52)]" />
-                          <motion.div
-                            className="absolute inset-[64px] rounded-full"
-                            animate={{ scale: [0.96, 1.06, 0.96], opacity: [0.55, 0.9, 0.55] }}
-                            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                            style={{ background: 'radial-gradient(circle, rgba(34,211,238,0.28), rgba(167,139,250,0.12) 55%, transparent 76%)' }}
-                          />
-                          <motion.div
-                            className="relative h-4 w-4 rounded-full bg-cyan-300 shadow-[0_0_28px_rgba(103,232,249,0.95)]"
-                            animate={{ scale: [1, 1.22, 1], opacity: [0.72, 1, 0.72] }}
-                            transition={{ duration: 1.05, repeat: Infinity, ease: 'easeInOut' }}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-300/68">Initialization Progress</div>
-                          <div className="mt-2 text-sm leading-6 text-white/54">{menuBootLoadLabel}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/34">Completion</div>
-                          <div className="mt-1 text-2xl font-black text-white">{Math.round(menuBootLoadProgress * 100)}%</div>
-                        </div>
-                      </div>
-
-                      <div className="mt-6 overflow-hidden rounded-full border border-cyan-300/12 bg-white/[0.04] p-1">
-                        <div className="relative h-4 overflow-hidden rounded-full bg-[linear-gradient(180deg,rgba(6,18,32,0.8),rgba(4,12,24,0.92))]">
-                          <motion.div
-                            className="absolute inset-y-0 left-0 rounded-full bg-[linear-gradient(90deg,#22d3ee,#2dd4bf_48%,#a78bfa_100%)] shadow-[0_0_22px_rgba(34,211,238,0.34)]"
-                            animate={{ width: `${Math.max(8, Math.round(menuBootLoadProgress * 100))}%` }}
-                            transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-                          >
-                            <motion.div
-                              className="absolute inset-y-0 right-0 w-20 bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.45),transparent)]"
-                              animate={{ x: ['-130%', '220%'] }}
-                              transition={{ duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
-                            />
-                          </motion.div>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-10 gap-1.5">
-                        {Array.from({ length: 10 }, (_, index) => {
-                          const active = index / 10 < menuBootLoadProgress;
-                          return (
-                            <motion.div
-                              key={`boot-segment-${index}`}
-                              className="h-2 rounded-full"
-                              animate={{
-                                opacity: active ? [0.68, 1, 0.82] : 0.18,
-                                scaleY: active ? [1, 1.12, 1] : 1,
-                              }}
-                              transition={{
-                                duration: 0.9,
-                                repeat: active ? Infinity : 0,
-                                ease: 'easeInOut',
-                                delay: index * 0.03,
-                              }}
-                              style={{
-                                background: active
-                                  ? index > 7
-                                    ? 'linear-gradient(90deg, rgba(167,139,250,0.95), rgba(96,165,250,0.72))'
-                                    : index > 4
-                                      ? 'linear-gradient(90deg, rgba(45,212,191,0.95), rgba(34,211,238,0.72))'
-                                      : 'linear-gradient(90deg, rgba(255,213,79,0.95), rgba(45,212,191,0.72))'
-                                  : 'rgba(255,255,255,0.08)',
-                              }}
-                            />
-                          );
-                        })}
-                      </div>
-
-                      <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                        {[
-                          { label: 'Signal', value: menuMusicSnapshot?.sectionLabel ?? 'Idle' },
-                          { label: 'Energy', value: `${Math.round((menuMusicSnapshot?.energy ?? 0.28) * 100)}%` },
-                          { label: 'Phase', value: menuBootPhase === 'unlocking' ? 'Stage 1/2' : 'Stage 2/2' },
-                        ].map((item) => (
-                          <div key={item.label} className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40">{item.label}</div>
-                            <div className="mt-2 text-sm font-black uppercase tracking-[0.08em] text-white/84">{item.value}</div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="mt-6">
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200/70">Live Spectrum Feed</div>
-                          <div className="text-[9px] font-black uppercase tracking-[0.16em] text-white/32">Reactive</div>
-                        </div>
-                        <div className="flex h-[88px] items-end gap-1.5">
-                          {(menuMusicSnapshot?.bars?.slice(0, 18) ?? new Array(18).fill(0.22)).map((value, index) => (
-                            <motion.div
-                              key={`boot-loading-bar-${index}`}
-                              className="flex-1 rounded-t-full"
-                              animate={{
-                                height: `${16 + Math.max(0.14, value) * 70}px`,
-                                opacity: [0.42, 0.88, 0.42],
-                              }}
-                              transition={{
-                                duration: 0.9 + index * 0.04,
-                                repeat: Infinity,
-                                ease: 'easeInOut',
-                              }}
-                              style={{
-                                background: index % 4 === 0
-                                  ? 'linear-gradient(180deg, rgba(255,213,79,0.98), rgba(34,211,238,0.2))'
-                                  : index % 2 === 0
-                                    ? 'linear-gradient(180deg, rgba(34,211,238,0.95), rgba(45,212,191,0.22))'
-                                    : 'linear-gradient(180deg, rgba(167,139,250,0.92), rgba(96,165,250,0.18))',
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <LoadingScreen
+        phase={!isPlaying && (menuBootPhase === 'unlocking' || menuBootPhase === 'revealing') ? menuBootPhase : null}
+        progress={menuBootProgress}
+        musicSnapshot={menuMusicSnapshot}
+      />
 
       <AnimatePresence>
-        {!isPlaying && menuBootOverlayVisible && (
+        {!isPlaying && menuBootOverlayVisible && !menuBootTransitioning && !menuBootMenuVisible && (
           <ClickToPlayGate activating={menuBootUnlocking} onActivate={handleMenuBootOverlayActivate} />
         )}
       </AnimatePresence>
@@ -1468,7 +1307,7 @@ const App: React.FC = () => {
         {showSupport && (
             <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 backdrop-blur-[28px] animate-in fade-in duration-300 p-4" onClick={() => setShowSupport(false)}>
                 <div
-                  className="w-full max-w-5xl overflow-hidden rounded-[2.25rem] border border-cyan-400/20 bg-[#030814] shadow-[0_30px_120px_rgba(0,0,0,0.82)]"
+                  className={`w-full max-w-5xl overflow-hidden rounded-[2.25rem] ${COMMAND_THEME_CLASS.shell}`}
                   onClick={e => e.stopPropagation()}
                 >
                     <div className="flex items-center justify-between gap-4 border-b border-white/10 bg-[linear-gradient(135deg,rgba(6,12,28,0.96),rgba(9,20,36,0.92))] px-6 py-5 md:px-8">

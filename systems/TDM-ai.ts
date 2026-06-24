@@ -45,6 +45,7 @@ export type Player = {
   phase?: string;
   type?: 'PLAYER' | 'ENEMY' | 'BULLET' | 'SHAPE' | 'BOSS' | 'CRASHER' | 'VOID_PORTAL';
   ownerId?: number;
+  invulnerableTime?: number;
 };
 
 type SafeZone = {
@@ -279,6 +280,7 @@ export class TDMAISystem {
 
     for (let i = 0; i < enemies.length; i++) {
       const e = enemies[i];
+      if (this.shouldEaseOffTarget(bot, e)) continue;
       const d2 = Math.max(1, Vector.distSq(bot.pos, e.pos));
       const dist = Math.sqrt(d2);
       const hpRatio = Math.max(0, Math.min(1, (e.health ?? 100) / Math.max(1, e.maxHealth ?? 100)));
@@ -296,6 +298,7 @@ export class TDMAISystem {
       if (e.type === 'BOSS') score += 0.9;
       if (e.type === 'CRASHER') score += 0.45;
       if (dist > 880) score *= 0.72;
+      score *= this.getMercyWeight(bot, e, dist);
       if (e.aiTargetId != null && e.aiTargetId !== bot.id) score *= 1.15;
 
       score += memoryBonus;
@@ -313,7 +316,7 @@ export class TDMAISystem {
 
   private resolveTargetLock(mem: Memory, desired: Player | null, enemies: Player[], botId: number): Player | null {
     const locked = mem.targetId != null ? enemies.find((e) => e.id === mem.targetId) ?? null : null;
-    if (locked && this.tick <= mem.targetLockUntil) return locked;
+    if (locked && !this.shouldEaseOffTarget(null, locked) && this.tick <= mem.targetLockUntil) return locked;
 
     if (!desired) {
       mem.targetId = null;
@@ -324,6 +327,41 @@ export class TDMAISystem {
     mem.targetId = desired.id;
     mem.targetLockUntil = this.tick + this.randomLatch(botId * 31, TUNING.targetLatchMinTicks, TUNING.targetLatchMaxTicks);
     return desired;
+  }
+
+  private shouldEaseOffTarget(bot: IAITank | null, target: Player): boolean {
+    const invulnerableMs = target.invulnerableTime ?? 0;
+    if (invulnerableMs > 0) return true;
+
+    const targetLevel = target.level ?? 1;
+    const targetScore = target.score ?? 0;
+    const botLevel = bot?.level ?? 1;
+    const levelGap = botLevel - targetLevel;
+    const targetIsThreateningBot = bot ? target.aiTargetId === bot.id : false;
+
+    if (!targetIsThreateningBot && target.type === 'PLAYER' && targetLevel <= 6 && targetScore < 1800 && levelGap >= 6) {
+      const mercyRoll = Math.abs(Math.sin((target.id * 73 + (bot?.id ?? 0) * 17) * 0.01));
+      return mercyRoll < 0.68;
+    }
+
+    return false;
+  }
+
+  private getMercyWeight(bot: IAITank, target: Player, distance: number): number {
+    const targetLevel = target.level ?? 1;
+    const targetScore = target.score ?? 0;
+    const botLevel = bot.level ?? 1;
+    const levelGap = botLevel - targetLevel;
+
+    if (target.aiTargetId === bot.id) return 1;
+    if (target.type !== 'PLAYER') return 1;
+    if (targetLevel > 8 || levelGap < 5) return 1;
+
+    let weight = 1;
+    if (targetScore < 3000) weight *= 0.6;
+    if (distance > 620) weight *= 0.5;
+    if (levelGap >= 10) weight *= 0.45;
+    return weight;
   }
 
   private applyStateLatch(mem: Memory, desired: TacticalState, botId: number): TacticalState {

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Achievement, Quest, User } from '../types';
 import { ACHIEVEMENTS, QUESTS, SHOP_ITEMS } from '../constants';
+import { COMMAND_THEME_CLASS } from './uiTheme';
 
 interface AchievementsModalProps {
   user: User | null;
@@ -201,8 +202,8 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
   const activeMeta = categoryStats[activeTab];
 
   const shellClass = darkMode ? 'bg-zinc-950/90 text-white' : 'bg-slate-950/90 text-white';
-  const surfaceClass = darkMode ? 'bg-[#07090f]/95 border-white/10' : 'bg-[#0b1020]/95 border-white/10';
-  const cardClass = darkMode ? 'bg-white/[0.045] border-white/8' : 'bg-white/[0.06] border-white/10';
+  const surfaceClass = COMMAND_THEME_CLASS.shell;
+  const cardClass = COMMAND_THEME_CLASS.shellInset;
 
   const selectTab = (tab: AchievementCategory, shouldFocus = false) => {
     playSound();
@@ -296,7 +297,7 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
         onMouseDown={(event) => event.stopPropagation()}
         className={`flex h-[min(92vh,62rem)] w-full max-w-[96rem] overflow-hidden rounded-[2rem] border ${surfaceClass} shadow-[0_2rem_8rem_rgba(0,0,0,0.65)]`}
       >
-        <aside className="hidden w-[22rem] shrink-0 flex-col border-r border-white/10 bg-white/[0.025] p-8 lg:flex">
+        <aside className={`hidden w-[22rem] shrink-0 flex-col border-r p-8 lg:flex ${COMMAND_THEME_CLASS.shellInset}`}>
           <div className="mb-8">
             <div className="mb-5 inline-flex items-center gap-3 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-cyan-200">
               <span className="h-2 w-2 rounded-full bg-cyan-300 shadow-[0_0_1rem_rgba(103,232,249,0.9)]" />
@@ -382,7 +383,7 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <header className="shrink-0 border-b border-white/10 px-6 py-5 sm:px-8 lg:px-10">
+          <header className={`shrink-0 px-6 py-5 sm:px-8 lg:px-10 ${COMMAND_THEME_CLASS.header}`}>
             <div className="flex items-start justify-between gap-5">
               <div className="min-w-0">
                 <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -501,7 +502,7 @@ export const AchievementsModal: React.FC<AchievementsModalProps> = ({ user, onCl
             </AnimatePresence>
           </section>
 
-          <footer className="hidden shrink-0 items-center justify-between border-t border-white/10 bg-black/20 px-10 py-4 text-xs font-bold uppercase tracking-[0.18em] text-white/35 lg:flex">
+          <footer className="hidden shrink-0 items-center justify-between border-t border-cyan-300/10 bg-[linear-gradient(180deg,rgba(8,15,24,0.84),rgba(15,35,48,0.94))] px-10 py-4 text-xs font-bold uppercase tracking-[0.18em] text-white/35 lg:flex">
             <span>{filteredAchievements.length} visible entries</span>
             <span>Use arrow keys to switch categories</span>
           </footer>

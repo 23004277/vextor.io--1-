@@ -47,6 +47,9 @@ export interface IAITank {
     socialWiggleUntil?: number;
     savedByPlayerUntil?: number;
     lastAimTargetId?: number | null;
+    level?: number;
+    score?: number;
+    invulnerableTime?: number;
 }
 
 export interface IGameEngine {
@@ -280,6 +283,7 @@ export class EnemyAITanks {
             let nearest = null;
             let minDist = Infinity;
             for (const e of data.enemies) {
+                if (this.shouldEaseOffTarget(bot, e)) continue;
                 const d = Vector.dist(bot.pos, e.pos);
                 if (d < minDist) {
                     minDist = d;
@@ -293,6 +297,7 @@ export class EnemyAITanks {
         let bestScore = -Infinity;
 
         for (const e of data.enemies) {
+            if (this.shouldEaseOffTarget(bot, e)) continue;
             const dist = Vector.dist(bot.pos, e.pos);
             const hpRatio = Math.max(0, Math.min(1, e.health / Math.max(1, e.maxHealth)));
 
@@ -305,6 +310,7 @@ export class EnemyAITanks {
             if (e.type === EntityType.BOSS) score += 90;
             if (e.type === EntityType.CRASHER) score += 45;
             if (dist > 880) score *= 0.72; // avoid chasing too far for weak bots
+            score *= this.getMercyWeight(bot, e, dist);
 
             // Favor targets that are already engaged by allies to make bot behavior coherent
             if (e.aiTargetId != null && e.aiTargetId !== bot.id) score *= 1.15;
@@ -315,6 +321,39 @@ export class EnemyAITanks {
             }
         }
         return bestTarget;
+    }
+
+    private static shouldEaseOffTarget(bot: IAITank, target: any): boolean {
+        const invulnerableMs = typeof target?.invulnerableTime === 'number' ? target.invulnerableTime : 0;
+        if (invulnerableMs > 0) return true;
+        if (target?.aiTargetId === bot.id) return false;
+
+        const botLevel = bot.level ?? 1;
+        const targetLevel = typeof target?.level === 'number' ? target.level : 1;
+        const targetScore = typeof target?.score === 'number' ? target.score : 0;
+        const levelGap = botLevel - targetLevel;
+        if (target?.type === EntityType.PLAYER && targetLevel <= 6 && targetScore < 1800 && levelGap >= 6) {
+            return this.seeded01(bot.id * 92821 + target.id * 73) < 0.68;
+        }
+
+        return false;
+    }
+
+    private static getMercyWeight(bot: IAITank, target: any, distance: number): number {
+        if (target?.aiTargetId === bot.id) return 1;
+        if (target?.type !== EntityType.PLAYER) return 1;
+
+        const botLevel = bot.level ?? 1;
+        const targetLevel = typeof target?.level === 'number' ? target.level : 1;
+        const targetScore = typeof target?.score === 'number' ? target.score : 0;
+        const levelGap = botLevel - targetLevel;
+        if (targetLevel > 8 || levelGap < 5) return 1;
+
+        let weight = 1;
+        if (targetScore < 3000) weight *= 0.58;
+        if (distance > 620) weight *= 0.52;
+        if (levelGap >= 10) weight *= 0.42;
+        return weight;
     }
 
     private static selectFarmTarget(bot: IAITank, data: any) {
@@ -461,7 +500,7 @@ export class EnemyAITanks {
             return AIState.GREETING;
         }
 
-        const escortClass = bot.classType === TankClass.BASIC || bot.classType === TankClass.TWIN || bot.classType === TankClass.MACHINE_GUN || bot.classType === TankClass.GUNNER || bot.classType === TankClass.AUTO_GUNNER || bot.classType === TankClass.NURSE || bot.classType === TankClass.DOCTOR;
+        const escortClass = bot.classType === TankClass.BASIC || bot.classType === TankClass.TWIN || bot.classType === TankClass.MACHINE_GUN || bot.classType === TankClass.GUNNER || bot.classType === TankClass.AUTO_GUNNER || bot.classType === TankClass.NURSE || bot.classType === TankClass.DOCTOR || bot.classType === TankClass.PLAGUE_DOCTOR;
         if (!nearThreat && escortClass && distToPlayer < 420) {
             bot.socialAnchorId = player.id;
             return AIState.ESCORT;
@@ -625,6 +664,16 @@ export class EnemyAITanks {
                     aggroWeight = 1.7;
                     strafeWeight = 0.1;
                     break;
+                case TankClass.VAMPIRE:
+                    idealRange = 205;
+                    aggroWeight = 1.28;
+                    strafeWeight = 0.52;
+                    break;
+                case TankClass.LEECH:
+                    idealRange = 245;
+                    aggroWeight = 1.16;
+                    strafeWeight = 0.62;
+                    break;
                 default:
                     idealRange = 360;
                     aggroWeight = 1.0;
@@ -633,6 +682,8 @@ export class EnemyAITanks {
             }
 
             const isHealer = this.isPacifist(bot.classType);
+            const isTrapper = this.isTrapperBranch(bot.classType);
+            const isMachineGunTrapper = bot.classType === TankClass.MACHINE_GUN_TRAPPER;
 
             if (isHealer) {
                 // Smart Support AI: Coordinate with teammates, prioritize healing low health allies
@@ -662,6 +713,25 @@ export class EnemyAITanks {
                         }
                         interests[i] = Math.max(0, dotVal * 1.5);
                     }
+                } else if (bot.classType === TankClass.PLAGUE_DOCTOR && data.enemies.length > 0) {
+                    idealRange = 230;
+                    for (let i = 0; i < numRays; i++) {
+                        const dotToTarget = Vector.dot(rays[i], toTarget);
+                        let val = 0;
+                        if (dist < idealRange - 45) {
+                            val = -dotToTarget * 1.2;
+                        } else if (dist > idealRange + 90) {
+                            val = dotToTarget * 1.05;
+                        } else {
+                            const strafeDirVec = { x: -toTarget.y, y: toTarget.x };
+                            const strafeMove = Vector.mult(strafeDirVec, bot.strafeDir);
+                            const strafeDot = Vector.dot(rays[i], strafeMove);
+                            val = strafeDot * 0.95 + dotToTarget * -0.08;
+                        }
+                        interests[i] = Math.max(0, val);
+                    }
+                    this.updateAim(bot, engine, target);
+                    bot.aiShooting = true;
                 } else {
                     // Back off from close hostiles while looking for team support
                     if (data.enemies.length > 0) {
@@ -679,7 +749,21 @@ export class EnemyAITanks {
                     const dotToTarget = Vector.dot(rays[i], toTarget);
                     let val = 0;
 
-                    if (dist < idealRange - 80) {
+                    if (isTrapper) {
+                        const retreatWindow = isMachineGunTrapper ? 55 : 75;
+                        const engageWindow = isMachineGunTrapper ? 85 : 95;
+                        if (dist < idealRange - retreatWindow) {
+                            val = -dotToTarget * aggroWeight * 1.5;
+                        } else if (dist > idealRange + engageWindow) {
+                            val = dotToTarget * aggroWeight * (isMachineGunTrapper ? 1.18 : 0.92);
+                        } else {
+                            const strafeDirVec = { x: -toTarget.y, y: toTarget.x };
+                            const strafeMove = Vector.mult(strafeDirVec, bot.strafeDir);
+                            const strafeDot = Vector.dot(rays[i], strafeMove);
+                            const radialDot = dotToTarget * (dist > idealRange ? 0.12 : -0.32);
+                            val = (strafeDot * (isMachineGunTrapper ? 1.24 : 0.96)) + (radialDot * 0.62);
+                        }
+                    } else if (dist < idealRange - 80) {
                         // backing off
                         val = -dotToTarget * aggroWeight * 1.35;
                     } else if (dist > idealRange + 100) {

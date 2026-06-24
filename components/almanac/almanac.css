@@ -1,0 +1,140 @@
+.vx-modal,
+.vx-modal * {
+    font-family: 'Ubuntu', 'Segoe UI', sans-serif;
+}
+
+.vx-mono {
+    font-family: 'Courier New', monospace !important;
+}
+
+.vx-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(251, 191, 36, 0.55) rgba(255, 255, 255, 0.06);
+}
+
+.vx-scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.vx-scrollbar::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.045);
+    border-radius: 999px;
+}
+
+.vx-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(251, 191, 36, 0.65);
+    border: 3px solid rgba(3, 5, 8, 0.92);
+    border-radius: 999px;
+}
+
+.vx-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(251, 191, 36, 0.86);
+}
+
+.vx-scrollbar-light {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(15, 23, 42, 0.32) rgba(15, 23, 42, 0.08);
+}
+
+.vx-scrollbar-light::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.vx-scrollbar-light::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.08);
+    border-radius: 999px;
+}
+
+.vx-scrollbar-light::-webkit-scrollbar-thumb {
+    background: rgba(15, 23, 42, 0.28);
+    border: 3px solid rgba(248, 250, 252, 0.96);
+    border-radius: 999px;
+}
+
+.vx-scrollbar-light::-webkit-scrollbar-thumb:hover {
+    background: rgba(15, 23, 42, 0.42);
+}
+
+.vx-no-scrollbar {
+    scrollbar-width: none;
+}
+
+.vx-no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.vx-card {
+    content-visibility: auto;
+    contain-intrinsic-size: 1px 260px;
+}
+
+.vx-card-hover {
+    transition: border-color 0.16s ease, background-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.vx-card-hover:hover {
+    transform: translateY(-2px);
+}
+
+.vx-perf .vx-card-hover:hover {
+    transform: none;
+}
+
+.vx-table-scroll {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+
+.vx-table-grid {
+    min-width: 720px;
+}
+
+.vx-table-grid-sm {
+    min-width: 560px;
+}
+
+.vx-grid-bg {
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 48px 48px;
+}
+
+.vx-scanlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(0, 0, 0, 0.12) 3px 4px);
+    opacity: 0.5;
+}
+
+.vx-pulse-dot {
+    animation: vx-pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes vx-pulse-dot {
+    0%,
+    100% {
+        opacity: 0.35;
+        transform: scale(0.8);
+    }
+
+    50% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vx-pulse-dot {
+        animation: none !important;
+    }
+
+    .vx-card-hover,
+    .vx-card-hover:hover {
+        transform: none !important;
+    }
+}

@@ -1,17 +1,653 @@
 
-import React, { useId } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import { TankClass } from '../types';
 import { COLORS, TANK_CONFIGS } from '../constants';
+import { getSandboxBossForm } from '../services/sandbox/SandboxBossForms';
 
 interface TankPreviewProps {
     tankClass: TankClass;
+    bossRushKey?: 'gatekeeper' | 'splitter' | 'reactor' | 'executioner' | 'grand_singularity';
+    barrels?: number[][];
     color?: string;
     size?: number;
     className?: string;
     turretRotation?: number;
     chassisRotation?: number;
     showArenaVfx?: boolean;
+    renderMode?: 'legacy' | 'ingame';
+    previewVariant?: 'default' | 'bossProtocol';
 }
+
+const tracePolygon = (ctx: CanvasRenderingContext2D, points: Array<[number, number]>) => {
+    if (!points.length) return;
+    ctx.beginPath();
+    points.forEach(([x, y], index) => {
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+};
+
+const fillAndStroke = (ctx: CanvasRenderingContext2D, fill: string | CanvasGradient, stroke = COLORS.border, lineWidth = 2) => {
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lineWidth;
+    ctx.fill();
+    ctx.stroke();
+};
+
+const drawRegularPreviewBody = (
+    ctx: CanvasRenderingContext2D,
+    tankClass: TankClass,
+    radius: number,
+    bodyColor: string
+) => {
+    ctx.lineWidth = Math.max(1.8, radius * 0.13);
+    ctx.strokeStyle = COLORS.border;
+    ctx.fillStyle = bodyColor;
+
+    if (tankClass === TankClass.COLOSSAL) {
+        const grad = ctx.createLinearGradient(-radius, -radius, radius * 1.1, radius);
+        grad.addColorStop(0, '#4a1039');
+        grad.addColorStop(0.45, '#db2777');
+        grad.addColorStop(1, '#fbcfe8');
+        tracePolygon(ctx, [
+            [radius * 1.02, 0],
+            [radius * 0.5, -radius * 0.88],
+            [-radius * 0.4, -radius * 0.98],
+            [-radius * 1.04, -radius * 0.34],
+            [-radius * 1.04, radius * 0.34],
+            [-radius * 0.4, radius * 0.98],
+            [radius * 0.5, radius * 0.88],
+        ]);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    if (tankClass === TankClass.LEVIATHAN) {
+        const grad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        grad.addColorStop(0, '#082f49');
+        grad.addColorStop(0.5, '#0ea5e9');
+        grad.addColorStop(1, '#bfdbfe');
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 12; i += 1) {
+            const angle = (i / 12) * Math.PI * 2 - Math.PI / 2;
+            const rr = i % 3 === 0 ? radius * 1.02 : i % 2 === 0 ? radius * 0.66 : radius * 0.34;
+            points.push([Math.cos(angle) * rr, Math.sin(angle) * rr]);
+        }
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    if (tankClass === TankClass.WARLORD) {
+        const grad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        grad.addColorStop(0, '#3f1d2e');
+        grad.addColorStop(0.45, '#be123c');
+        grad.addColorStop(1, '#fecaca');
+        tracePolygon(ctx, [
+            [radius * 1.02, 0],
+            [radius * 0.18, -radius * 0.58],
+            [-radius * 0.24, -radius * 0.96],
+            [-radius * 0.84, -radius * 0.54],
+            [-radius * 0.84, radius * 0.54],
+            [-radius * 0.24, radius * 0.96],
+            [radius * 0.18, radius * 0.58],
+        ]);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    if (tankClass === TankClass.CELESTIAL) {
+        const grad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        grad.addColorStop(0, '#2e1065');
+        grad.addColorStop(0.45, '#7e22ce');
+        grad.addColorStop(1, '#ddd6fe');
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 10; i += 1) {
+            const angle = -Math.PI / 2 + (i / 10) * Math.PI * 2;
+            const rr = i % 2 === 0 ? radius * 0.98 : radius * 0.58;
+            points.push([Math.cos(angle) * rr, Math.sin(angle) * rr]);
+        }
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    if (tankClass === TankClass.OBLITERATOR) {
+        const grad = ctx.createLinearGradient(-radius * 1.2, -radius, radius * 1.2, radius);
+        grad.addColorStop(0, '#1a0b33');
+        grad.addColorStop(0.42, '#6d28d9');
+        grad.addColorStop(0.72, '#a855f7');
+        grad.addColorStop(1, '#f5d0fe');
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 16; i += 1) {
+            const angle = -Math.PI / 2 + (i / 16) * Math.PI * 2;
+            const rr = i % 2 === 0 ? radius * 1.02 : radius * 0.72;
+            points.push([Math.cos(angle) * rr, Math.sin(angle) * rr]);
+        }
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    if (tankClass === TankClass.PACIFIST_TRAINEE) {
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 5; i += 1) {
+            const angle = (i * Math.PI * 2) / 5 - Math.PI / 2;
+            points.push([Math.cos(angle) * radius, Math.sin(angle) * radius]);
+        }
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, bodyColor);
+        return;
+    }
+
+    if (tankClass === TankClass.DRAINER_TRAINEE) {
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 3; i += 1) {
+            const angle = (i * Math.PI * 2) / 3 - Math.PI / 2;
+            points.push([Math.cos(angle) * radius * 1.1, Math.sin(angle) * radius * 1.1]);
+        }
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, bodyColor);
+        return;
+    }
+
+    if (tankClass === TankClass.NURSE || tankClass === TankClass.DOCTOR) {
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 6; i += 1) {
+            const angle = (i * Math.PI) / 3;
+            const rr = tankClass === TankClass.DOCTOR ? radius * 1.08 : radius * 0.98;
+            points.push([Math.cos(angle) * rr, Math.sin(angle) * rr]);
+        }
+        const grad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        grad.addColorStop(0, bodyColor);
+        grad.addColorStop(0.5, '#ffffff');
+        grad.addColorStop(1, bodyColor);
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, grad);
+        return;
+    }
+
+    if (tankClass === TankClass.PLAGUE_DOCTOR) {
+        tracePolygon(ctx, [
+            [radius * 1.8, 0],
+            [radius * 0.5, radius * 0.6],
+            [-radius * 0.8, radius * 1.0],
+            [-radius * 1.3, radius * 0.4],
+            [-radius * 1.3, -radius * 0.4],
+            [-radius * 0.8, -radius * 1.0],
+            [radius * 0.5, -radius * 0.6],
+        ]);
+        const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, radius * 1.8);
+        grad.addColorStop(0, bodyColor);
+        grad.addColorStop(0.8, '#1a1a1a');
+        grad.addColorStop(1, '#000000');
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.4, radius * 0.14));
+        return;
+    }
+
+    if (tankClass === TankClass.LEECH) {
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 8; i += 1) {
+            const angle = (i / 8) * Math.PI * 2;
+            const rr = i % 2 === 0 ? radius * 1.3 : radius * 0.75;
+            points.push([Math.cos(angle) * rr, Math.sin(angle) * rr]);
+        }
+        const grad = ctx.createRadialGradient(-radius * 0.2, -radius * 0.12, radius * 0.15, 0, 0, radius * 1.45);
+        grad.addColorStop(0, '#fecaca');
+        grad.addColorStop(0.22, '#ef4444');
+        grad.addColorStop(0.62, '#450a0a');
+        grad.addColorStop(1, '#120304');
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, grad, 'rgba(255, 205, 205, 0.52)', Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    if (tankClass === TankClass.VAMPIRE) {
+        tracePolygon(ctx, [
+            [radius * 1.5, 0],
+            [radius * 0.3, radius * 1.25],
+            [-radius * 1.1, radius * 0.95],
+            [-radius * 0.6, 0],
+            [-radius * 1.1, -radius * 0.95],
+            [radius * 0.3, -radius * 1.25],
+        ]);
+        const grad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        grad.addColorStop(0, '#500');
+        grad.addColorStop(0.5, bodyColor);
+        grad.addColorStop(1, '#500');
+        fillAndStroke(ctx, grad);
+        return;
+    }
+
+    if (tankClass === TankClass.REAPER) {
+        ctx.beginPath();
+        ctx.moveTo(radius * 1.45, 0);
+        ctx.bezierCurveTo(radius * 1.05, radius * 1.3, -radius * 0.95, radius * 1.58, -radius * 1.35, 0);
+        ctx.bezierCurveTo(-radius * 0.95, -radius * 1.58, radius * 1.05, -radius * 1.3, radius * 1.45, 0);
+        ctx.closePath();
+        const grad = ctx.createRadialGradient(radius * 0.12, -radius * 0.08, radius * 0.15, 0, 0, radius * 1.62);
+        grad.addColorStop(0, '#fca5a5');
+        grad.addColorStop(0.34, '#ef4444');
+        grad.addColorStop(0.72, '#3f0a0a');
+        grad.addColorStop(1, '#090303');
+        fillAndStroke(ctx, grad, 'rgba(255, 185, 185, 0.62)', Math.max(2.6, radius * 0.14));
+        return;
+    }
+
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    fillAndStroke(ctx, bodyColor);
+};
+
+const drawBossRushPreviewBody = (
+    ctx: CanvasRenderingContext2D,
+    bossKey: NonNullable<TankPreviewProps['bossRushKey']>,
+    radius: number,
+    variant: NonNullable<TankPreviewProps['previewVariant']> = 'default'
+) => {
+    const accent =
+        bossKey === 'gatekeeper' ? '#fca5a5' :
+        bossKey === 'splitter' ? '#fecdd3' :
+        bossKey === 'reactor' ? '#fdba74' :
+        bossKey === 'executioner' ? '#fca5a5' :
+        '#c4b5fd';
+    const low =
+        bossKey === 'gatekeeper' ? '#3f1118' :
+        bossKey === 'splitter' ? '#4b1327' :
+        bossKey === 'reactor' ? '#51210c' :
+        bossKey === 'executioner' ? '#3a0c12' :
+        '#23103f';
+    const mid =
+        bossKey === 'gatekeeper' ? '#b91c1c' :
+        bossKey === 'splitter' ? '#e11d48' :
+        bossKey === 'reactor' ? '#ea580c' :
+        bossKey === 'executioner' ? '#dc2626' :
+        '#7c3aed';
+    const high =
+        bossKey === 'gatekeeper' ? '#fecaca' :
+        bossKey === 'splitter' ? '#ffe4ea' :
+        bossKey === 'reactor' ? '#ffedd5' :
+        bossKey === 'executioner' ? '#ffe4e6' :
+        '#ede9fe';
+
+    const aura = ctx.createRadialGradient(0, 0, radius * 0.2, 0, 0, radius * 1.9);
+    aura.addColorStop(0, `${accent}55`);
+    aura.addColorStop(0.45, `${mid}30`);
+    aura.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = aura;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius * 1.9, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (variant === 'bossProtocol') {
+        ctx.save();
+        ctx.strokeStyle = `${accent}88`;
+        ctx.lineWidth = Math.max(1.5, radius * 0.07);
+        for (let ring = 0; ring < 2; ring += 1) {
+            ctx.beginPath();
+            ctx.ellipse(
+                0,
+                0,
+                radius * (1.18 + ring * 0.18),
+                radius * (0.48 + ring * 0.08),
+                ring === 0 ? -0.28 : 0.24,
+                0,
+                Math.PI * 2
+            );
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    if (bossKey === 'gatekeeper') {
+        tracePolygon(ctx, [
+            [-radius * 0.78, -radius * 0.94],
+            [radius * 0.78, -radius * 0.94],
+            [radius * 1.02, -radius * 0.24],
+            [radius * 1.02, radius * 0.24],
+            [radius * 0.78, radius * 0.94],
+            [-radius * 0.78, radius * 0.94],
+            [-radius * 1.02, radius * 0.24],
+            [-radius * 1.02, -radius * 0.24],
+        ]);
+        const grad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        grad.addColorStop(0, high);
+        grad.addColorStop(0.34, accent);
+        grad.addColorStop(0.68, mid);
+        grad.addColorStop(1, low);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    if (bossKey === 'splitter') {
+        const left = new Path2D(`M ${radius * 0.08} ${-radius * 0.94} Q ${-radius * 0.92} ${-radius * 0.16} ${-radius * 0.26} ${radius * 0.94} L ${radius * 0.18} ${radius * 0.52} L ${radius * 0.22} ${-radius * 0.46} Z`);
+        const right = new Path2D(`M ${-radius * 0.08} ${-radius * 0.94} Q ${radius * 0.92} ${-radius * 0.16} ${radius * 0.26} ${radius * 0.94} L ${-radius * 0.18} ${radius * 0.52} L ${-radius * 0.22} ${-radius * 0.46} Z`);
+        const grad = ctx.createRadialGradient(0, 0, radius * 0.1, 0, 0, radius * 1.3);
+        grad.addColorStop(0, high);
+        grad.addColorStop(0.34, accent);
+        grad.addColorStop(0.72, mid);
+        grad.addColorStop(1, low);
+        ctx.save();
+        ctx.translate(-radius * 0.18, 0);
+        ctx.rotate(-0.17);
+        ctx.fillStyle = grad;
+        ctx.strokeStyle = COLORS.border;
+        ctx.lineWidth = Math.max(2.1, radius * 0.11);
+        ctx.fill(left);
+        ctx.stroke(left);
+        ctx.restore();
+        ctx.save();
+        ctx.translate(radius * 0.18, 0);
+        ctx.rotate(0.17);
+        ctx.fillStyle = grad;
+        ctx.strokeStyle = COLORS.border;
+        ctx.lineWidth = Math.max(2.1, radius * 0.11);
+        ctx.fill(right);
+        ctx.stroke(right);
+        ctx.restore();
+        return;
+    }
+
+    if (bossKey === 'reactor') {
+        const points: Array<[number, number]> = [];
+        for (let i = 0; i < 8; i += 1) {
+            const angle = -Math.PI / 2 + (i * Math.PI) / 4;
+            const rr = radius * (i % 2 === 0 ? 0.98 : 0.72);
+            points.push([Math.cos(angle) * rr, Math.sin(angle) * rr]);
+        }
+        const grad = ctx.createRadialGradient(0, 0, radius * 0.1, 0, 0, radius * 1.2);
+        grad.addColorStop(0, high);
+        grad.addColorStop(0.26, accent);
+        grad.addColorStop(0.68, mid);
+        grad.addColorStop(1, low);
+        tracePolygon(ctx, points);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.1, radius * 0.11));
+        return;
+    }
+
+    if (bossKey === 'executioner') {
+        tracePolygon(ctx, [
+            [-radius * 0.84, -radius * 0.38],
+            [radius * 0.02, -radius * 0.94],
+            [radius * 0.94, 0],
+            [radius * 0.02, radius * 0.94],
+            [-radius * 0.84, radius * 0.38],
+        ]);
+        const grad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        grad.addColorStop(0, low);
+        grad.addColorStop(0.35, mid);
+        grad.addColorStop(0.7, accent);
+        grad.addColorStop(1, high);
+        fillAndStroke(ctx, grad, COLORS.border, Math.max(2.2, radius * 0.12));
+        return;
+    }
+
+    const rings = [1, 0.7, 0.42];
+    rings.forEach((multiplier, index) => {
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * multiplier, 0, Math.PI * 2);
+        const grad = ctx.createRadialGradient(0, 0, radius * 0.08, 0, 0, radius * multiplier);
+        grad.addColorStop(0, index === 2 ? '#f5f3ff' : high);
+        grad.addColorStop(0.55, index === 0 ? accent : mid);
+        grad.addColorStop(1, low);
+        fillAndStroke(ctx, grad, index === 0 ? `${accent}99` : `${high}66`, Math.max(1.6, radius * 0.08));
+    });
+};
+
+const drawPreviewBarrel = (
+    ctx: CanvasRenderingContext2D,
+    options: {
+        barrel: number[];
+        radius: number;
+        baseGradient: CanvasGradient;
+        bossRushKey?: NonNullable<TankPreviewProps['bossRushKey']>;
+        previewVariant?: NonNullable<TankPreviewProps['previewVariant']>;
+    }
+) => {
+    const { barrel, radius, baseGradient, bossRushKey, previewVariant = 'default' } = options;
+    const [length, width = 0.8, xOff = 0, angleOff = 0, , yOff = 0] = barrel;
+    const barrelLen = length * radius;
+    const barrelWid = Math.max(3, width * radius);
+    const barrelX = xOff * radius;
+    const barrelY = yOff * radius;
+    const isBossProtocol = !!bossRushKey && previewVariant === 'bossProtocol';
+
+    ctx.save();
+    ctx.rotate(angleOff);
+    ctx.translate(barrelX, barrelY);
+
+    if (bossRushKey === 'gatekeeper' && isBossProtocol) {
+        const shell = ctx.createLinearGradient(0, -barrelWid, barrelLen, barrelWid);
+        shell.addColorStop(0, '#3f1118');
+        shell.addColorStop(0.5, '#fca5a5');
+        shell.addColorStop(1, '#7f1d1d');
+        ctx.fillStyle = shell;
+        ctx.strokeStyle = '#3f1118';
+        ctx.lineWidth = Math.max(1.1, radius * 0.06);
+        ctx.beginPath();
+        ctx.roundRect(0, -barrelWid * 0.44, barrelLen, barrelWid * 0.88, barrelWid * 0.18);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(barrelLen * 0.12, -barrelWid * 0.14, barrelLen * 0.56, barrelWid * 0.12);
+        ctx.strokeStyle = 'rgba(254,202,202,0.42)';
+        ctx.strokeRect(barrelLen * 0.28, -barrelWid * 0.3, barrelLen * 0.24, barrelWid * 0.6);
+        ctx.restore();
+        return;
+    }
+
+    if (bossRushKey === 'splitter' && isBossProtocol) {
+        ctx.fillStyle = '#4b1327';
+        ctx.strokeStyle = '#fecdd3';
+        ctx.lineWidth = Math.max(1.05, radius * 0.055);
+        ctx.beginPath();
+        ctx.moveTo(0, -barrelWid * 0.35);
+        ctx.lineTo(barrelLen * 0.7, -barrelWid * 0.48);
+        ctx.lineTo(barrelLen, 0);
+        ctx.lineTo(barrelLen * 0.7, barrelWid * 0.48);
+        ctx.lineTo(0, barrelWid * 0.35);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(barrelLen * 0.16, -barrelWid * 0.08, barrelLen * 0.42, barrelWid * 0.16);
+        ctx.restore();
+        return;
+    }
+
+    if (bossRushKey === 'reactor' && isBossProtocol) {
+        const shell = ctx.createLinearGradient(0, -barrelWid, barrelLen, barrelWid);
+        shell.addColorStop(0, '#51210c');
+        shell.addColorStop(0.44, '#fdba74');
+        shell.addColorStop(1, '#7c2d12');
+        ctx.fillStyle = shell;
+        ctx.strokeStyle = '#431407';
+        ctx.lineWidth = Math.max(1.05, radius * 0.055);
+        ctx.beginPath();
+        ctx.roundRect(0, -barrelWid * 0.42, barrelLen * 0.82, barrelWid * 0.84, barrelWid * 0.24);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(barrelLen * 0.88, 0, barrelWid * 0.34, 0, Math.PI * 2);
+        ctx.fillStyle = '#fdba74';
+        ctx.fill();
+        ctx.strokeStyle = '#ffedd5';
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255,237,213,0.26)';
+        ctx.fillRect(barrelLen * 0.18, -barrelWid * 0.12, barrelLen * 0.4, barrelWid * 0.24);
+        ctx.restore();
+        return;
+    }
+
+    if (bossRushKey === 'executioner' && isBossProtocol) {
+        ctx.fillStyle = '#3a0c12';
+        ctx.strokeStyle = '#ffe4e6';
+        ctx.lineWidth = Math.max(1.05, radius * 0.055);
+        ctx.beginPath();
+        ctx.moveTo(0, -barrelWid * 0.3);
+        ctx.lineTo(barrelLen * 0.78, -barrelWid * 0.42);
+        ctx.lineTo(barrelLen, 0);
+        ctx.lineTo(barrelLen * 0.78, barrelWid * 0.42);
+        ctx.lineTo(0, barrelWid * 0.3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(barrelLen * 0.18, -barrelWid * 0.08, barrelLen * 0.45, barrelWid * 0.16);
+        ctx.restore();
+        return;
+    }
+
+    if (bossRushKey === 'grand_singularity' && isBossProtocol) {
+        const shell = ctx.createLinearGradient(0, -barrelWid, barrelLen, barrelWid);
+        shell.addColorStop(0, '#23103f');
+        shell.addColorStop(0.35, '#7c3aed');
+        shell.addColorStop(0.7, '#c4b5fd');
+        shell.addColorStop(1, '#312e81');
+        ctx.fillStyle = shell;
+        ctx.strokeStyle = '#23103f';
+        ctx.lineWidth = Math.max(1.15, radius * 0.06);
+        ctx.beginPath();
+        ctx.roundRect(0, -barrelWid * 0.44, barrelLen * 0.86, barrelWid * 0.88, barrelWid * 0.24);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(barrelLen * 0.94, 0, barrelWid * 0.38, 0, Math.PI * 2);
+        const core = ctx.createRadialGradient(barrelLen * 0.94, 0, barrelWid * 0.04, barrelLen * 0.94, 0, barrelWid * 0.38);
+        core.addColorStop(0, '#f5f3ff');
+        core.addColorStop(0.35, '#c4b5fd');
+        core.addColorStop(1, '#312e81');
+        ctx.fillStyle = core;
+        ctx.fill();
+        ctx.strokeStyle = '#ddd6fe';
+        ctx.stroke();
+        ctx.restore();
+        return;
+    }
+
+    ctx.fillStyle = baseGradient;
+    ctx.strokeStyle = '#4b5563';
+    ctx.lineWidth = Math.max(1.1, radius * 0.06);
+    ctx.beginPath();
+    ctx.roundRect(0, -barrelWid / 2, barrelLen, barrelWid, barrelWid * 0.28);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(barrelLen * 0.18, -barrelWid * 0.24, barrelLen * 0.6, barrelWid * 0.18);
+    ctx.restore();
+};
+
+const InGameTankPreviewCanvas: React.FC<TankPreviewProps> = ({
+    tankClass,
+    bossRushKey,
+    barrels,
+    color,
+    size = 60,
+    className = '',
+    turretRotation = 0,
+    chassisRotation = 0,
+    showArenaVfx = false,
+    previewVariant = 'default',
+}) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+        canvas.width = Math.round(size * dpr);
+        canvas.height = Math.round(size * dpr);
+        canvas.style.width = `${size}px`;
+        canvas.style.height = `${size}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, size, size);
+
+        const sandboxBossForm = getSandboxBossForm(tankClass);
+        const resolvedBossKey = bossRushKey ?? sandboxBossForm?.bossKey;
+        const isBossTank =
+            tankClass === TankClass.COLOSSAL ||
+            tankClass === TankClass.LEVIATHAN ||
+            tankClass === TankClass.WARLORD ||
+            tankClass === TankClass.CELESTIAL ||
+            tankClass === TankClass.OBLITERATOR ||
+            !!resolvedBossKey;
+        const isPacifist = tankClass === TankClass.PACIFIST_TRAINEE || tankClass === TankClass.NURSE || tankClass === TankClass.DOCTOR || tankClass === TankClass.PLAGUE_DOCTOR;
+        const isDraining = tankClass === TankClass.DRAINER_TRAINEE || tankClass === TankClass.LEECH || tankClass === TankClass.VAMPIRE || tankClass === TankClass.REAPER;
+
+        let bodyColor = color || COLORS.player;
+        if (isBossTank && !resolvedBossKey) bodyColor = '#9f76fc';
+        else if (isPacifist) bodyColor = '#22c55e';
+        else if (isDraining) bodyColor = '#dc2626';
+
+        const resolvedBarrels = barrels ?? sandboxBossForm?.barrels ?? TANK_CONFIGS[tankClass] ?? TANK_CONFIGS[TankClass.BASIC];
+        const radius = (size / 60) * (isBossTank ? 20 : 14);
+        const center = size / 2;
+        const barrelGradient = ctx.createLinearGradient(0, -radius, 0, radius);
+        barrelGradient.addColorStop(0, '#7b8794');
+        barrelGradient.addColorStop(0.5, '#b5bec7');
+        barrelGradient.addColorStop(1, '#6b7280');
+
+        if (showArenaVfx && isBossTank) {
+            const glow = ctx.createRadialGradient(center, center, radius * 0.25, center, center, radius * 2.2);
+            glow.addColorStop(0, resolvedBossKey ? 'rgba(255,255,255,0.12)' : 'rgba(125,211,252,0.12)');
+            glow.addColorStop(0.6, resolvedBossKey ? 'rgba(236,72,153,0.10)' : 'rgba(56,189,248,0.10)');
+            glow.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(center, center, radius * 2.2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.save();
+        ctx.translate(center, center);
+
+        ctx.save();
+        ctx.rotate((chassisRotation * Math.PI) / 180);
+        if (resolvedBossKey) drawBossRushPreviewBody(ctx, resolvedBossKey, radius, previewVariant);
+        else drawRegularPreviewBody(ctx, tankClass, radius, bodyColor);
+        ctx.restore();
+
+        ctx.save();
+        ctx.rotate((turretRotation * Math.PI) / 180);
+        resolvedBarrels.forEach((barrel) => {
+            drawPreviewBarrel(ctx, {
+                barrel,
+                radius,
+                baseGradient: barrelGradient,
+                bossRushKey: resolvedBossKey,
+                previewVariant,
+            });
+        });
+
+        if (resolvedBossKey) {
+            const coreGrad = ctx.createRadialGradient(-radius * 0.14, -radius * 0.1, radius * 0.08, 0, 0, radius * 0.7);
+            coreGrad.addColorStop(0, '#ffffff');
+            coreGrad.addColorStop(0.28, resolvedBossKey === 'reactor' ? '#fdba74' : resolvedBossKey === 'grand_singularity' ? '#c4b5fd' : '#fca5a5');
+            coreGrad.addColorStop(1, 'rgba(20,20,28,0.32)');
+            ctx.beginPath();
+            ctx.arc(0, 0, radius * 0.5, 0, Math.PI * 2);
+            fillAndStroke(ctx, coreGrad, 'rgba(255,255,255,0.28)', Math.max(1.2, radius * 0.06));
+        } else {
+            ctx.beginPath();
+            ctx.arc(0, 0, radius * 0.75, 0, Math.PI * 2);
+            fillAndStroke(ctx, bodyColor, COLORS.border, Math.max(2, radius * 0.1));
+            ctx.beginPath();
+            ctx.arc(0, 0, radius * 0.38, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.16)';
+            ctx.fill();
+        }
+        ctx.restore();
+
+        ctx.restore();
+    }, [barrels, bossRushKey, chassisRotation, color, previewVariant, showArenaVfx, size, tankClass, turretRotation]);
+
+    return <canvas ref={canvasRef} width={size} height={size} className={`block ${className}`} />;
+};
 
 const isTrapperBranchClass = (tankClass: TankClass) =>
     tankClass === TankClass.TRAPPER ||
@@ -22,21 +658,52 @@ const isTrapperBranchClass = (tankClass: TankClass) =>
 
 const TankPreviewComponent: React.FC<TankPreviewProps> = ({ 
     tankClass, 
+    bossRushKey,
+    barrels,
     color, 
     size = 60, 
     className = "",
     turretRotation = 0,
     chassisRotation = 0,
     showArenaVfx = false,
+    renderMode = 'legacy',
+    previewVariant = 'default',
 }) => {
     const previewId = useId().replace(/:/g, '');
-    const config = TANK_CONFIGS[tankClass] || TANK_CONFIGS[TankClass.BASIC];
+
+    if (renderMode === 'ingame') {
+        return (
+            <InGameTankPreviewCanvas
+                tankClass={tankClass}
+                bossRushKey={bossRushKey}
+                barrels={barrels}
+                color={color}
+                size={size}
+                className={className}
+                turretRotation={turretRotation}
+                chassisRotation={chassisRotation}
+                showArenaVfx={showArenaVfx}
+                previewVariant={previewVariant}
+            />
+        );
+    }
+    const config = barrels || TANK_CONFIGS[tankClass] || TANK_CONFIGS[TankClass.BASIC];
     const center = size / 2;
     const scale = size / 60;
     const radius = 14 * scale; 
     const strokeWidth = 2 * scale;
     
-    const isBossTank = tankClass === TankClass.COLOSSAL || tankClass === TankClass.LEVIATHAN || tankClass === TankClass.WARLORD || tankClass === TankClass.CELESTIAL || tankClass === TankClass.OBLITERATOR;
+    const isBossTank =
+        tankClass === TankClass.COLOSSAL ||
+        tankClass === TankClass.LEVIATHAN ||
+        tankClass === TankClass.WARLORD ||
+        tankClass === TankClass.CELESTIAL ||
+        tankClass === TankClass.OBLITERATOR ||
+        tankClass === TankClass.AEGIS_GATEKEEPER ||
+        tankClass === TankClass.VANTA_SPLITTER ||
+        tankClass === TankClass.PYRE_REACTOR ||
+        tankClass === TankClass.IRON_EXECUTIONER ||
+        tankClass === TankClass.GRAND_SINGULARITY;
     const isPacifist = tankClass === TankClass.PACIFIST_TRAINEE || tankClass === TankClass.NURSE || tankClass === TankClass.DOCTOR || tankClass === TankClass.PLAGUE_DOCTOR;
     const isDraining = tankClass === TankClass.DRAINER_TRAINEE || tankClass === TankClass.LEECH || tankClass === TankClass.VAMPIRE || tankClass === TankClass.REAPER;
     const isGunner = tankClass === TankClass.GUNNER;
@@ -102,6 +769,36 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                     <stop offset="60%" stopColor="rgba(239,68,68,0.16)" />
                     <stop offset="100%" stopColor="rgba(0,0,0,0)" />
                 </radialGradient>
+                <linearGradient id={`${previewId}-gatekeeperShell`} x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#fecaca" />
+                    <stop offset="22%" stopColor="#fca5a5" />
+                    <stop offset="60%" stopColor="#b91c1c" />
+                    <stop offset="100%" stopColor="#3f1118" />
+                </linearGradient>
+                <radialGradient id={`${previewId}-splitterShell`} cx="50%" cy="50%" r="70%">
+                    <stop offset="0%" stopColor="#ffe4ea" />
+                    <stop offset="22%" stopColor="#fecdd3" />
+                    <stop offset="62%" stopColor="#e11d48" />
+                    <stop offset="100%" stopColor="#4b1327" />
+                </radialGradient>
+                <radialGradient id={`${previewId}-reactorShell`} cx="50%" cy="50%" r="70%">
+                    <stop offset="0%" stopColor="#ffedd5" />
+                    <stop offset="22%" stopColor="#fdba74" />
+                    <stop offset="62%" stopColor="#ea580c" />
+                    <stop offset="100%" stopColor="#51210c" />
+                </radialGradient>
+                <radialGradient id={`${previewId}-executionerShell`} cx="50%" cy="50%" r="70%">
+                    <stop offset="0%" stopColor="#ffe4e6" />
+                    <stop offset="22%" stopColor="#fca5a5" />
+                    <stop offset="62%" stopColor="#dc2626" />
+                    <stop offset="100%" stopColor="#3a0c12" />
+                </radialGradient>
+                <radialGradient id={`${previewId}-singularityShell`} cx="50%" cy="50%" r="70%">
+                    <stop offset="0%" stopColor="#ede9fe" />
+                    <stop offset="22%" stopColor="#c4b5fd" />
+                    <stop offset="62%" stopColor="#7c3aed" />
+                    <stop offset="100%" stopColor="#23103f" />
+                </radialGradient>
             </defs>
             <g transform={`translate(${center}, ${center})`}>
                   {/* Chassis / Body Layer */}
@@ -124,7 +821,135 @@ const TankPreviewComponent: React.FC<TankPreviewProps> = ({
                         )}
 
                         {/* Main Tank Body */}
-                        {tankClass === TankClass.COLOSSAL ? (
+                        {bossRushKey === 'gatekeeper' ? (
+                            <g>
+                                <polygon
+                                    points={[
+                                        `${-effectiveRadius * 0.72},${-effectiveRadius * 0.88}`,
+                                        `${effectiveRadius * 0.72},${-effectiveRadius * 0.88}`,
+                                        `${effectiveRadius * 0.94},${-effectiveRadius * 0.24}`,
+                                        `${effectiveRadius * 0.94},${effectiveRadius * 0.24}`,
+                                        `${effectiveRadius * 0.72},${effectiveRadius * 0.88}`,
+                                        `${-effectiveRadius * 0.72},${effectiveRadius * 0.88}`,
+                                        `${-effectiveRadius * 0.94},${effectiveRadius * 0.24}`,
+                                        `${-effectiveRadius * 0.94},${-effectiveRadius * 0.24}`,
+                                    ].join(' ')}
+                                    fill={`url(#${previewId}-gatekeeperShell)`}
+                                    stroke={COLORS.border}
+                                    strokeWidth={strokeWidth}
+                                />
+                                <polygon
+                                    points={[
+                                        `${-effectiveRadius * 0.28},${-effectiveRadius * 0.52}`,
+                                        `${effectiveRadius * 0.28},${-effectiveRadius * 0.52}`,
+                                        `${effectiveRadius * 0.16},${-effectiveRadius * 0.08}`,
+                                        `${-effectiveRadius * 0.16},${-effectiveRadius * 0.08}`,
+                                    ].join(' ')}
+                                    fill="rgba(28,12,18,0.85)"
+                                />
+                                <polygon
+                                    points={[
+                                        `${-effectiveRadius * 0.28},${effectiveRadius * 0.52}`,
+                                        `${effectiveRadius * 0.28},${effectiveRadius * 0.52}`,
+                                        `${effectiveRadius * 0.16},${effectiveRadius * 0.08}`,
+                                        `${-effectiveRadius * 0.16},${effectiveRadius * 0.08}`,
+                                    ].join(' ')}
+                                    fill="rgba(28,12,18,0.85)"
+                                />
+                            </g>
+                        ) : bossRushKey === 'splitter' ? (
+                            <g>
+                                <path
+                                    d={`M ${effectiveRadius * 0.08} ${-effectiveRadius * 0.94} Q ${-effectiveRadius * 0.92} ${-effectiveRadius * 0.16} ${-effectiveRadius * 0.26} ${effectiveRadius * 0.94} L ${effectiveRadius * 0.18} ${effectiveRadius * 0.52} L ${effectiveRadius * 0.22} ${-effectiveRadius * 0.46} Z`}
+                                    fill={`url(#${previewId}-splitterShell)`}
+                                    stroke={COLORS.border}
+                                    strokeWidth={strokeWidth}
+                                    transform={`translate(${-effectiveRadius * 0.18} 0) rotate(-10)`}
+                                />
+                                <path
+                                    d={`M ${-effectiveRadius * 0.08} ${-effectiveRadius * 0.94} Q ${effectiveRadius * 0.92} ${-effectiveRadius * 0.16} ${effectiveRadius * 0.26} ${effectiveRadius * 0.94} L ${-effectiveRadius * 0.18} ${effectiveRadius * 0.52} L ${-effectiveRadius * 0.22} ${-effectiveRadius * 0.46} Z`}
+                                    fill={`url(#${previewId}-splitterShell)`}
+                                    stroke={COLORS.border}
+                                    strokeWidth={strokeWidth}
+                                    transform={`translate(${effectiveRadius * 0.18} 0) rotate(10)`}
+                                />
+                                <rect
+                                    x={-effectiveRadius * 0.18}
+                                    y={-effectiveRadius * 0.44}
+                                    width={effectiveRadius * 0.36}
+                                    height={effectiveRadius * 0.88}
+                                    rx={effectiveRadius * 0.14}
+                                    fill="rgba(38,10,26,0.8)"
+                                    stroke="rgba(254,205,211,0.65)"
+                                    strokeWidth={strokeWidth * 0.8}
+                                />
+                            </g>
+                        ) : bossRushKey === 'reactor' ? (
+                            <g>
+                                <polygon
+                                    points={Array.from({ length: 8 }).map((_, i) => {
+                                        const angle = -Math.PI / 2 + (i * Math.PI) / 4;
+                                        const rr = effectiveRadius * (i % 2 === 0 ? 0.98 : 0.72);
+                                        return `${Math.cos(angle) * rr},${Math.sin(angle) * rr}`;
+                                    }).join(' ')}
+                                    fill={`url(#${previewId}-reactorShell)`}
+                                    stroke={COLORS.border}
+                                    strokeWidth={strokeWidth}
+                                />
+                                <circle
+                                    cx="0"
+                                    cy="0"
+                                    r={effectiveRadius * 0.46}
+                                    fill="rgba(54,24,9,0.8)"
+                                    stroke="rgba(255,237,213,0.55)"
+                                    strokeWidth={strokeWidth * 0.8}
+                                />
+                            </g>
+                        ) : bossRushKey === 'executioner' ? (
+                            <g>
+                                <polygon
+                                    points={[
+                                        `${-effectiveRadius * 0.84},${-effectiveRadius * 0.38}`,
+                                        `${effectiveRadius * 0.02},${-effectiveRadius * 0.94}`,
+                                        `${effectiveRadius * 0.94},0`,
+                                        `${effectiveRadius * 0.02},${effectiveRadius * 0.94}`,
+                                        `${-effectiveRadius * 0.84},${effectiveRadius * 0.38}`,
+                                    ].join(' ')}
+                                    fill={`url(#${previewId}-executionerShell)`}
+                                    stroke={COLORS.border}
+                                    strokeWidth={strokeWidth}
+                                />
+                                <polygon
+                                    points={[
+                                        `${-effectiveRadius * 0.32},${-effectiveRadius * 0.26}`,
+                                        `${effectiveRadius * 0.56},0`,
+                                        `${-effectiveRadius * 0.32},${effectiveRadius * 0.26}`,
+                                    ].join(' ')}
+                                    fill="rgba(45,10,16,0.78)"
+                                />
+                            </g>
+                        ) : bossRushKey === 'grand_singularity' ? (
+                            <g>
+                                <polygon
+                                    points={Array.from({ length: 10 }).map((_, i) => {
+                                        const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+                                        const rr = effectiveRadius * (i % 2 === 0 ? 0.94 : 0.68);
+                                        return `${Math.cos(angle) * rr},${Math.sin(angle) * rr}`;
+                                    }).join(' ')}
+                                    fill={`url(#${previewId}-singularityShell)`}
+                                    stroke={COLORS.border}
+                                    strokeWidth={strokeWidth}
+                                />
+                                <circle
+                                    cx="0"
+                                    cy="0"
+                                    r={effectiveRadius * 0.54}
+                                    fill="rgba(28,12,46,0.78)"
+                                    stroke="rgba(237,233,254,0.5)"
+                                    strokeWidth={strokeWidth * 0.8}
+                                />
+                            </g>
+                        ) : tankClass === TankClass.COLOSSAL ? (
                             <g>
                                 <polygon 
                                     points={[

@@ -1,5 +1,5 @@
-import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector, BotChatBubble, BotChatCategory, DeathPresentationState, DeathKillerSnapshot, BossRushLoadout } from '../types';
-import { BASE_STATS, BOSS_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG, SHOP_ITEMS, getShapeRarityTable, SECONDARY_SECTOR_OPTIONS } from '../constants';
+import { EntityType, GameState, KillFeedEntry, ShapeType, StatType, TankClass, Vector2, LeaderboardEntry, Team, GameMode, UINotification, ShapeRarity, BuffEffect, MinimapMarker, SandboxConfig, GameSettings, AIState, PlayerState, DominionZoneState, SecondarySector, BotChatBubble, BotChatCategory, DeathPresentationState, DeathKillerSnapshot, BossRushLoadout, SandboxBossHudInfo, SandboxBossAbilityInfo } from '../types';
+import { BASE_STATS, BOSS_STATS, CANVAS_HEIGHT, CANVAS_WIDTH, COLORS, GRID_SIZE, STAT_COLORS, TANK_CONFIGS, XP_CURVE_MULTIPLIER, MAX_LEVEL, CLASS_TREE, BASE_ZONE_WIDTH, SHAPE_STATS, RARITY_CONFIG, VOID_RARITY_CONFIG, BOT_NAMES, BOT_NAME_POOLS, BOT_LEGENDARY_NAMES, BOT_LEGENDARY_NAME_CHANCE, BOT_STAT_PRIORITIES, REBIRTH_LEVEL, REBIRTH_AREA_POS, REBIRTH_AREA_SIZE, SAFE_ZONE_WARNING_RADIUS, SAFE_ZONE_ENGAGEMENT_RADIUS, SAFE_ZONE_DRONE_SCAN_INTERVAL_MS, SAFE_ZONE_DEFENSE_DRONES_PER_TEAM, CLASS_PROJECTILE_MODIFIERS, CLASS_ABILITY_CONFIG, SHOP_ITEMS, getShapeRarityTable, SECONDARY_SECTOR_OPTIONS } from '../constants';
 import * as Vector from './MathUtils';
 import { SoundEngine } from './SoundEngine';
 import type { AudioSpatialOptions } from './SoundEngine';
@@ -7,7 +7,11 @@ import { EnemyAITanks } from './EnemyAITanks';
 import { AISystem } from './systems/AISystem';
 import { TDMAISystem, type Player as TDMPlayer } from '../systems/TDM-ai';
 import { BossRushMode } from './bossRush/BossRushMode';
-import { BOSS_RUSH_ARENA, type BossRushBossDefinition } from './bossRush/BossRushTypes';
+import { renderBossRushTelegraphs, updateBossRushTelegraphs } from './bossRush/BossRushTelegraphSystem';
+import { BOSS_RUSH_ARENA, type BossRushBossDefinition, type BossRushTelegraph } from './bossRush/BossRushTypes';
+import { getSandboxBossForm } from './sandbox/SandboxBossForms';
+import { buildSandboxBossHud as buildSandboxBossHudData, castSandboxBossAbility, castSandboxBossPrimary, clearSandboxBossTelegraphs, createSandboxBossRuntimeState, cycleSandboxBossHeavySelection, selectSandboxBossHeavySelection, tickSandboxBossRuntime } from './sandbox/SandboxBossAbilityRuntime';
+import type { SandboxOwnedBossTelegraph, SandboxBossRuntimeState } from './sandbox/SandboxBossTypes';
 
 // Define FloatingTextType for type safety
 type FloatingTextType = 'DAMAGE' | 'SCORE';
@@ -31,6 +35,48 @@ type SkinExtras = {
     deathEffect?: string | null;
 };
 type SkinDefinition = { id: string; modifier: SkinModifier; extras?: SkinExtras };
+type SandboxBossProtocolConfig = {
+    name: string;
+    callsign: string;
+    bossKey: 'gatekeeper' | 'splitter' | 'reactor' | 'executioner' | 'grand_singularity';
+    barrels?: number[][];
+    summary: string;
+    primary: {
+        id: string;
+        name: string;
+        cooldown: number;
+        description: string;
+    };
+    utility?: {
+        id: string;
+        name: string;
+        trigger: 'X';
+        description: string;
+    };
+    passives: Array<{
+        id: string;
+        name: string;
+        description: string;
+    }>;
+};
+const REBIRTH_BOSS_CLASSES = new Set<TankClass>([
+    TankClass.COLOSSAL,
+    TankClass.LEVIATHAN,
+    TankClass.WARLORD,
+    TankClass.CELESTIAL,
+    TankClass.OBLITERATOR,
+]);
+const SANDBOX_BOSS_ARchetype_BY_CLASS: Partial<Record<TankClass, TankClass>> = {
+    [TankClass.AEGIS_GATEKEEPER]: TankClass.COLOSSAL,
+    [TankClass.VANTA_SPLITTER]: TankClass.LEVIATHAN,
+    [TankClass.PYRE_REACTOR]: TankClass.WARLORD,
+    [TankClass.IRON_EXECUTIONER]: TankClass.CELESTIAL,
+    [TankClass.GRAND_SINGULARITY]: TankClass.OBLITERATOR,
+};
+const resolveBossGameplayClass = (classType: TankClass): TankClass | null => {
+    if (REBIRTH_BOSS_CLASSES.has(classType)) return classType;
+    return SANDBOX_BOSS_ARchetype_BY_CLASS[classType] ?? null;
+};
 type DominionZoneDef = {
     id: number;
     pos: Vector2;
@@ -38,6 +84,124 @@ type DominionZoneDef = {
     tankId: number | null;
     owner: Team;
     contested: boolean;
+};
+
+const SANDBOX_BOSS_PROTOCOLS: Partial<Record<TankClass, SandboxBossProtocolConfig>> = {
+    [TankClass.AEGIS_GATEKEEPER]: {
+        name: 'Aegis Gatekeeper',
+        callsign: 'Vault Sentinel // Introductory Pattern Boss',
+        bossKey: 'gatekeeper',
+        barrels: [
+            [1.46, 0.58, 0.16, 0, 1.0, 0, 0.94],
+            [1.08, 0.4, -0.06, Math.PI * 0.42, 1.18, 0.74, 0.86],
+            [1.08, 0.4, -0.06, -Math.PI * 0.42, 1.18, -0.74, 0.86],
+            [0.82, 0.3, -0.56, Math.PI, 1.28, 0, 0.9],
+        ],
+        summary: 'Fortified lane-control boss frame with disciplined pressure, lock geometry, and anchored suppression.',
+        primary: {
+            id: 'citadel_overdrive',
+            name: 'Gate Surge',
+            cooldown: 16,
+            description: 'Refresh defensive pressure, stabilize the frame, and launch a short burst of command drones.',
+        },
+        passives: [
+            { id: 'rampart_array', name: 'Rampart Array', description: 'Auto turrets keep nearby lanes under constant suppression.' },
+            { id: 'drone_foundry', name: 'Drone Foundry', description: 'Rear bays continuously fabricate drones while the broadside stays online.' },
+        ],
+    },
+    [TankClass.VANTA_SPLITTER]: {
+        name: 'Vanta Splitter',
+        callsign: 'Fracture Bloom // Multi-Angle Pressure Boss',
+        bossKey: 'splitter',
+        barrels: [
+            [1.36, 0.5, 0.08, 0, 0.84, 0, 0.82],
+            [1.24, 0.42, -0.02, Math.PI * 0.22, 0.92, 0.34, 0.8],
+            [1.24, 0.42, -0.02, -Math.PI * 0.22, 0.92, -0.34, 0.8],
+            [1.08, 0.34, -0.18, Math.PI * 0.48, 1.08, 0.72, 0.76],
+            [1.08, 0.34, -0.18, -Math.PI * 0.48, 1.08, -0.72, 0.76],
+            [0.78, 0.28, -0.44, Math.PI, 1.28, 0, 0.9],
+        ],
+        summary: 'Split-pressure boss frame with flanking geometry, fracture lanes, and relentless motion forcing.',
+        primary: {
+            id: 'abyssal_rupture',
+            name: 'Fracture Pulse',
+            cooldown: 9,
+            description: 'Detonate a close-range tidal pulse that blasts enemies outward and breaks clustered shapes.',
+        },
+        passives: [
+            { id: 'maelstrom_heart', name: 'Maelstrom Heart', description: 'Core weapon cycle periodically emits disruptive pulse pressure.' },
+            { id: 'escort_bloom', name: 'Escort Bloom', description: 'Support mounts fabricate orbiting escorts during sustained fire.' },
+        ],
+    },
+    [TankClass.PYRE_REACTOR]: {
+        name: 'Pyre Reactor',
+        callsign: 'Core Furnace // Arena-Control Boss',
+        bossKey: 'reactor',
+        barrels: [
+            [1.18, 0.38, 0.04, 0, 0.86, 0, 0.92],
+            [1.04, 0.32, -0.04, Math.PI / 3, 0.96, 0.44, 0.8],
+            [1.04, 0.32, -0.04, -Math.PI / 3, 0.96, -0.44, 0.8],
+            [0.92, 0.3, -0.18, Math.PI * 0.68, 1.08, 0.74, 0.78],
+            [0.92, 0.3, -0.18, -Math.PI * 0.68, 1.08, -0.74, 0.78],
+            [0.74, 0.28, -0.4, Math.PI, 1.24, 0, 0.88],
+        ],
+        summary: 'Arena-control boss frame built around heat pulses, rotating pressure, and sustained area denial.',
+        primary: {
+            id: 'aegis_directive',
+            name: 'Meltdown Directive',
+            cooldown: 14,
+            description: 'Issue a repair command pulse that restores hull, primes barrels, and strengthens nearby drones.',
+        },
+        utility: {
+            id: 'siege_lock',
+            name: 'Siege Lock',
+            trigger: 'X',
+            description: 'Toggle a rooted siege posture for anchored firing control and defensive hold pressure.',
+        },
+        passives: [
+            { id: 'repair_orbit', name: 'Repair Orbit', description: 'Twin repair satellites continuously reinforce the command frame.' },
+        ],
+    },
+    [TankClass.IRON_EXECUTIONER]: {
+        name: 'Iron Executioner',
+        callsign: 'Verdict Engine // Heavy Punishment Boss',
+        bossKey: 'executioner',
+        barrels: [
+            [1.52, 0.56, 0.12, 0, 1.08, 0, 0.76],
+            [1.08, 0.34, -0.08, Math.PI * 0.34, 0.92, 0.52, 0.76],
+            [1.08, 0.34, -0.08, -Math.PI * 0.34, 0.92, -0.52, 0.76],
+            [0.9, 0.28, -0.24, Math.PI * 0.84, 1.16, 0.34, 0.9],
+            [0.9, 0.28, -0.24, -Math.PI * 0.84, 1.16, -0.34, 0.9],
+        ],
+        summary: 'Punishment boss frame with decisive cleave pressure, heavy anchor fire, and brutal conversion windows.',
+        primary: {
+            id: 'starfall_relay',
+            name: 'Verdict Relay',
+            cooldown: 13,
+            description: 'Launch a quick celestial relay burst that seeds carrier drones and radiant orb pressure.',
+        },
+        passives: [
+            { id: 'carrier_bloom', name: 'Carrier Bloom', description: 'Main fire pattern continuously mixes radiant orbs with support drone launches.' },
+        ],
+    },
+    [TankClass.GRAND_SINGULARITY]: {
+        name: 'The Grand Singularity',
+        callsign: 'Event Horizon // Final Boss',
+        bossKey: 'grand_singularity',
+        barrels: [
+            [1.96, 1.1, 0.08, 0, 1.42, 0, 0.78],
+        ],
+        summary: 'Final boss frame with catastrophic breach artillery, gravitational pressure, and overwhelming core presence.',
+        primary: {
+            id: 'ruin_lance',
+            name: 'Event Horizon Lance',
+            cooldown: 18,
+            description: 'Fire a dedicated breach shell that spikes impact damage and clears dense shape lanes.',
+        },
+        passives: [
+            { id: 'cataclysm_core', name: 'Cataclysm Core', description: 'Primary chassis fire already outputs oversized breach rounds with extreme pressure.' },
+        ],
+    },
 };
 
 type DominionWeaponProfile = 'DESTROYER' | 'GUNNER' | 'TRAPPER' | 'TRIPLE';
@@ -82,14 +246,14 @@ type PlayerDeathKillerRef = {
 };
 
 const DOMINION_TANK_MAX_HEALTH = 30000;
-const DOMINION_TANK_RADIUS = 62;
+const DOMINION_TANK_RADIUS = 74;
 const ELITE_TANK_HEALTH_BASE = 22000;
 const ELITE_TANK_HEALTH_PER_LEVEL = 190;
 const ELITE_TANK_SHIELD_BASE = 320;
 const ELITE_TANK_BASELINE_SPEED = BASE_STATS.speed;
 const MAX_ACTIVE_BOT_CHATS = 4;
 const BOT_CHAT_BASE_COOLDOWN_MS = 12000;
-const BOT_RARE_CHAT_COOLDOWN_MS = 18000;
+const BOT_RARE_CHAT_COOLDOWN_MS = 26000;
 const BOT_DEATH_TAUNT_GLOBAL_COOLDOWN_MS = 14000;
 const BOT_DEATH_TAUNT_TYPING_MS = 1750;
 const BOT_DEATH_TAUNT_VISIBLE_MS = 1000;
@@ -98,59 +262,62 @@ const BOT_DEATH_TAUNT_FADE_MS = 450;
 
 const BOT_CHAT_LINES: Record<BotChatCategory, string[]> = {
     death_taunt: [
-        'ez',
-        'sit down',
-        'bro got recycled',
-        'skill issue detected',
-        'back to the menu you go',
-        'was that your plan?',
-        'target deleted',
-        'nice try lil bro',
-        'you good?',
-        'that was personal',
-        'command grid says no',
-        'arena privileges revoked',
-        'respawn and pretend that never happened',
-        'bro entered the wrong postcode',
-        'your tank warranty just expired',
+        'unfortunate patch notes for you',
+        'that looked more confident than effective',
+        'the arena has declined your application',
+        'respawn with fresh ideas',
+        'that plan had theatre, not results',
+        'tank privileges temporarily revoked',
+        'you delivered yourself directly to me',
+        'that was a bold way to become debris',
+        'your minimap will remember this',
+        'i have filed that under avoidable',
+        'command reviewed the footage and winced',
+        'you exploded with excellent timing',
+        'that was less of a duel, more of a donation',
+        'warranty claim denied on impact',
+        'you queued into my bad mood',
     ],
     healing_request: [
-        'need heals',
-        'restore me pls',
-        'low hp!',
-        'healer, over here',
-        "i'm one shot",
-        'save me bro',
-        'my health bar is cooked',
-        'restoration needed',
-        "i'm getting folded",
-        'heal aura pls',
+        'medical assistance would be iconic',
+        'restore me before i become folklore',
+        'healer, i am visually struggling',
+        "i'm one bad decision from confetti",
+        'my health bar is doing satire',
+        'restoration requested with urgency and shame',
+        'patch me up before they notice',
+        'i am being folded into modern art',
+        'heal aura please, i beg professionally',
+        'this hull is held together by optimism',
     ],
     panic: [
-        'nah im out',
-        'too many angles',
-        'abort abort',
-        'this lane is cursed',
-        'im getting farmed',
+        'nope, this lane is haunted',
+        'too many angles, not enough miracles',
+        'tactical retreat with emotional damage',
+        'abort mission, preserve ego',
+        'i am being professionally farmed',
     ],
     victory: [
-        'clean pick',
-        'target folded',
-        'thats one less problem',
-        'grid secured',
+        'clean work, minimal screaming',
+        'target folded on schedule',
+        'that problem solved itself near me',
+        'grid secured, ego boosted',
     ],
     rare_random: [
-        'systems nominal',
-        'who parked that crasher there',
-        'this lobby smells like tilt',
-        'holding the lane',
-        'vextor is watching',
+        'systems nominal, vibes questionable',
+        'who parked that crasher like that',
+        'this lobby smells faintly of bad decisions',
+        'holding the lane and several grudges',
+        'vextor is watching and judging softly',
+        'combat posture: suspiciously excellent',
+        'if i vanish, blame geometry',
+        'i miss when triangles feared me',
     ],
     low_health: [
-        'barely alive',
-        'hull critical',
-        'one pixel left',
-        'not like this',
+        'hull critical, dignity negotiable',
+        'one pixel and a dream',
+        'not like this, be serious',
+        'surviving on posture alone',
     ],
 };
 
@@ -158,92 +325,92 @@ const BOT_CLASS_CHAT_LINES: Partial<Record<BotChatCategory, Partial<Record<strin
     death_taunt: {
         sniper: [
             'cross-map receipt delivered',
-            'held that angle for you',
-            'range diff',
-            'you walked into the lane',
+            'held that angle just for you',
+            'range diff, respectfully',
+            'you toured the lane personally',
         ],
         rusher: [
-            'ran you down',
-            'full send worked',
-            'bonk confirmed',
-            'too slow',
+            'ran you down legally somehow',
+            'full send, zero regrets',
+            'bonk confirmed by the state',
+            'too slow, too visible',
         ],
         support: [
-            'diagnosis complete',
-            'support still clears',
-            'prescription: respawn',
-            'healing denied',
+            'diagnosis complete, bedside manner pending',
+            'support still clears, apparently',
+            'prescription: sit down and respawn',
+            'healing denied by circumstances',
         ],
         boss: [
-            'kneel before the grid',
-            'your resistance was decorative',
-            'the arena chose me',
-            'a predictable collapse',
+            'kneel before the grid, briefly',
+            'your resistance was mostly decorative',
+            'the arena chose me and frankly i agree',
+            'a predictable collapse with nice pacing',
         ],
     },
     healing_request: {
         support: [
-            'support needs support',
-            'patch me up',
-            'restoration on me',
+            'support requires emotional and medical support',
+            'patch me up, i have patients to impress',
+            'restoration on me, immediately',
         ],
         sniper: [
-            'need heals on backline',
-            'cover me, low hull',
+            'need heals on backline, i am expensive',
+            'cover me, low hull and worse mood',
         ],
         rusher: [
-            'heals now bro',
-            'i sent too hard',
+            'heals now, i may have sent too hard',
+            'minor issue: i launched myself at them',
         ],
     },
     panic: {
         sniper: [
-            'theyre diving backline',
-            'too close too close',
+            'they are in my personal range',
+            'too close, this is peasant distance',
         ],
         rusher: [
-            'nah this push is cursed',
-            'reverse reverse',
+            'nah this push is cursed for real',
+            'reverse reverse, i misread the prophecy',
         ],
         support: [
-            'team where are you',
-            'need peel right now',
+            'team where are you, spiritually and physically',
+            'need peel right now, i am extremely peelable',
         ],
     },
     victory: {
         sniper: [
-            'clean angle',
-            'picked from downtown',
+            'clean angle, filthy outcome',
+            'picked from downtown with parking included',
         ],
         rusher: [
-            'ran the lobby',
-            'thats another one',
+            'ran the lobby on borrowed brakes',
+            'that is another solved problem',
         ],
         support: [
-            'support diff',
-            'stabilised and secured',
+            'support diff, clip it',
+            'stabilised, secured, mildly smug',
         ],
         boss: [
-            'your struggle amused me',
-            'the grid remains mine',
+            'your struggle had entertainment value',
+            'the grid remains mine, unsurprisingly',
         ],
     },
     rare_random: {
         sniper: [
-            'holding long sightlines',
-            'angle secured',
+            'holding long sightlines and long memories',
+            'angle secured, patience weaponised',
         ],
         rusher: [
-            'brain empty throttle full',
-            'looking for chaos',
+            'brain empty, throttle academically full',
+            'looking for chaos with good cardio',
         ],
         support: [
-            'staying near the wounded',
-            'watching ally vitals',
+            'staying near the wounded and dramatic',
+            'watching ally vitals like a disappointed nurse',
         ],
         boss: [
-            'the arena hums for me',
-            'all signals bow inward',
+            'the arena hums for me in minor key',
+            'all signals bow inward eventually',
         ],
     },
 };
@@ -745,6 +912,7 @@ class Entity {
   displayHealth: number;
   shield: number = 0;
   maxShield: number = 0;
+  displayShield: number = 0;
   damage: number; 
   isDead: boolean = false;
   lastDamageTime: number = 0;
@@ -771,6 +939,7 @@ class Entity {
     this.health = 100;
     this.maxHealth = 100;
     this.displayHealth = 100;
+    this.displayShield = 0;
     this.damage = 10;
     this.mass = radius; 
   }
@@ -780,6 +949,8 @@ class Entity {
     if (this.invulnerableTime > 0) this.invulnerableTime -= dt * 1000;
     if (Math.abs(this.displayHealth - this.health) > 0.1) this.displayHealth += (this.health - this.displayHealth) * 0.2;
     else this.displayHealth = this.health;
+    if (Math.abs(this.displayShield - this.shield) > 0.1) this.displayShield += (this.shield - this.displayShield) * 0.2;
+    else this.displayShield = this.shield;
     
     const currentSpeed = Vector.mag(this.vel);
     const targetScale = 1.0 + Math.min(0.1, currentSpeed * 0.005);
@@ -1031,6 +1202,32 @@ class MiniTank extends Entity {
         }
     }
 
+    private getAutonomousTargets(engine: GameEngine): Entity[] {
+        const neighborPool = new Map<number, Entity>();
+        for (const entity of engine.spatialGrid.getNeighbors(this) as Entity[]) neighborPool.set(entity.id, entity);
+        for (const entity of engine.spatialGrid.getNeighbors(this.owner) as Entity[]) neighborPool.set(entity.id, entity);
+
+        return Array.from(neighborPool.values()).filter((entity) => {
+            if (entity.id === this.id || entity.id === this.owner.id) return false;
+            if (entity.isDead || entity.team === this.team) return false;
+            if (
+                entity.type !== EntityType.PLAYER &&
+                entity.type !== EntityType.ENEMY &&
+                entity.type !== EntityType.SHAPE &&
+                entity.type !== EntityType.BOSS &&
+                entity.type !== EntityType.ELITE_TANK &&
+                entity.type !== EntityType.GUARDIAN &&
+                entity.type !== EntityType.DOMINION_TANK
+            ) {
+                return false;
+            }
+
+            const distToSelf = Vector.dist(entity.pos, this.pos);
+            const distToOwner = Vector.dist(entity.pos, this.owner.pos);
+            return distToSelf < this.detectionRadius || distToOwner < this.detectionRadius * 1.08;
+        });
+    }
+
     override update(dt: number) {
         const engine = (window as any).gameEngine;
         if (!engine) return;
@@ -1078,14 +1275,8 @@ class MiniTank extends Entity {
             this.acc = Vector.mult(dir, speed * 0.15);
         } else {
             // AUTONOMOUS MODE
-            const neighbors = engine.spatialGrid.getNeighbors(this);
-            const potentialTargets = neighbors.filter((e: any) => 
-                (e.type === EntityType.ENEMY || e.type === EntityType.PLAYER || e.type === EntityType.SHAPE || e.type === EntityType.BOSS) && 
-                e.team !== this.team && 
-                e.type !== EntityType.MINI_TANK && // Immune to own kind
-                Vector.dist(e.pos, this.pos) < this.detectionRadius
-            );
-            
+            const potentialTargets = this.getAutonomousTargets(engine);
+             
             const nearestEnemy = engine.findNearest(this, potentialTargets);
 
             if (nearestEnemy) {
@@ -1093,15 +1284,15 @@ class MiniTank extends Entity {
                 const distToEnemy = Vector.dist(this.pos, nearestEnemy.pos);
                 const dirToEnemy = Vector.normalize(Vector.sub(nearestEnemy.pos, this.pos));
                 const tangent = { x: -dirToEnemy.y, y: dirToEnemy.x }; // Orthogonal vector for orbiting
-                
+                 
                 let moveDir;
-                if (distToEnemy > this.combatOrbitDistance + 40) {
+                if (distToEnemy > this.combatOrbitDistance + 56) {
                     moveDir = dirToEnemy; // Close distance
-                } else if (distToEnemy < this.combatOrbitDistance - 40) {
-                    moveDir = Vector.mult(dirToEnemy, -1); // Back away
+                } else if (distToEnemy < this.combatOrbitDistance - 28) {
+                    moveDir = Vector.normalize(Vector.add(Vector.mult(dirToEnemy, -1.15), Vector.mult(tangent, 0.38))); // Back away with slight strafe
                 } else {
                     // Maintain orbit: Tangent force + slight inward pull
-                    moveDir = Vector.normalize(Vector.add(tangent, Vector.mult(dirToEnemy, 0.2)));
+                    moveDir = Vector.normalize(Vector.add(tangent, Vector.mult(dirToEnemy, 0.14)));
                 }
 
                 // NERFED COMBAT SPEED: 0.55x
@@ -1110,7 +1301,7 @@ class MiniTank extends Entity {
             } else {
                 // IDLE ORBIT: Return to Manager
                 this.orbitAngle += dt * 0.65;
-                const orbitDist = 160;
+                const orbitDist = this.owner.classType === TankClass.MANAGER ? 170 : 160;
                 const units = engine.entities.filter((e: any) => e.type === EntityType.MINI_TANK && e.owner === this.owner);
                 const idx = units.indexOf(this);
                 const angle = this.orbitAngle + (idx / units.length) * Math.PI * 2;
@@ -1300,6 +1491,33 @@ class Drone extends Entity {
         }
     }
 
+    private getAutonomousTargets(engine: GameEngine): Entity[] {
+        const neighborPool = new Map<number, Entity>();
+        for (const entity of engine.spatialGrid.getNeighbors(this) as Entity[]) neighborPool.set(entity.id, entity);
+        for (const entity of engine.spatialGrid.getNeighbors(this.owner) as Entity[]) neighborPool.set(entity.id, entity);
+
+        return Array.from(neighborPool.values()).filter((entity) => {
+            if (entity.id === this.id || entity.id === this.owner.id) return false;
+            if (entity.isDead || entity.team === this.team) return false;
+            if (
+                entity.type !== EntityType.PLAYER &&
+                entity.type !== EntityType.ENEMY &&
+                entity.type !== EntityType.SHAPE &&
+                entity.type !== EntityType.BOSS &&
+                entity.type !== EntityType.ELITE_TANK &&
+                entity.type !== EntityType.GUARDIAN &&
+                entity.type !== EntityType.DOMINION_TANK
+            ) {
+                return false;
+            }
+
+            const distToSelf = Vector.dist(entity.pos, this.pos);
+            const distToOwner = Vector.dist(entity.pos, this.owner.pos);
+            const leashRange = this.owner.classType === TankClass.OVERLORD ? this.orbitDistance + 220 : this.orbitDistance + 190;
+            return distToSelf < this.orbitDistance + 220 || distToOwner < Math.max(this.orbitDistance + 120, leashRange);
+        });
+    }
+
     override update(dt: number) {
         this.color = getTeamSummonColor(this.team);
         const timeScale = Math.min(dt * 60, 2.0);
@@ -1402,35 +1620,53 @@ class Drone extends Entity {
                 engine.particles.push(new Particle(this.pos.x, this.pos.y, 'rgba(110,255,220,0.22)', 5, 12, 'GAS'));
             }
         } else {
-            // Swarm Orbiting logic
-            const idx = siblingIndex;
-            const total = siblingCount;
-            
-            const slice = (Math.PI * 2) / total;
-            const orbitRate = this.owner.classType === TankClass.OVERLORD
-              ? 1250
-              : this.owner.classType === TankClass.MANAGER
-                ? 1750
-                : isColossalOwner
-                  ? 1220
-                  : 1500;
-            const targetAngle = idx * slice + (Date.now() / orbitRate);
-            
-            const orbitPos = {
-                x: this.owner.pos.x + Math.cos(targetAngle) * this.orbitDistance,
-                y: this.owner.pos.y + Math.sin(targetAngle) * this.orbitDistance
-            };
-            
-            const dirToOrbit = Vector.sub(orbitPos, this.pos);
-            const dist = Vector.mag(dirToOrbit);
-            const pullStrength = Vector.clamp(
-              dist * (this.owner.classType === TankClass.MANAGER ? 0.026 : isColossalOwner ? 0.034 : 0.03),
-              0,
-              this.owner.classType === TankClass.OVERLORD ? 3.4 : isColossalOwner ? 3.6 : 3
-            );
-            this.acc = Vector.mult(Vector.normalize(dirToOrbit), pullStrength);
-            
-            this.rotation = Math.atan2(this.pos.y - this.owner.pos.y, this.pos.x - this.owner.pos.x);
+            const autonomousTargets = this.getAutonomousTargets(engine);
+            const nearestEnemy = engine.findNearest(this, autonomousTargets);
+
+            if (nearestEnemy && !isManagerOwner) {
+                const bulletSpeed = (BASE_STATS.bulletSpeed + this.owner.stats[StatType.BULLET_SPEED] * 0.8) * (this.owner.classType === TankClass.OVERLORD ? 0.92 : 0.86);
+                const intercept = engine.getInterceptPoint(this.pos, bulletSpeed, nearestEnemy.pos, nearestEnemy.vel || { x: 0, y: 0 });
+                const chaseDir = Vector.normalize(Vector.sub(intercept, this.pos));
+                const tangent = { x: -chaseDir.y, y: chaseDir.x };
+                const distToEnemy = Vector.dist(this.pos, nearestEnemy.pos);
+                const preferredRamRange = this.owner.classType === TankClass.OVERLORD ? 34 : 28;
+                const pressureBias = distToEnemy > preferredRamRange * 2.1 ? 0.16 : 0.08;
+                const moveDir = Vector.normalize(Vector.add(chaseDir, Vector.mult(tangent, pressureBias * (siblingIndex % 2 === 0 ? 1 : -1))));
+                const speedMult = this.owner.classType === TankClass.OVERLORD ? 0.94 : 0.88;
+                const speed = (BASE_STATS.bulletSpeed + this.owner.stats[StatType.BULLET_SPEED] * 0.8) * speedMult;
+                this.acc = Vector.mult(moveDir, speed * 0.11);
+                this.rotation = Math.atan2(chaseDir.y, chaseDir.x);
+            } else {
+                // Swarm Orbiting logic
+                const idx = siblingIndex;
+                const total = siblingCount;
+                
+                const slice = (Math.PI * 2) / total;
+                const orbitRate = this.owner.classType === TankClass.OVERLORD
+                  ? 1250
+                  : this.owner.classType === TankClass.MANAGER
+                    ? 1750
+                    : isColossalOwner
+                      ? 1220
+                      : 1500;
+                const targetAngle = idx * slice + (Date.now() / orbitRate);
+                
+                const orbitPos = {
+                    x: this.owner.pos.x + Math.cos(targetAngle) * this.orbitDistance,
+                    y: this.owner.pos.y + Math.sin(targetAngle) * this.orbitDistance
+                };
+                
+                const dirToOrbit = Vector.sub(orbitPos, this.pos);
+                const dist = Vector.mag(dirToOrbit);
+                const pullStrength = Vector.clamp(
+                  dist * (this.owner.classType === TankClass.MANAGER ? 0.026 : isColossalOwner ? 0.034 : 0.03),
+                  0,
+                  this.owner.classType === TankClass.OVERLORD ? 3.4 : isColossalOwner ? 3.6 : 3
+                );
+                this.acc = Vector.mult(Vector.normalize(dirToOrbit), pullStrength);
+                
+                this.rotation = Math.atan2(this.pos.y - this.owner.pos.y, this.pos.x - this.owner.pos.x);
+            }
         }
 
         super.update(dt);
@@ -1905,6 +2141,8 @@ class Tank extends Entity {
   hasRebirthed: boolean = false;
   secondarySector: SecondarySector = 'none';
   bossAbilityTimer: number = 0;
+  sandboxBossPrimaryCooldown: number = 0;
+  sandboxBossPrimaryActiveTimer: number = 0;
   isSiegeMode: boolean = false;
   autoTurrets: { rotation: number, cooldown: number, targetId: number | null }[] = [];
   repairDrones: { angle: number, dist: number }[] = [];
@@ -2056,20 +2294,26 @@ class Tank extends Entity {
   }
 
   drawTurret(ctx: CanvasRenderingContext2D) {
+      const sandboxBossRushKey = (this as any).__sandboxBossRushKey as string | undefined;
+      if (sandboxBossRushKey) return;
+      const visualClass = resolveBossGameplayClass(this.classType) ?? this.classType;
       // The barrels and the turret cap
       this.drawBarrels(ctx);
       this.drawTurretCap(ctx);
       // Leviathan manager spawner is an upper-deck module and must stay above cap/chassis.
-      if (this.classType === TankClass.LEVIATHAN) {
+      if (visualClass === TankClass.LEVIATHAN) {
           this.drawLeviathanManagerSpawner(ctx);
       }
   }
 
   drawAutoTurretOverlay(ctx: CanvasRenderingContext2D) {
-      const isColossal = this.classType === TankClass.COLOSSAL;
-      const isLeviathan = this.classType === TankClass.LEVIATHAN;
-      const isWarlord = this.classType === TankClass.WARLORD;
-      const isCelestial = this.classType === TankClass.CELESTIAL;
+      const sandboxBossRushKey = (this as any).__sandboxBossRushKey as string | undefined;
+      if (sandboxBossRushKey) return;
+      const visualClass = resolveBossGameplayClass(this.classType) ?? this.classType;
+      const isColossal = visualClass === TankClass.COLOSSAL;
+      const isLeviathan = visualClass === TankClass.LEVIATHAN;
+      const isWarlord = visualClass === TankClass.WARLORD;
+      const isCelestial = visualClass === TankClass.CELESTIAL;
       if (!isColossal && !isLeviathan && !isWarlord && !isCelestial) return;
 
       ctx.save();
@@ -2680,6 +2924,13 @@ class Tank extends Entity {
     ctx.lineWidth = 3;
     ctx.strokeStyle = COLORS.border;
     ctx.fillStyle = this.color;
+    const sandboxBossRushKey = (this as any).__sandboxBossRushKey as string | undefined;
+    if (sandboxBossRushKey) {
+        const hpRatio = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+        const awakened = this.isTransformed || this.hasRebirthed;
+        (Boss.prototype as any).drawBossRushChassis.call(this, ctx, Date.now() / 1000, hpRatio, awakened);
+        return;
+    }
     
     // Custom Chassis Rendering for specific classes
     if (this.classType === TankClass.COLOSSAL) {
@@ -3308,17 +3559,20 @@ class Tank extends Entity {
 
 
   drawBarrels(ctx: CanvasRenderingContext2D) {
+      const sandboxBossRushKey = (this as any).__sandboxBossRushKey as string | undefined;
+      if (sandboxBossRushKey) return;
+      const visualClass = resolveBossGameplayClass(this.classType) ?? this.classType;
       const isEliteVisual = this.isTransformed;
       const isBoss = this.isBossClass(this.classType);
-      const isHeavyClass = this.classType === TankClass.DESTROYER || this.classType === TankClass.ANNIHILATOR || this.classType === TankClass.HYBRID;
-      const isRapidFireClass = this.classType === TankClass.MACHINE_GUN || this.classType === TankClass.GUNNER || this.classType === TankClass.AUTO_GUNNER || this.classType === TankClass.STREAMLINER || this.classType === TankClass.SPRAYER;
+      const isHeavyClass = visualClass === TankClass.DESTROYER || visualClass === TankClass.ANNIHILATOR || visualClass === TankClass.HYBRID;
+      const isRapidFireClass = visualClass === TankClass.MACHINE_GUN || visualClass === TankClass.GUNNER || visualClass === TankClass.AUTO_GUNNER || visualClass === TankClass.STREAMLINER || visualClass === TankClass.SPRAYER;
       const isTrapperBranch = isTrapperBranchClass(this.classType);
-      const isSprayer = this.classType === TankClass.SPRAYER;
-      const isColossal = this.classType === TankClass.COLOSSAL;
-      const isLeviathan = this.classType === TankClass.LEVIATHAN;
-      const isWarlord = this.classType === TankClass.WARLORD;
-      const isCelestial = this.classType === TankClass.CELESTIAL;
-      const isObliterator = this.classType === TankClass.OBLITERATOR;
+      const isSprayer = visualClass === TankClass.SPRAYER;
+      const isColossal = visualClass === TankClass.COLOSSAL;
+      const isLeviathan = visualClass === TankClass.LEVIATHAN;
+      const isWarlord = visualClass === TankClass.WARLORD;
+      const isCelestial = visualClass === TankClass.CELESTIAL;
+      const isObliterator = visualClass === TankClass.OBLITERATOR;
       const isReaper = this.classType === TankClass.REAPER;
       const sprayerCoreIndex = Math.floor(this.barrels.length / 2);
 
@@ -3367,13 +3621,13 @@ class Tank extends Entity {
             ctx.translate((Math.random() - 0.5) * vib, (Math.random() - 0.5) * vib);
         }
         
-        const isColossalCarrier = this.classType === TankClass.COLOSSAL && this.isTransformed;
-        const isDroneSpawner = (this.classType === TankClass.OVERLORD || this.classType === TankClass.OVERSEER || this.classType === TankClass.MANAGER || this.classType === TankClass.HYBRID || isColossalCarrier);
-        const droneBarrelIndex = (this.classType === TankClass.HYBRID) ? 1 : -1; 
+        const isColossalCarrier = visualClass === TankClass.COLOSSAL && this.isTransformed;
+        const isDroneSpawner = (visualClass === TankClass.OVERLORD || visualClass === TankClass.OVERSEER || visualClass === TankClass.MANAGER || visualClass === TankClass.HYBRID || isColossalCarrier);
+        const droneBarrelIndex = (visualClass === TankClass.HYBRID) ? 1 : -1; 
         const currentIsDroneBarrel = isDroneSpawner && (
-          (this.classType === TankClass.HYBRID && i === droneBarrelIndex) ||
+          (visualClass === TankClass.HYBRID && i === droneBarrelIndex) ||
           (isColossalCarrier && i > 0) ||
-          (this.classType !== TankClass.HYBRID && !isColossalCarrier)
+          (visualClass !== TankClass.HYBRID && !isColossalCarrier)
         );
 
         let bLen = length * this.radius;
@@ -4264,6 +4518,9 @@ class Tank extends Entity {
   }
 
   drawTurretCap(ctx: CanvasRenderingContext2D) {
+      const sandboxBossRushKey = (this as any).__sandboxBossRushKey as string | undefined;
+      if (sandboxBossRushKey) return;
+      const visualClass = resolveBossGameplayClass(this.classType) ?? this.classType;
       const isRebirthBoss = this.isBossClass(this.classType);
       if (isRebirthBoss) {
           const r = this.radius;
@@ -4272,18 +4529,18 @@ class Tank extends Entity {
               ctx.globalAlpha = 0.32;
               ctx.fillStyle = "rgba(0,0,0,0.55)";
               ctx.beginPath();
-              if (this.classType === TankClass.LEVIATHAN) {
+              if (visualClass === TankClass.LEVIATHAN) {
                   for (let i = 0; i < 10; i++) {
                       const a = -Math.PI / 2 + (i / 10) * Math.PI * 2;
                       const rr = (i % 2 === 0 ? 0.95 : 0.48) * r;
                       if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
                       else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
                   }
-              } else if (this.classType === TankClass.WARLORD) {
+              } else if (visualClass === TankClass.WARLORD) {
                   ctx.moveTo(r * 0.9, 0);
                   ctx.lineTo(-r * 0.62, -r * 0.78);
                   ctx.lineTo(-r * 0.62, r * 0.78);
-              } else if (this.classType === TankClass.CELESTIAL) {
+              } else if (visualClass === TankClass.CELESTIAL) {
                   for (let i = 0; i < 5; i++) {
                       const a = -Math.PI / 2 + (i / 5) * Math.PI * 2;
                       const rr = r * 0.86;
@@ -4306,18 +4563,18 @@ class Tank extends Entity {
           ctx.strokeStyle = COLORS.border;
           ctx.lineWidth = 3;
           ctx.beginPath();
-          if (this.classType === TankClass.LEVIATHAN) {
+          if (visualClass === TankClass.LEVIATHAN) {
               for (let i = 0; i < 10; i++) {
                   const a = -Math.PI / 2 + (i / 10) * Math.PI * 2;
                   const rr = (i % 2 === 0 ? 0.78 : 0.4) * r;
                   if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
                   else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
               }
-          } else if (this.classType === TankClass.WARLORD) {
+          } else if (visualClass === TankClass.WARLORD) {
               ctx.moveTo(r * 0.72, 0);
               ctx.lineTo(-r * 0.5, -r * 0.62);
               ctx.lineTo(-r * 0.5, r * 0.62);
-          } else if (this.classType === TankClass.CELESTIAL) {
+          } else if (visualClass === TankClass.CELESTIAL) {
               for (let i = 0; i < 5; i++) {
                   const a = -Math.PI / 2 + (i / 5) * Math.PI * 2;
                   const rr = r * 0.72;
@@ -4337,11 +4594,11 @@ class Tank extends Entity {
           // subtle core highlight, but no circular cap silhouette.
           ctx.fillStyle = "rgba(255,255,255,0.14)";
           ctx.beginPath();
-          if (this.classType === TankClass.WARLORD) {
+          if (visualClass === TankClass.WARLORD) {
               ctx.moveTo(r * 0.34, 0);
               ctx.lineTo(-r * 0.2, -r * 0.24);
               ctx.lineTo(-r * 0.2, r * 0.24);
-          } else if (this.classType === TankClass.CELESTIAL) {
+          } else if (visualClass === TankClass.CELESTIAL) {
               for (let i = 0; i < 5; i++) {
                   const a = -Math.PI / 2 + (i / 5) * Math.PI * 2;
                   const rr = r * 0.32;
@@ -4424,7 +4681,7 @@ class Tank extends Entity {
   }
 
   isBossClass(cls: TankClass): boolean {
-    return cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.WARLORD || cls === TankClass.CELESTIAL || cls === TankClass.OBLITERATOR;
+    return resolveBossGameplayClass(cls) !== null;
   }
 
   isDraining(cls: TankClass): boolean {
@@ -4449,8 +4706,9 @@ class Tank extends Entity {
 
   override takeDamage(amount: number, sourceId: number | null = null, isBodyDamage: boolean = false) {
     let adjusted = amount;
-    if (this.isBossClass(this.classType)) {
-      const mitigation = this.classType === TankClass.CELESTIAL ? 0.14 : this.classType === TankClass.OBLITERATOR ? 0.18 : 0.1;
+    const bossGameplayClass = resolveBossGameplayClass(this.classType);
+    if (bossGameplayClass) {
+      const mitigation = bossGameplayClass === TankClass.CELESTIAL ? 0.14 : bossGameplayClass === TankClass.OBLITERATOR ? 0.18 : 0.1;
       adjusted *= (1 - mitigation);
       // Dampen rapid projectile chip in late-game.
       if (sourceId !== null) {
@@ -4483,7 +4741,8 @@ class Tank extends Entity {
     this.radius = baseRadius + (this.level - 1) * levelGrowthFactor;
     this.mass = this.radius * 1.5; 
 
-    const isBoss = this.isBossClass(this.classType);
+    const bossGameplayClass = resolveBossGameplayClass(this.classType);
+    const isBoss = bossGameplayClass !== null;
     const isPacifist = this.classType === TankClass.PACIFIST_TRAINEE || this.classType === TankClass.NURSE || this.classType === TankClass.DOCTOR || this.classType === TankClass.PLAGUE_DOCTOR;
     const isDraining = this.classType === TankClass.DRAINER_TRAINEE || this.classType === TankClass.LEECH || this.classType === TankClass.VAMPIRE || this.classType === TankClass.REAPER;
     const hasRestorationSector = this.hasRestorationSector();
@@ -4503,49 +4762,57 @@ class Tank extends Entity {
         this.team = Team.NONE;
         // Rebirth boss chassis: dangerous, durable, but now killable.
         const bossBaseHealth =
-            this.classType === TankClass.COLOSSAL ? 5200 :
-            this.classType === TankClass.LEVIATHAN ? 4600 :
-            this.classType === TankClass.WARLORD ? 5000 :
-            this.classType === TankClass.CELESTIAL ? 4300 :
+            bossGameplayClass === TankClass.COLOSSAL ? 5200 :
+            bossGameplayClass === TankClass.LEVIATHAN ? 4600 :
+            bossGameplayClass === TankClass.WARLORD ? 5000 :
+            bossGameplayClass === TankClass.CELESTIAL ? 4300 :
             4100;
         const bossLevelHealth =
-            this.classType === TankClass.COLOSSAL ? 92 :
-            this.classType === TankClass.LEVIATHAN ? 84 :
-            this.classType === TankClass.WARLORD ? 88 :
-            this.classType === TankClass.CELESTIAL ? 80 :
+            bossGameplayClass === TankClass.COLOSSAL ? 92 :
+            bossGameplayClass === TankClass.LEVIATHAN ? 84 :
+            bossGameplayClass === TankClass.WARLORD ? 88 :
+            bossGameplayClass === TankClass.CELESTIAL ? 80 :
             86;
         this.maxHealth = bossBaseHealth + (this.level * bossLevelHealth);
         this.maxShield = Math.round(this.maxHealth * 0.1);
         this.damage = 108;
-        this.radius *= this.classType === TankClass.CELESTIAL ? 2.25 : this.classType === TankClass.OBLITERATOR ? 2.68 : 2.55;
-        if (this.classType === TankClass.WARLORD) this.radius *= 1.08;
+        this.radius *= bossGameplayClass === TankClass.CELESTIAL ? 2.25 : bossGameplayClass === TankClass.OBLITERATOR ? 2.68 : 2.55;
+        if (bossGameplayClass === TankClass.WARLORD) this.radius *= 1.08;
         
         // Max stats for bosses
         Object.values(StatType).forEach(s => this.stats[s as StatType] = 8);
 
         // Drawbacks
-        if (this.classType === TankClass.COLOSSAL) this.stats[StatType.MOVEMENT_SPEED] = 2;
-        if (this.classType === TankClass.LEVIATHAN) this.stats[StatType.MOVEMENT_SPEED] = 2;
-        if (this.classType === TankClass.WARLORD) this.stats[StatType.MOVEMENT_SPEED] = this.isSiegeMode ? 0 : 1;
-        this.stats[StatType.RELOAD] = Math.max(this.stats[StatType.RELOAD], 7);
-        this.stats[StatType.BULLET_PENETRATION] = Math.max(this.stats[StatType.BULLET_PENETRATION], 7);
+        if (bossGameplayClass === TankClass.COLOSSAL) this.stats[StatType.MOVEMENT_SPEED] = 2;
+        if (bossGameplayClass === TankClass.LEVIATHAN) this.stats[StatType.MOVEMENT_SPEED] = 2;
+        if (bossGameplayClass === TankClass.WARLORD) this.stats[StatType.MOVEMENT_SPEED] = this.isSiegeMode ? 0 : 1;
+        this.stats[StatType.RELOAD] = Math.max(this.stats[StatType.RELOAD], 6);
+        this.stats[StatType.BULLET_PENETRATION] = Math.max(this.stats[StatType.BULLET_PENETRATION], 6);
         this.stats[StatType.BULLET_DAMAGE] = Math.max(this.stats[StatType.BULLET_DAMAGE], 7);
         this.stats[StatType.BULLET_SPEED] = Math.max(this.stats[StatType.BULLET_SPEED], 5);
-        if (this.classType === TankClass.CELESTIAL) {
+        if (bossGameplayClass === TankClass.LEVIATHAN) {
+            this.stats[StatType.RELOAD] = 4;
+            this.stats[StatType.BULLET_PENETRATION] = 5;
+            this.stats[StatType.BULLET_DAMAGE] = 6;
+            this.stats[StatType.BULLET_SPEED] = 5;
+        }
+        if (bossGameplayClass === TankClass.CELESTIAL) {
             this.stats[StatType.MOVEMENT_SPEED] = 5;
             this.stats[StatType.BULLET_SPREAD] = 8;
-            this.stats[StatType.RELOAD] = 8;
-            this.stats[StatType.BULLET_PENETRATION] = 8;
+            this.stats[StatType.RELOAD] = 4;
+            this.stats[StatType.BULLET_PENETRATION] = 5;
+            this.stats[StatType.BULLET_DAMAGE] = 5;
+            this.stats[StatType.BULLET_SPEED] = 5;
         }
-        if (this.classType === TankClass.OBLITERATOR) {
+        if (bossGameplayClass === TankClass.OBLITERATOR) {
             this.stats[StatType.MOVEMENT_SPEED] = 1;
             this.stats[StatType.BULLET_SPREAD] = 8;
-            this.stats[StatType.RELOAD] = 7;
+            this.stats[StatType.RELOAD] = 6;
             this.stats[StatType.BULLET_SPEED] = 6;
             this.stats[StatType.BULLET_DAMAGE] = 8;
             this.stats[StatType.BULLET_PENETRATION] = 8;
         }
-        if (this.classType === TankClass.COLOSSAL) {
+        if (bossGameplayClass === TankClass.COLOSSAL) {
             this.color = '#ec4899';
             // Rebirth blood-core aura: localized siphon zone around Colossal.
             this.drainAuraRadius = this.radius * 2.9;
@@ -4617,6 +4884,16 @@ class Tank extends Entity {
                               this.classType === TankClass.LEECH ? 0.15 : 
                               this.classType === TankClass.VAMPIRE ? 0.25 : 0.4;
         this.drainLifestealEfficiency = baseLifesteal + (this.stats[StatType.DRAIN_LIFESTEAL] || 0) * 0.05;
+
+        // Vampire identity pass: stronger duelist sustain and cleaner engagement reach.
+        if (this.classType === TankClass.VAMPIRE) {
+            this.drainAuraRadius *= 1.08;
+            this.drainAuraDamage *= 1.12;
+            this.drainLifestealEfficiency = Math.min(0.68, this.drainLifestealEfficiency * 1.14);
+            this.damage *= 1.06;
+            this.stats[StatType.MOVEMENT_SPEED] = Math.max(this.stats[StatType.MOVEMENT_SPEED], 1);
+            this.spread = Math.min(this.spread, 0.082);
+        }
 
         // Reaper identity pass: wider threat envelope, heavier decay pressure, slower stride.
         if (this.classType === TankClass.REAPER) {
@@ -4783,6 +5060,12 @@ class Tank extends Entity {
     }
     if (this.colossalDroneLaunchCooldownMs > 0) {
         this.colossalDroneLaunchCooldownMs = Math.max(0, this.colossalDroneLaunchCooldownMs - dt * 1000);
+    }
+    if (this.sandboxBossPrimaryCooldown > 0) {
+        this.sandboxBossPrimaryCooldown = Math.max(0, this.sandboxBossPrimaryCooldown - dt);
+    }
+    if (this.sandboxBossPrimaryActiveTimer > 0) {
+        this.sandboxBossPrimaryActiveTimer = Math.max(0, this.sandboxBossPrimaryActiveTimer - dt);
     }
 
     if (this.classType === TankClass.MACHINE_GUN) {
@@ -5010,24 +5293,6 @@ class Tank extends Entity {
         });
     }
 
-    if (this.classType === TankClass.LEVIATHAN) {
-        this.bossAbilityTimer -= dt;
-        if (this.bossAbilityTimer <= 0) {
-            // Shockwave pulse
-            const engine = (window as any).gameEngine;
-            const neighbors = engine.spatialGrid.getNeighbors(this);
-            neighbors.forEach((e: any) => {
-                if (e !== this && Vector.dist(this.pos, e.pos) < 400) {
-                    const dir = Vector.normalize(Vector.sub(e.pos, this.pos));
-                    e.vel = Vector.add(e.vel, Vector.mult(dir, 15));
-                    e.takeDamage(50, this.id);
-                }
-            });
-            engine.particles.push(new Particle(this.pos.x, this.pos.y, '#00ffff', 20, 30, 'RING'));
-            this.bossAbilityTimer = 10;
-        }
-    }
-
     if (this.classType === TankClass.WARLORD) {
         if (this.repairDrones.length === 0) {
             this.repairDrones = [
@@ -5228,6 +5493,77 @@ class DominionTank extends Tank {
         this.displayHealth = this.maxHealth;
     }
 
+    private traceDominionHull(
+        ctx: CanvasRenderingContext2D,
+        radius: number,
+        edgeInset = 0.18,
+        points = 8,
+        rotationOffset = Math.PI / 8
+    ) {
+        for (let i = 0; i < points; i += 1) {
+            const angle = rotationOffset + (i / points) * Math.PI * 2;
+            const pulse = i % 2 === 0 ? 1 : 1 - edgeInset;
+            const x = Math.cos(angle) * radius * pulse;
+            const y = Math.sin(angle) * radius * pulse;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+    }
+
+    private fillDominionHull(
+        ctx: CanvasRenderingContext2D,
+        radius: number,
+        fillStyle: string,
+        strokeStyle: string,
+        lineWidth: number,
+        edgeInset = 0.18,
+        points = 8,
+        rotationOffset = Math.PI / 8
+    ) {
+        ctx.beginPath();
+        this.traceDominionHull(ctx, radius, edgeInset, points, rotationOffset);
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
+        ctx.lineWidth = lineWidth;
+        ctx.strokeStyle = strokeStyle;
+        ctx.stroke();
+    }
+
+    private drawDominionArmorFins(ctx: CanvasRenderingContext2D) {
+        const finLength = this.radius * 0.54;
+        const finWidth = this.radius * 0.2;
+        const finOffset = this.radius * 0.7;
+        const isTrapper = this.weaponProfile === 'TRAPPER';
+        const isGunner = this.weaponProfile === 'GUNNER';
+        const isDestroyer = this.weaponProfile === 'DESTROYER';
+        const finAngles = isTrapper
+            ? [0, Math.PI / 4, Math.PI / 2, Math.PI * 0.75, Math.PI, Math.PI * 1.25, Math.PI * 1.5, Math.PI * 1.75]
+            : isGunner
+                ? [Math.PI / 4, Math.PI * 0.75, Math.PI * 1.25, Math.PI * 1.75]
+                : isDestroyer
+                    ? [0, Math.PI]
+                    : [0, Math.PI * 0.66, Math.PI * 1.33];
+
+        ctx.save();
+        finAngles.forEach((angle) => {
+            ctx.save();
+            ctx.rotate(angle);
+            ctx.beginPath();
+            ctx.moveTo(finOffset, -finWidth);
+            ctx.lineTo(finOffset + finLength, 0);
+            ctx.lineTo(finOffset, finWidth);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(255,255,255,0.08)';
+            ctx.fill();
+            ctx.lineWidth = Math.max(1.8, this.radius * 0.05);
+            ctx.strokeStyle = 'rgba(15, 23, 42, 0.72)';
+            ctx.stroke();
+            ctx.restore();
+        });
+        ctx.restore();
+    }
+
     setOwnerTeam(team: Team) {
         this.ownerTeam = team;
         this.team = team;
@@ -5269,12 +5605,18 @@ class DominionTank extends Tank {
     }
 
     override drawBody(ctx: CanvasRenderingContext2D) {
-        const outerGlow = this.team === Team.NONE ? 'rgba(250,204,21,0.35)' : `rgba(${getTeamRgb(this.team)},0.28)`;
+        const isNeutral = this.team === Team.NONE;
+        const outerGlow = isNeutral ? 'rgba(250,204,21,0.35)' : `rgba(${getTeamRgb(this.team)},0.28)`;
+        const commandGlow = isNeutral ? 'rgba(250,204,21,0.7)' : `rgba(${getTeamRgb(this.team)},0.72)`;
+        const outerArmor = isNeutral ? '#7c5b15' : this.color;
+        const innerArmor = isNeutral ? '#c08b22' : '#d9eefc';
+        const coreColor = isNeutral ? '#ffe082' : '#f8fbff';
+
         ctx.save();
         ctx.shadowBlur = 26;
         ctx.shadowColor = outerGlow;
         ctx.beginPath();
-        ctx.arc(0, 0, this.radius * 1.12, 0, Math.PI * 2);
+        ctx.arc(0, 0, this.radius * 1.18, 0, Math.PI * 2);
         ctx.fillStyle = outerGlow;
         ctx.fill();
         ctx.restore();
@@ -5289,7 +5631,68 @@ class DominionTank extends Tank {
             ctx.restore();
         }
 
-        super.drawBody(ctx);
+        ctx.save();
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = outerGlow;
+        this.fillDominionHull(
+            ctx,
+            this.radius * 1.08,
+            'rgba(15, 23, 42, 0.34)',
+            'rgba(255,255,255,0.08)',
+            Math.max(2.4, this.radius * 0.075),
+            0.12,
+            8
+        );
+        ctx.restore();
+
+        this.drawDominionArmorFins(ctx);
+
+        this.fillDominionHull(
+            ctx,
+            this.radius,
+            outerArmor,
+            COLORS.border,
+            Math.max(3.2, this.radius * 0.09),
+            0.22,
+            8
+        );
+
+        this.fillDominionHull(
+            ctx,
+            this.radius * 0.76,
+            innerArmor,
+            'rgba(15, 23, 42, 0.75)',
+            Math.max(2.4, this.radius * 0.06),
+            0.16,
+            8,
+            Math.PI / 4
+        );
+
+        ctx.save();
+        ctx.globalAlpha = 0.75;
+        ctx.beginPath();
+        this.traceDominionHull(ctx, this.radius * 0.48, 0.28, 6, Math.PI / 6);
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius * 0.26, 0, Math.PI * 2);
+        ctx.fillStyle = coreColor;
+        ctx.fill();
+        ctx.lineWidth = Math.max(2.5, this.radius * 0.055);
+        ctx.strokeStyle = commandGlow;
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius * 0.38, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = Math.max(1.8, this.radius * 0.04);
+        ctx.stroke();
+        ctx.restore();
     }
 
     override drawChassis(ctx: CanvasRenderingContext2D) {
@@ -5513,6 +5916,9 @@ class Boss extends Entity {
     private drawBossRushChassis(ctx: CanvasRenderingContext2D, t: number, hpRatio: number, awakened: boolean) {
         const key = (this as any).__bossRushKey as string | undefined;
         const transformPhase = Math.max(0, Math.min(1, Number((this as any).__bossRushTransformPhase ?? 1)));
+        const awakeningProgress = Math.max(0, Math.min(1, Number((this as any).__bossRushAwakeningProgress ?? (awakened ? 1 : 0))));
+        const auraOverdrive = Math.max(0, Number((this as any).__bossRushAuraOverdrive ?? 0));
+        const awakeningState = !!(this as any).__bossRushAwakeningState;
         const forming = !!(this as any).__bossRushTransforming;
         const deathAnimating = !!(this as any).__bossRushDeathAnimating;
         const deathProgress = Math.max(0, Math.min(1, Number((this as any).__bossRushDeathProgress ?? 0)));
@@ -5602,14 +6008,37 @@ class Boss extends Entity {
         }
         ctx.scale(bodyScale, bodyScale);
 
-        const aura = ctx.createRadialGradient(0, 0, this.radius * 0.2, 0, 0, this.radius * (key === 'reactor' && deathAnimating ? 2.1 + reactorOverheat * 0.5 : 1.85));
-        aura.addColorStop(0, `${accent}44`);
-        aura.addColorStop(0.45, `${mid}28`);
+        const auraRadius = this.radius * (key === 'reactor' && deathAnimating ? 2.1 + reactorOverheat * 0.5 : 1.85 + auraOverdrive * 0.22);
+        const aura = ctx.createRadialGradient(0, 0, this.radius * 0.2, 0, 0, auraRadius);
+        aura.addColorStop(0, `${accent}${awakeningState ? '66' : '44'}`);
+        aura.addColorStop(0.45, `${mid}${awakeningState ? '44' : '28'}`);
         aura.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = aura;
         ctx.beginPath();
-        ctx.arc(0, 0, this.radius * (key === 'reactor' && deathAnimating ? 2.1 + reactorOverheat * 0.5 : 1.85), 0, Math.PI * 2);
+        ctx.arc(0, 0, auraRadius, 0, Math.PI * 2);
         ctx.fill();
+
+        if (awakeningState || auraOverdrive > 0.45) {
+            const haloCount = key === 'grand_singularity' ? 4 : 3;
+            for (let halo = 0; halo < haloCount; halo += 1) {
+                ctx.save();
+                ctx.rotate((halo % 2 === 0 ? 1 : -1) * t * (0.9 + halo * 0.22));
+                ctx.strokeStyle = halo === 0 ? `${high}a6` : halo === 1 ? `${accent}88` : `${mid}66`;
+                ctx.lineWidth = Math.max(2, this.radius * (0.05 - halo * 0.008));
+                ctx.beginPath();
+                ctx.ellipse(
+                    0,
+                    0,
+                    this.radius * (1.14 + halo * 0.2 + auraOverdrive * 0.1),
+                    this.radius * (0.42 + halo * 0.08 + awakeningProgress * 0.06),
+                    halo * 0.18 + awakeningProgress * 0.2,
+                    0,
+                    Math.PI * 2
+                );
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
 
         if (deathAnimating && key === 'reactor') {
             for (let wave = 0; wave < 3; wave += 1) {
@@ -5647,24 +6076,112 @@ class Boss extends Entity {
             ctx.restore();
         }
 
-        for (let i = 0; i < barrelCount; i += 1) {
-            const angle = (i / barrelCount) * Math.PI * 2 + t * 0.15;
-            const mountLen = this.radius * (key === 'grand_singularity' ? 0.82 : 0.74);
-            const splitterOffset = key === 'splitter' && deathAnimating ? (i % 2 === 0 ? splitterShear : -splitterShear) : 0;
-            const singularityDrawRadius = key === 'grand_singularity' && deathAnimating ? turretRadius * Math.max(0.22, 1 - singularityImplode * 0.78) : turretRadius;
-            const x = Math.cos(angle) * singularityDrawRadius + (key === 'splitter' ? Math.cos(angle) * splitterOffset : 0);
-            const y = Math.sin(angle) * singularityDrawRadius + (key === 'splitter' ? Math.sin(angle) * splitterOffset * 0.35 : 0);
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(angle + (key === 'splitter' && deathAnimating ? (i % 2 === 0 ? 1 : -1) * deathProgress * 0.38 : 0));
-            ctx.fillStyle = low;
-            ctx.strokeStyle = `${accent}66`;
-            ctx.lineWidth = this.radius * 0.03;
-            ctx.beginPath();
-            ctx.roundRect(-this.radius * 0.12, -this.radius * 0.09, mountLen, this.radius * 0.18, this.radius * 0.08);
-            ctx.fill();
-            ctx.stroke();
-            ctx.restore();
+        if (key === 'splitter') {
+            const splitterAngles = [-0.92, -0.42, 0.42, 0.92, Math.PI - 0.42, Math.PI + 0.42];
+            for (let i = 0; i < splitterAngles.length; i += 1) {
+                const angle = splitterAngles[i] + Math.sin(t * 0.8 + i) * 0.05;
+                const reach = this.radius * (0.66 + (i < 4 ? 0.18 : 0.04));
+                const shear = deathAnimating ? (i % 2 === 0 ? splitterShear : -splitterShear) * 0.7 : 0;
+                const x = Math.cos(angle) * reach + Math.cos(angle) * shear;
+                const y = Math.sin(angle) * reach + Math.sin(angle) * shear * 0.25;
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.rotate(angle + (i < 4 ? 0 : Math.PI) + (deathAnimating ? (i % 2 === 0 ? 1 : -1) * deathProgress * 0.24 : 0));
+                ctx.fillStyle = i < 4 ? `${low}ee` : `${mid}cc`;
+                ctx.strokeStyle = i < 4 ? `${high}88` : `${accent}88`;
+                ctx.lineWidth = this.radius * 0.028;
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 0.12, 0);
+                ctx.lineTo(this.radius * 0.2, -this.radius * 0.11);
+                ctx.lineTo(this.radius * 0.72, 0);
+                ctx.lineTo(this.radius * 0.2, this.radius * 0.11);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+        } else if (key === 'reactor') {
+            for (let i = 0; i < 6; i += 1) {
+                const angle = (i / 6) * Math.PI * 2 + t * 0.18;
+                const reach = this.radius * 0.74;
+                ctx.save();
+                ctx.rotate(angle);
+                ctx.translate(reach, 0);
+                ctx.fillStyle = `${low}f0`;
+                ctx.strokeStyle = `${high}88`;
+                ctx.lineWidth = this.radius * 0.026;
+                ctx.beginPath();
+                ctx.roundRect(-this.radius * 0.08, -this.radius * 0.11, this.radius * 0.6, this.radius * 0.22, this.radius * 0.08);
+                ctx.fill();
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(this.radius * 0.56, 0, this.radius * 0.08, 0, Math.PI * 2);
+                ctx.fillStyle = i % 2 === 0 ? `${accent}dd` : `${high}bb`;
+                ctx.fill();
+                ctx.restore();
+            }
+        } else if (key === 'executioner') {
+            const hookAngles = [-0.64, 0.64, Math.PI - 0.42, Math.PI + 0.42];
+            for (let i = 0; i < hookAngles.length; i += 1) {
+                const angle = hookAngles[i];
+                const reach = this.radius * (i < 2 ? 0.78 : 0.58);
+                ctx.save();
+                ctx.rotate(angle);
+                ctx.translate(reach, 0);
+                ctx.fillStyle = i < 2 ? `${low}f4` : `${mid}d0`;
+                ctx.strokeStyle = `${high}8c`;
+                ctx.lineWidth = this.radius * 0.028;
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 0.12, -this.radius * 0.07);
+                ctx.lineTo(this.radius * 0.52, -this.radius * 0.12);
+                ctx.lineTo(this.radius * 0.68, 0);
+                ctx.lineTo(this.radius * 0.52, this.radius * 0.12);
+                ctx.lineTo(-this.radius * 0.12, this.radius * 0.07);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+        } else if (key === 'grand_singularity') {
+            const orbitCount = 5;
+            for (let i = 0; i < orbitCount; i += 1) {
+                const angle = t * 0.42 + i * (Math.PI * 2 / orbitCount);
+                const reach = this.radius * (0.78 + i * 0.03);
+                const drawRadius = deathAnimating ? reach * Math.max(0.28, 1 - singularityImplode * 0.72) : reach;
+                ctx.save();
+                ctx.translate(Math.cos(angle) * drawRadius, Math.sin(angle) * drawRadius);
+                ctx.rotate(angle + Math.PI / 2);
+                ctx.fillStyle = i % 2 === 0 ? `${mid}dc` : `${low}f2`;
+                ctx.strokeStyle = `${high}88`;
+                ctx.lineWidth = this.radius * 0.026;
+                ctx.beginPath();
+                ctx.roundRect(-this.radius * 0.08, -this.radius * 0.16, this.radius * 0.18, this.radius * 0.32, this.radius * 0.08);
+                ctx.fill();
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * 0.1, 0, Math.PI * 2);
+                ctx.fillStyle = `${accent}cc`;
+                ctx.fill();
+                ctx.restore();
+            }
+        } else {
+            for (let i = 0; i < barrelCount; i += 1) {
+                const angle = (i / barrelCount) * Math.PI * 2 + t * 0.15;
+                const mountLen = this.radius * 0.74;
+                const x = Math.cos(angle) * turretRadius;
+                const y = Math.sin(angle) * turretRadius;
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.rotate(angle);
+                ctx.fillStyle = low;
+                ctx.strokeStyle = `${accent}66`;
+                ctx.lineWidth = this.radius * 0.03;
+                ctx.beginPath();
+                ctx.roundRect(-this.radius * 0.12, -this.radius * 0.09, mountLen, this.radius * 0.18, this.radius * 0.08);
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
         }
 
         ctx.save();
@@ -5716,41 +6233,151 @@ class Boss extends Entity {
             shell.addColorStop(0.58, mid);
             shell.addColorStop(1, low);
             ctx.fillStyle = shell;
+            ctx.lineWidth = this.radius * 0.08;
+            ctx.strokeStyle = `${high}aa`;
             if (key === 'splitter') {
                 const halfShift = splitterShear * 0.65;
                 ctx.save();
-                ctx.translate(-halfShift, 0);
+                ctx.translate(-this.radius * 0.18 - halfShift, 0);
+                ctx.rotate(-0.18);
                 ctx.beginPath();
-                ctx.moveTo(0, -this.radius * 0.96);
-                ctx.quadraticCurveTo(-this.radius * 0.94, 0, 0, this.radius * 0.96);
-                ctx.lineTo(0, -this.radius * 0.96);
+                ctx.moveTo(this.radius * 0.08, -this.radius * 0.94);
+                ctx.quadraticCurveTo(-this.radius * 0.92, -this.radius * 0.16, -this.radius * 0.26, this.radius * 0.94);
+                ctx.lineTo(this.radius * 0.18, this.radius * 0.52);
+                ctx.lineTo(this.radius * 0.22, -this.radius * 0.46);
                 ctx.closePath();
                 ctx.fill();
+                ctx.stroke();
                 ctx.restore();
                 ctx.save();
-                ctx.translate(halfShift, 0);
+                ctx.translate(this.radius * 0.18 + halfShift, 0);
+                ctx.rotate(0.18);
                 ctx.beginPath();
-                ctx.moveTo(0, -this.radius * 0.96);
-                ctx.quadraticCurveTo(this.radius * 0.94, 0, 0, this.radius * 0.96);
-                ctx.lineTo(0, -this.radius * 0.96);
+                ctx.moveTo(-this.radius * 0.08, -this.radius * 0.94);
+                ctx.quadraticCurveTo(this.radius * 0.92, -this.radius * 0.16, this.radius * 0.26, this.radius * 0.94);
+                ctx.lineTo(-this.radius * 0.18, this.radius * 0.52);
+                ctx.lineTo(-this.radius * 0.22, -this.radius * 0.46);
                 ctx.closePath();
                 ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+                ctx.fillStyle = `${low}cc`;
+                ctx.beginPath();
+                ctx.roundRect(-this.radius * 0.18, -this.radius * 0.44, this.radius * 0.36, this.radius * 0.88, this.radius * 0.14);
+                ctx.fill();
+                ctx.strokeStyle = `${accent}cc`;
+                ctx.lineWidth = this.radius * 0.03;
+                ctx.beginPath();
+                ctx.moveTo(0, -this.radius * 0.84);
+                ctx.lineTo(0, this.radius * 0.84);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 0.44, -this.radius * 0.18);
+                ctx.lineTo(this.radius * 0.44, this.radius * 0.18);
+                ctx.moveTo(-this.radius * 0.44, this.radius * 0.18);
+                ctx.lineTo(this.radius * 0.44, -this.radius * 0.18);
+                ctx.lineWidth = this.radius * 0.022;
+                ctx.strokeStyle = `${high}80`;
+                ctx.stroke();
+            } else if (key === 'reactor') {
+                ctx.beginPath();
+                for (let i = 0; i < 8; i += 1) {
+                    const angle = -Math.PI / 2 + (i * Math.PI) / 4;
+                    const radius = this.radius * (i % 2 === 0 ? 0.98 : 0.72);
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * 0.46, 0, Math.PI * 2);
+                ctx.fillStyle = `${low}cc`;
+                ctx.fill();
+                ctx.strokeStyle = `${high}66`;
+                ctx.lineWidth = this.radius * 0.04;
+                ctx.stroke();
+                ctx.beginPath();
+                for (let i = 0; i < 6; i += 1) {
+                    const angle = (i / 6) * Math.PI * 2 + Math.PI / 6;
+                    const radius = this.radius * (i % 2 === 0 ? 0.52 : 0.34);
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = `${mid}c2`;
+                ctx.fill();
+            } else if (key === 'executioner') {
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 0.84, -this.radius * 0.38);
+                ctx.lineTo(this.radius * 0.02, -this.radius * 0.94);
+                ctx.lineTo(this.radius * 0.94, 0);
+                ctx.lineTo(this.radius * 0.02, this.radius * 0.94);
+                ctx.lineTo(-this.radius * 0.84, this.radius * 0.38);
+                ctx.closePath();
+                ctx.fill();
+                if (deathAnimating) {
+                    ctx.save();
+                    ctx.rotate(-0.18 - deathProgress * 0.5);
+                    ctx.stroke();
+                    ctx.restore();
+                } else {
+                    ctx.stroke();
+                }
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 0.32, -this.radius * 0.26);
+                ctx.lineTo(this.radius * 0.56, 0);
+                ctx.lineTo(-this.radius * 0.32, this.radius * 0.26);
+                ctx.closePath();
+                ctx.fillStyle = `${low}d4`;
+                ctx.fill();
+                ctx.beginPath();
+                ctx.roundRect(-this.radius * 0.62, -this.radius * 0.18, this.radius * 0.28, this.radius * 0.36, this.radius * 0.1);
+                ctx.fillStyle = `${mid}bc`;
+                ctx.fill();
+            } else if (key === 'grand_singularity') {
+                ctx.beginPath();
+                for (let i = 0; i < 10; i += 1) {
+                    const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+                    const radius = this.radius * (i % 2 === 0 ? 0.94 : 0.68);
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * 0.54, 0, Math.PI * 2);
+                ctx.fillStyle = `${low}d4`;
+                ctx.fill();
+                ctx.save();
+                ctx.rotate(t * 0.36 + singularityImplode * 0.8);
+                for (let ring = 0; ring < 3; ring += 1) {
+                    ctx.beginPath();
+                    ctx.ellipse(
+                        0,
+                        0,
+                        this.radius * (0.96 + ring * 0.18),
+                        this.radius * (0.34 + ring * 0.05),
+                        ring * 0.46,
+                        0,
+                        Math.PI * 2
+                    );
+                    ctx.lineWidth = this.radius * (0.024 - ring * 0.003);
+                    ctx.strokeStyle = ring === 0 ? `${high}88` : ring === 1 ? `${accent}66` : `${mid}55`;
+                    ctx.stroke();
+                }
                 ctx.restore();
             } else {
                 ctx.beginPath();
                 ctx.arc(0, 0, this.radius * 0.96, 0, Math.PI * 2);
                 ctx.fill();
-            }
-            ctx.lineWidth = this.radius * 0.08;
-            ctx.strokeStyle = `${high}aa`;
-            if (key === 'executioner' && deathAnimating) {
-                ctx.save();
-                ctx.rotate(-0.18 - deathProgress * 0.5);
-                ctx.beginPath();
-                ctx.arc(0, 0, this.radius * 0.96, Math.PI * 0.08, Math.PI * 1.72);
-                ctx.stroke();
-                ctx.restore();
-            } else {
                 ctx.stroke();
             }
         }
@@ -5795,7 +6422,31 @@ class Boss extends Entity {
             }
         } else {
             ctx.rotate(-t * 0.2);
-            if (key === 'executioner' && deathAnimating) {
+            if (key === 'splitter') {
+                for (let i = 0; i < 6; i += 1) {
+                    const angle = (i / 6) * Math.PI * 2 + t * 0.22;
+                    const inner = this.radius * 0.22;
+                    const outer = this.radius * (0.56 + (i % 2 === 0 ? 0.18 : 0.06));
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+                    ctx.lineTo(Math.cos(angle + 0.09) * outer, Math.sin(angle + 0.09) * outer);
+                    ctx.lineTo(Math.cos(angle - 0.09) * outer, Math.sin(angle - 0.09) * outer);
+                    ctx.closePath();
+                    ctx.fillStyle = i % 2 === 0 ? `${accent}d2` : `${high}74`;
+                    ctx.fill();
+                }
+            } else if (key === 'reactor') {
+                for (let i = 0; i < 3; i += 1) {
+                    ctx.save();
+                    ctx.rotate(t * (0.24 + i * 0.12) + i * 0.8);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, this.radius * (0.42 + i * 0.13), 0, Math.PI * (1.2 + i * 0.22));
+                    ctx.lineWidth = this.radius * (0.05 - i * 0.01);
+                    ctx.strokeStyle = i === 0 ? `${accent}b8` : i === 1 ? `${high}76` : `${mid}58`;
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            } else if (key === 'executioner' && deathAnimating) {
                 for (let i = 0; i < 3; i += 1) {
                     const angle = -Math.PI / 2 + (i - 1) * 0.4 - deathProgress * 0.24;
                     const base = this.radius * 0.28;
@@ -5808,6 +6459,19 @@ class Boss extends Entity {
                     ctx.fillStyle = i === 1 ? `${high}90` : `${accent}a8`;
                     ctx.fill();
                 }
+            } else if (key === 'executioner') {
+                for (let i = 0; i < 4; i += 1) {
+                    const angle = -Math.PI / 2 + (i - 1.5) * 0.3;
+                    const base = this.radius * 0.18;
+                    const tip = this.radius * (0.7 + (i % 2 === 0 ? 0.18 : 0.04));
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(angle) * base, Math.sin(angle) * base);
+                    ctx.lineTo(Math.cos(angle + 0.08) * tip, Math.sin(angle + 0.08) * tip);
+                    ctx.lineTo(Math.cos(angle - 0.08) * tip, Math.sin(angle - 0.08) * tip);
+                    ctx.closePath();
+                    ctx.fillStyle = i === 1 || i === 2 ? `${accent}b8` : `${high}68`;
+                    ctx.fill();
+                }
             } else if (key === 'grand_singularity' && deathAnimating) {
                 for (let i = 0; i < 5; i += 1) {
                     const angle = t * 1.8 + i * (Math.PI * 2 / 5) + deathProgress * 0.8;
@@ -5815,6 +6479,15 @@ class Boss extends Entity {
                     ctx.beginPath();
                     ctx.arc(Math.cos(angle) * orbit, Math.sin(angle) * orbit, this.radius * (0.12 + (4 - i) * 0.012), 0, Math.PI * 2);
                     ctx.fillStyle = i % 2 === 0 ? `${accent}a4` : `${high}78`;
+                    ctx.fill();
+                }
+            } else if (key === 'grand_singularity') {
+                for (let i = 0; i < 7; i += 1) {
+                    const angle = t * 0.72 + i * (Math.PI * 2 / 7);
+                    const orbit = this.radius * (0.24 + (i % 3) * 0.12);
+                    ctx.beginPath();
+                    ctx.arc(Math.cos(angle) * orbit, Math.sin(angle) * orbit, this.radius * (0.08 + (i % 2) * 0.016), 0, Math.PI * 2);
+                    ctx.fillStyle = i % 2 === 0 ? `${accent}b2` : `${high}72`;
                     ctx.fill();
                 }
             } else {
@@ -5863,20 +6536,44 @@ class Boss extends Entity {
         }
 
         if (forming) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            for (let ring = 0; ring < 3; ring += 1) {
+                const ringRadius = this.radius * (0.92 + ring * 0.22 + transformPhase * (0.36 + ring * 0.08));
+                ctx.beginPath();
+                ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
+                ctx.lineWidth = this.radius * (0.03 - ring * 0.004);
+                ctx.strokeStyle = ring === 0 ? `${high}86` : ring === 1 ? `${accent}72` : `${mid}58`;
+                ctx.stroke();
+            }
+            for (let shard = 0; shard < 10; shard += 1) {
+                const angle = t * (0.55 + shard * 0.03) + shard * (Math.PI * 2 / 10);
+                const orbit = this.radius * (1.36 - transformPhase * 0.52 + (shard % 2) * 0.05);
+                const shardLen = this.radius * (0.18 + (shard % 3) * 0.04);
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(angle) * (orbit - shardLen), Math.sin(angle) * (orbit - shardLen));
+                ctx.lineTo(Math.cos(angle) * orbit, Math.sin(angle) * orbit);
+                ctx.lineWidth = this.radius * (0.026 - (shard % 2) * 0.004);
+                ctx.strokeStyle = shard % 2 === 0 ? `${accent}92` : `${high}70`;
+                ctx.stroke();
+            }
+            ctx.restore();
+
             if (key === 'gatekeeper') {
-                ctx.strokeStyle = `${high}88`;
-                ctx.lineWidth = this.radius * 0.05;
+                const plateSlide = (1 - transformPhase) * this.radius * 1.1;
+                ctx.strokeStyle = `${high}92`;
+                ctx.lineWidth = this.radius * 0.045;
                 for (let i = 0; i < 4; i += 1) {
-                    const size = this.radius * (0.32 + transformPhase * (0.42 + i * 0.12));
+                    const size = this.radius * (0.34 + transformPhase * (0.32 + i * 0.14));
                     ctx.save();
-                    ctx.rotate(gateSpin + i * 0.22);
+                    ctx.rotate(gateSpin + i * 0.24);
                     ctx.strokeRect(-size, -size, size * 2, size * 2);
                     ctx.restore();
                 }
                 for (let i = 0; i < 4; i += 1) {
                     const angle = (i / 4) * Math.PI * 2 + gateSpin * 1.2;
-                    const start = this.radius * (0.24 + transformPhase * 0.08);
-                    const end = this.radius * (0.96 + transformPhase * 0.52);
+                    const start = this.radius * (0.2 + transformPhase * 0.1);
+                    const end = this.radius * (1.04 + transformPhase * 0.44);
                     ctx.beginPath();
                     ctx.moveTo(Math.cos(angle) * start, Math.sin(angle) * start);
                     ctx.lineTo(Math.cos(angle) * end, Math.sin(angle) * end);
@@ -5884,36 +6581,89 @@ class Boss extends Entity {
                     ctx.strokeStyle = i % 2 === 0 ? `${accent}aa` : `${high}66`;
                     ctx.stroke();
                 }
+                for (let i = 0; i < 4; i += 1) {
+                    const angle = (i / 4) * Math.PI * 2;
+                    ctx.save();
+                    ctx.rotate(angle);
+                    ctx.translate(plateSlide, 0);
+                    ctx.fillStyle = `${low}dd`;
+                    ctx.strokeStyle = `${high}88`;
+                    ctx.lineWidth = this.radius * 0.03;
+                    ctx.beginPath();
+                    ctx.roundRect(-this.radius * 0.18, -this.radius * 0.16, this.radius * 0.36, this.radius * 0.32, this.radius * 0.08);
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.restore();
+                }
             } else if (key === 'splitter') {
-                for (let i = 0; i < 6; i += 1) {
-                    const angle = (i / 6) * Math.PI * 2 + t * 0.8;
-                    const len = this.radius * (0.5 + transformPhase * 0.8);
+                for (let i = 0; i < 8; i += 1) {
+                    const angle = (i / 8) * Math.PI * 2 + t * 0.9;
+                    const len = this.radius * (0.42 + transformPhase * 0.92);
                     ctx.beginPath();
                     ctx.moveTo(0, 0);
                     ctx.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
-                    ctx.lineWidth = this.radius * 0.035;
+                    ctx.lineWidth = this.radius * (i % 2 === 0 ? 0.042 : 0.024);
                     ctx.strokeStyle = i % 2 === 0 ? `${accent}aa` : `${high}66`;
                     ctx.stroke();
+                }
+                for (let i = 0; i < 4; i += 1) {
+                    const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
+                    const orbit = this.radius * (1.18 - transformPhase * 0.56);
+                    ctx.save();
+                    ctx.translate(Math.cos(angle) * orbit, Math.sin(angle) * orbit);
+                    ctx.rotate(angle + t * 1.6);
+                    ctx.fillStyle = `${low}e4`;
+                    ctx.beginPath();
+                    ctx.moveTo(-this.radius * 0.08, 0);
+                    ctx.lineTo(this.radius * 0.24, -this.radius * 0.12);
+                    ctx.lineTo(this.radius * 0.62, 0);
+                    ctx.lineTo(this.radius * 0.24, this.radius * 0.12);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.restore();
                 }
             } else if (key === 'reactor') {
                 ctx.strokeStyle = `${high}88`;
                 ctx.lineWidth = this.radius * 0.035;
                 for (let i = 0; i < 5; i += 1) {
-                    const radius = this.radius * (0.28 + transformPhase * (0.34 + i * 0.12));
+                    const radius = this.radius * (0.24 + transformPhase * (0.28 + i * 0.11));
                     ctx.beginPath();
                     ctx.arc(0, 0, radius, 0, Math.PI * 2);
                     ctx.stroke();
                 }
+                for (let i = 0; i < 6; i += 1) {
+                    const angle = (i / 6) * Math.PI * 2 + t * 0.4;
+                    const orbit = this.radius * (1.14 - transformPhase * 0.46);
+                    ctx.save();
+                    ctx.rotate(angle);
+                    ctx.translate(orbit, 0);
+                    ctx.fillStyle = i % 2 === 0 ? `${accent}d0` : `${high}9a`;
+                    ctx.beginPath();
+                    ctx.roundRect(-this.radius * 0.08, -this.radius * 0.12, this.radius * 0.52, this.radius * 0.24, this.radius * 0.08);
+                    ctx.fill();
+                    ctx.restore();
+                }
             } else if (key === 'executioner') {
-                for (let i = 0; i < 4; i += 1) {
-                    const angle = -Math.PI / 2 + (i - 1.5) * 0.28;
-                    const len = this.radius * (0.8 + transformPhase * 0.7);
+                for (let i = 0; i < 5; i += 1) {
+                    const angle = -Math.PI / 2 + (i - 2) * 0.24;
+                    const len = this.radius * (0.72 + transformPhase * 0.84);
                     ctx.beginPath();
                     ctx.moveTo(Math.cos(angle) * this.radius * 0.12, Math.sin(angle) * this.radius * 0.12);
                     ctx.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
-                    ctx.lineWidth = this.radius * 0.05;
-                    ctx.strokeStyle = `${high}88`;
+                    ctx.lineWidth = this.radius * (i === 2 ? 0.06 : 0.04);
+                    ctx.strokeStyle = i === 2 ? `${accent}b8` : `${high}88`;
                     ctx.stroke();
+                }
+                for (let i = 0; i < 3; i += 1) {
+                    const drop = (1 - transformPhase) * this.radius * (0.9 + i * 0.2);
+                    const x = (i - 1) * this.radius * 0.26;
+                    ctx.beginPath();
+                    ctx.moveTo(x - this.radius * 0.08, -drop);
+                    ctx.lineTo(x + this.radius * 0.08, -drop);
+                    ctx.lineTo(x, -drop + this.radius * 0.34);
+                    ctx.closePath();
+                    ctx.fillStyle = `${low}de`;
+                    ctx.fill();
                 }
             } else {
                 ctx.strokeStyle = `${high}88`;
@@ -5921,8 +6671,26 @@ class Boss extends Entity {
                 for (let i = 0; i < 4; i += 1) {
                     const angle = t * 1.1 + i * (Math.PI / 2);
                     ctx.beginPath();
-                    ctx.arc(Math.cos(angle) * this.radius * 0.22, Math.sin(angle) * this.radius * 0.22, this.radius * (0.55 + transformPhase * 0.55), 0, Math.PI * 2);
+                    ctx.arc(
+                        Math.cos(angle) * this.radius * 0.22,
+                        Math.sin(angle) * this.radius * 0.22,
+                        this.radius * (0.42 + transformPhase * 0.42),
+                        0,
+                        Math.PI * 2
+                    );
                     ctx.stroke();
+                }
+                for (let i = 0; i < 5; i += 1) {
+                    const angle = t * 1.8 + i * (Math.PI * 2 / 5);
+                    const orbit = this.radius * (1.22 - transformPhase * 0.62);
+                    ctx.save();
+                    ctx.translate(Math.cos(angle) * orbit, Math.sin(angle) * orbit);
+                    ctx.rotate(angle + Math.PI / 2);
+                    ctx.fillStyle = i % 2 === 0 ? `${accent}d2` : `${mid}c2`;
+                    ctx.beginPath();
+                    ctx.roundRect(-this.radius * 0.08, -this.radius * 0.16, this.radius * 0.18, this.radius * 0.32, this.radius * 0.08);
+                    ctx.fill();
+                    ctx.restore();
                 }
             }
         }
@@ -5978,15 +6746,57 @@ class Boss extends Entity {
         const hpRatio = this.health / this.maxHealth;
         const isBossRushBoss = !!(this as any).__bossRushBoss;
         const isAwakenedBossRush = !!(this as any).__bossRushAwakened;
-        const rushPulse = isBossRushBoss ? 1 + Math.sin(t * (isAwakenedBossRush ? 4.4 : 2.8)) * (isAwakenedBossRush ? 0.11 : 0.06) : 1;
+        const awakeningProgress = Math.max(0, Math.min(1, Number((this as any).__bossRushAwakeningProgress ?? (isAwakenedBossRush ? 1 : 0))));
+        const auraOverdrive = Math.max(0, Number((this as any).__bossRushAuraOverdrive ?? 0));
+        const awakeningState = !!(this as any).__bossRushAwakeningState;
+        const rushPulse = isBossRushBoss
+            ? 1 + Math.sin(t * (isAwakenedBossRush ? 4.4 : 2.8)) * (isAwakenedBossRush ? 0.11 : 0.06) + auraOverdrive * 0.06
+            : 1;
         
         ctx.save();
-        const auraSize = this.radius * (this.archetype === 'SINGULARITY' ? 1.5 + Math.sin(t * 1.6) * 0.06 : 1.3 + Math.sin(t * 2) * 0.08) * rushPulse;
+        const auraSize = this.radius * (this.archetype === 'SINGULARITY' ? 1.5 + Math.sin(t * 1.6) * 0.06 : 1.3 + Math.sin(t * 2) * 0.08) * rushPulse * (1 + auraOverdrive * 0.18);
         const grad = ctx.createRadialGradient(0, 0, this.radius * 0.72, 0, 0, auraSize);
-        grad.addColorStop(0, this.archetype === 'SINGULARITY' ? (isBossRushBoss ? 'rgba(160, 96, 255, 0.42)' : 'rgba(72, 163, 255, 0.38)') : isBossRushBoss ? 'rgba(255, 90, 90, 0.42)' : 'rgba(0, 85, 255, 0.4)');
+        grad.addColorStop(0, this.archetype === 'SINGULARITY' ? (isBossRushBoss ? `rgba(160, 96, 255, ${0.42 + auraOverdrive * 0.12})` : 'rgba(72, 163, 255, 0.38)') : isBossRushBoss ? `rgba(255, 90, 90, ${0.42 + auraOverdrive * 0.1})` : 'rgba(0, 85, 255, 0.4)');
         grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
         ctx.fillStyle = grad;
         ctx.beginPath(); ctx.arc(0, 0, auraSize, 0, Math.PI * 2); ctx.fill();
+
+        if (isBossRushBoss) {
+            const sigilColor = this.archetype === 'SINGULARITY' ? 'rgba(236, 224, 255,' : 'rgba(255, 228, 228,';
+            const outerColor = this.archetype === 'SINGULARITY' ? 'rgba(139, 92, 246,' : 'rgba(248, 113, 113,';
+            const ringCount = awakeningState ? 4 : isAwakenedBossRush ? 3 : 2;
+            for (let ring = 0; ring < ringCount; ring += 1) {
+                ctx.save();
+                ctx.rotate((ring % 2 === 0 ? 1 : -1) * t * (0.42 + ring * 0.15) + awakeningProgress * 0.45);
+                ctx.strokeStyle = `${ring === 0 ? sigilColor : outerColor}${Math.max(0.12, 0.32 - ring * 0.06 + auraOverdrive * 0.07)})`;
+                ctx.lineWidth = Math.max(2, this.radius * (0.045 - ring * 0.007));
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * (1.08 + ring * 0.19 + auraOverdrive * 0.08), Math.PI * 0.08 * ring, Math.PI * (1.3 + ring * 0.22));
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            if (awakeningState || auraOverdrive > 0.5) {
+                const spokeCount = this.archetype === 'SINGULARITY' ? 10 : 8;
+                ctx.save();
+                ctx.rotate(t * 0.65);
+                for (let spoke = 0; spoke < spokeCount; spoke += 1) {
+                    const angle = (spoke / spokeCount) * Math.PI * 2;
+                    const inner = this.radius * (1.02 + auraOverdrive * 0.08);
+                    const outer = this.radius * (1.42 + auraOverdrive * 0.22 + (spoke % 2 === 0 ? 0.08 : 0));
+                    ctx.save();
+                    ctx.rotate(angle);
+                    ctx.strokeStyle = `${spoke % 2 === 0 ? sigilColor : outerColor}${0.24 + Math.min(0.18, auraOverdrive * 0.08)})`;
+                    ctx.lineWidth = Math.max(1.5, this.radius * 0.024);
+                    ctx.beginPath();
+                    ctx.moveTo(inner, 0);
+                    ctx.lineTo(outer, 0);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+                ctx.restore();
+            }
+        }
         ctx.restore();
 
         if (isBossRushBoss) {
@@ -6204,11 +7014,12 @@ class Shape extends Entity {
       return sourceId;
   }
 
-  private shouldShowCombatReadout(): boolean {
-      if (this.isDying || this.shouldRemove) return false;
-      const engine = (window as any).gameEngine as GameEngine | undefined;
-      const player = engine?.player;
-      if (!player || player.isDead) return false;
+    private shouldShowCombatReadout(): boolean {
+        if (this.isDying || this.shouldRemove) return false;
+        if ((this as any).__bossRushBoss) return false;
+        const engine = (window as any).gameEngine as GameEngine | undefined;
+        const player = engine?.player;
+        if (!player || player.isDead) return false;
       if (Date.now() - this.lastPlayerDamageAt > 3200) return false;
       return Vector.dist(player.pos, this.pos) < 1000;
   }
@@ -7029,6 +7840,8 @@ if (this.rarity !== ShapeRarity.COMMON && this.rarity !== ShapeRarity.UNCOMMON) 
 class Bullet extends Entity {
   private static readonly REBIRTH_DAMAGE_MULT = 1.45;
   private static readonly REBIRTH_PROJECTILE_HEALTH_MULT = 1.55;
+  private static readonly PENETRATION_REHIT_WINDOW_MS = 120;
+  private static readonly SHAPE_PENETRATION_REHIT_WINDOW_MS = 34;
   ownerId: number;
   ownerClass: TankClass;
   barrelIndex: number;
@@ -7047,6 +7860,7 @@ class Bullet extends Entity {
   trapAccentColor: string = '#facc15';
   trapTravelDistance: number = 150;
   trapDistanceTravelled: number = 0;
+  private recentPenetratedTargets = new Map<number, number>();
   
   constructor(id: number, x: number, y: number, velocity: Vector2, owner: Tank, extraDamageMult: number = 1.0, extraLifeMult: number = 1.0, extraSizeMult: number = 1.0, barrelIndex: number = 0) {
     const size = (6 + (owner.stats[StatType.BULLET_DAMAGE] * 0.3)) * extraSizeMult;
@@ -7182,6 +7996,7 @@ class Bullet extends Entity {
     const previousPos = { ...this.pos };
     super.update(dt); 
     this.lifeTime += dt * 1000; 
+    this.clearExpiredPenetrationTargets(this.lifeTime);
     if (!this.isDespawning && this.lifeTime > this.maxLifeTime) this.isDead = true; 
     
     // Disappear/despawn upon touching the game barrier (outer border bounds)
@@ -7302,6 +8117,31 @@ class Bullet extends Entity {
         p.vel = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
         engine.particles.push(p);
       }
+    }
+  }
+
+  hasRecentPenetrationTarget(entityId: number, nowMs: number): boolean {
+    const expiry = this.recentPenetratedTargets.get(entityId);
+    if (expiry == null) return false;
+    if (expiry <= nowMs) {
+      this.recentPenetratedTargets.delete(entityId);
+      return false;
+    }
+    return true;
+  }
+
+  markPenetratedTarget(entityId: number, nowMs: number, victimType?: EntityType): void {
+    const windowMs =
+      victimType === EntityType.SHAPE
+        ? Bullet.SHAPE_PENETRATION_REHIT_WINDOW_MS
+        : Bullet.PENETRATION_REHIT_WINDOW_MS;
+    this.recentPenetratedTargets.set(entityId, nowMs + windowMs);
+  }
+
+  private clearExpiredPenetrationTargets(nowMs: number): void {
+    if (this.recentPenetratedTargets.size === 0) return;
+    for (const [entityId, expiry] of this.recentPenetratedTargets) {
+      if (expiry <= nowMs) this.recentPenetratedTargets.delete(entityId);
     }
   }
 
@@ -8029,37 +8869,57 @@ class Bullet extends Entity {
     ctx.save();
     const armedAlpha = this.trapAnchored ? 1 : 0.72;
     const pulse = this.trapAnchored ? 1 + Math.sin(this.lifeTime * 0.012) * 0.08 : 1;
-    const outerRadius = this.radius * (this.trapAnchored ? 1.28 : 1.12) * pulse;
-    const midRadius = this.radius * 0.6;
-    const innerRadius = this.radius * 0.22;
+    const outerRadius = this.radius * (this.trapAnchored ? 1.26 : 1.08) * pulse;
+    const armLength = this.radius * (this.trapAnchored ? 1.18 : 1.02) * pulse;
+    const armWidth = this.radius * 0.28;
+    const coreRadius = this.radius * 0.28;
     const teamColor = this.team === Team.NONE ? this.trapAccentColor : getTeamProjectileColor(this.team);
-    const halo = ctx.createRadialGradient(0, 0, this.radius * 0.12, 0, 0, this.radius * (this.trapAnchored ? 2.2 : 1.45));
+    const halo = ctx.createRadialGradient(0, 0, this.radius * 0.12, 0, 0, this.radius * (this.trapAnchored ? 1.85 : 1.32));
     halo.addColorStop(0, this.trapAnchored ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)');
-    halo.addColorStop(0.38, this.trapAnchored ? 'rgba(250,204,21,0.18)' : 'rgba(250,204,21,0.1)');
+    halo.addColorStop(0.38, this.trapAnchored ? 'rgba(250,204,21,0.14)' : 'rgba(250,204,21,0.08)');
     halo.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = halo;
-    this.traceTrapStarShape(ctx, this.radius * (this.trapAnchored ? 1.95 : 1.52), this.radius * 0.58, 4, Math.PI / 4);
+    this.traceTrapStarShape(ctx, this.radius * (this.trapAnchored ? 1.68 : 1.4), this.radius * 0.48, 4, Math.PI / 4);
     ctx.fill();
 
-    ctx.fillStyle = this.trapAnchored ? teamColor : '#a16207';
     ctx.globalAlpha *= armedAlpha;
-    this.traceTrapStarShape(ctx, outerRadius, innerRadius, 4, Math.PI / 4);
-    ctx.fill();
+    for (let i = 0; i < 4; i += 1) {
+      ctx.save();
+      ctx.rotate((Math.PI / 2) * i);
+      const bladeGradient = ctx.createLinearGradient(0, 0, armLength, 0);
+      bladeGradient.addColorStop(0, this.trapAnchored ? teamColor : '#92400e');
+      bladeGradient.addColorStop(0.52, this.trapAnchored ? '#fef3c7' : '#d6b06f');
+      bladeGradient.addColorStop(1, this.trapAnchored ? '#451a03' : '#3f2b13');
+      ctx.fillStyle = bladeGradient;
+      ctx.beginPath();
+      ctx.moveTo(-this.radius * 0.08, -armWidth);
+      ctx.lineTo(armLength * 0.38, -armWidth * 0.92);
+      ctx.lineTo(armLength, 0);
+      ctx.lineTo(armLength * 0.38, armWidth * 0.92);
+      ctx.lineTo(-this.radius * 0.08, armWidth);
+      ctx.lineTo(this.radius * 0.18, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.4, this.radius * 0.09);
+      ctx.strokeStyle = 'rgba(17, 24, 39, 0.72)';
+      ctx.stroke();
+      ctx.restore();
+    }
 
-    const bladeGradient = ctx.createLinearGradient(-outerRadius, -outerRadius, outerRadius, outerRadius);
-    bladeGradient.addColorStop(0, this.trapAnchored ? 'rgba(255,255,255,0.2)' : 'rgba(255,245,200,0.14)');
-    bladeGradient.addColorStop(0.52, 'rgba(255,255,255,0.02)');
-    bladeGradient.addColorStop(1, this.trapAnchored ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.1)');
-    ctx.fillStyle = bladeGradient;
-    this.traceTrapStarShape(ctx, outerRadius * 0.9, midRadius, 4, Math.PI / 4);
-    ctx.fill();
-
-    ctx.fillStyle = this.trapAnchored ? 'rgba(255,255,255,0.92)' : 'rgba(255,244,214,0.78)';
+    ctx.fillStyle = this.trapAnchored ? '#1f2937' : '#3f3f46';
     ctx.beginPath();
-    ctx.moveTo(this.radius * 0.36, 0);
-    ctx.lineTo(0, this.radius * 0.36);
-    ctx.lineTo(-this.radius * 0.36, 0);
-    ctx.lineTo(0, -this.radius * 0.36);
+    ctx.arc(0, 0, outerRadius * 0.44, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.6, this.radius * 0.08);
+    ctx.strokeStyle = this.trapAnchored ? 'rgba(255,255,255,0.18)' : 'rgba(255,244,214,0.12)';
+    ctx.stroke();
+
+    ctx.fillStyle = this.trapAnchored ? 'rgba(255,255,255,0.94)' : 'rgba(255,244,214,0.82)';
+    ctx.beginPath();
+    ctx.moveTo(coreRadius, 0);
+    ctx.lineTo(0, coreRadius);
+    ctx.lineTo(-coreRadius, 0);
+    ctx.lineTo(0, -coreRadius);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -8579,6 +9439,8 @@ export class GameEngine {
       droneDamageScale: 1.0,
       droneDurabilityScale: 1.0,
   };
+  private sandboxBossTelegraphs: SandboxOwnedBossTelegraph[] = [];
+  private sandboxBossRuntime: SandboxBossRuntimeState | null = null;
 
   transformationReadyClass: TankClass | null = null;
   transformationReadyClassClass: TankClass | null = null;
@@ -9471,6 +10333,41 @@ export class GameEngine {
           this.player.shield = this.player.maxShield;
       }
   }
+  selectSandboxBossProtocol(classType: TankClass) {
+      if (this.gameMode !== GameMode.SANDBOX) return;
+      this.upgradeClassForTank(this.player, classType, { activateSandboxBossProtocol: true });
+      this.sound.playClassUpgrade();
+  }
+  cycleSandboxBossHeavyAttack(direction: 1 | -1) {
+      const form = getSandboxBossForm(this.player.classType);
+      if (!form || !this.sandboxBossRuntime || !this.isSandboxBossLoadoutActive(this.player)) return;
+      cycleSandboxBossHeavySelection(this.sandboxBossRuntime, form, direction);
+      if (form.heavyOptions[this.sandboxBossRuntime.selectedHeavyIndex]) {
+          this.sound.playUISelect();
+      }
+  }
+  selectSandboxBossHeavyAttack(attackId: string) {
+      const form = getSandboxBossForm(this.player.classType);
+      if (!form || !this.sandboxBossRuntime || !this.isSandboxBossLoadoutActive(this.player)) return;
+      selectSandboxBossHeavySelection(this.sandboxBossRuntime, form, attackId);
+      this.sound.playUISelect();
+  }
+  selectSandboxBossHeavyAttackByIndex(index: number) {
+      const form = getSandboxBossForm(this.player.classType);
+      if (!form || !this.sandboxBossRuntime || !this.isSandboxBossLoadoutActive(this.player)) return;
+      if (index < 0 || index >= form.heavyOptions.length) return;
+      const target = form.heavyOptions[index];
+      if (!target) return;
+      selectSandboxBossHeavySelection(this.sandboxBossRuntime, form, target.id);
+      this.sound.playUISelect();
+  }
+  canSkipBossRushCinematic() {
+      return this.gameMode === GameMode.BOSS_RUSH && this.bossRushMode.canSkipCinematic();
+  }
+  skipBossRushCinematic() {
+      if (this.gameMode !== GameMode.BOSS_RUSH) return false;
+      return this.bossRushMode.skipActiveCinematic(this as any);
+  }
   getNowMs() { return Date.now(); }
   getSimTimeMs() { return this.simulationTick * (1000 / 60); }
   setGameMode(mode: GameMode) { 
@@ -9506,6 +10403,9 @@ export class GameEngine {
   }
 
   private hardResetSandboxLeakedProgress(targetMode: GameMode) {
+      if ((this.player as any).__sandboxBossRushVisual || (this.player as any).__sandboxBossRushKey || (this.player as any).__bossRushKey) {
+          this.deactivateSandboxBossProtocol(this.player);
+      }
       this.level = 1;
       this.xp = 0;
       this.player.level = 1;
@@ -9691,7 +10591,7 @@ export class GameEngine {
       this.spectateTarget = bots[nextIndex];
   }
   
-  addNotification(text: string, color: string) { 
+  addNotification(text: string, color: string, silent = false) { 
     // Intelligent Notification Buffer: Avoid rapid flicker if the same message is sent repeatedly
     const existing = this.uiNotifications.find(n => n.text === text && Date.now() - (n.timestamp || 0) < 1500);
     if (existing) {
@@ -9709,10 +10609,20 @@ export class GameEngine {
     };
     
     this.uiNotifications = [newNotification, ...this.uiNotifications].slice(0, 4);
-    this.sound.playNotification();
+    if (!silent) {
+      this.sound.playNotification();
+    }
   }
   
-  toggleAutoFire() { this.player.autoFire = !this.player.autoFire; this.addNotification(this.player.autoFire ? "AUTO FIRE ON" : "AUTO FIRE OFF", this.player.autoFire ? "#00e16e" : "#ff4444"); }
+  toggleAutoFire() {
+    this.player.autoFire = !this.player.autoFire;
+    if (this.isSandboxBossLoadoutActive(this.player)) {
+      this.sound.playUIToggle(this.player.autoFire);
+      this.addNotification(this.player.autoFire ? 'VOLLEY DRIVE ONLINE' : 'VOLLEY DRIVE OFFLINE', this.player.autoFire ? '#c084fc' : '#fca5a5');
+      return;
+    }
+    this.addNotification(this.player.autoFire ? "AUTO FIRE ON" : "AUTO FIRE OFF", this.player.autoFire ? "#00e16e" : "#ff4444");
+  }
   toggleAutoSpin() { this.player.autoSpin = !this.player.autoSpin; this.addNotification(this.player.autoSpin ? "AUTO SPIN ON" : "AUTO SPIN OFF", this.player.autoSpin ? "#00e16e" : "#ff4444"); }
   
   clearEntities(type: 'ALL' | 'BULLETS' | 'SHAPES' | 'ENEMIES' | 'MISC' = 'ALL') {
@@ -10023,7 +10933,7 @@ export class GameEngine {
     this.playerDeathKillerRef = null;
     this.botChats = [];
     this.botDeathTauntGlobalCooldownUntil = 0;
-    this.player.invulnerableTime = 3000; // 3 seconds spawn protection
+    this.player.invulnerableTime = 4000; // 4 seconds spawn protection
     this.kills = 0;
     this.eliteKills = 0;
     this.eliteSkinsKilled.clear();
@@ -10102,7 +11012,7 @@ export class GameEngine {
     this.playerSpinAccumRad = 0;
     this.playerSpinLastRot = this.player.rotation;
     this.player.shield = 0; 
-    this.player.invulnerableTime = 3000; 
+    this.player.invulnerableTime = 4000; 
     if (!this.entities.includes(this.player)) this.entities.push(this.player);
     if (!preserveWorld) { 
         this.entities = this.gameMode === GameMode.BOSS_RUSH
@@ -10177,12 +11087,39 @@ export class GameEngine {
         keys.forEach(k => this.keysPressed.add(k.toLowerCase()));
         return;
     }
+
+    if ((keys.has('q') || keys.has('Q')) && !this.keysPressed.has('q')) {
+        this.triggerSandboxBossAbility('Q');
+    }
     
     if ((keys.has('x') || keys.has('X')) && !this.keysPressed.has('x')) {
-        if (this.player.classType === TankClass.WARLORD) {
+        if (this.isSandboxBossLoadoutActive(this.player)) {
+            this.triggerSandboxBossAbility('X');
+        } else if (this.player.classType === TankClass.WARLORD) {
             this.player.isSiegeMode = !this.player.isSiegeMode;
             this.player.updateStats();
             this.addNotification(`SIEGE MODE: ${this.player.isSiegeMode ? 'ACTIVE' : 'INACTIVE'}`, this.player.isSiegeMode ? "#ff4444" : "#ffffff");
+        }
+    }
+
+    if ((keys.has('r') || keys.has('R')) && !this.keysPressed.has('r')) {
+        if (this.isSandboxBossLoadoutActive(this.player)) {
+            this.triggerSandboxBossAbility('R');
+        }
+    }
+
+    if (this.isSandboxBossLoadoutActive(this.player)) {
+        const heavySlotKeys: Array<{ raw: string; normalized: string; index: number }> = [
+            { raw: '1', normalized: '1', index: 0 },
+            { raw: '2', normalized: '2', index: 1 },
+            { raw: '3', normalized: '3', index: 2 },
+            { raw: '4', normalized: '4', index: 3 },
+            { raw: '5', normalized: '5', index: 4 },
+        ];
+        for (const slot of heavySlotKeys) {
+            if (keys.has(slot.raw) && !this.keysPressed.has(slot.normalized)) {
+                this.selectSandboxBossHeavyAttackByIndex(slot.index);
+            }
         }
     }
 
@@ -10241,6 +11178,406 @@ export class GameEngine {
     } else if (this.isBloodSectorActive(player)) {
         this.triggerBloodSectorAbility(player, noCooldown);
     }
+  }
+
+  private getSandboxBossProtocolConfig(classType: TankClass): SandboxBossProtocolConfig | null {
+    const form = getSandboxBossForm(classType);
+    if (!form) return null;
+    return {
+      name: form.name,
+      callsign: form.callsign,
+      bossKey: form.bossKey,
+      barrels: form.barrels,
+      summary: form.summary,
+      primary: {
+        id: form.triggerMap.Q.id,
+        name: form.boss.attacks.find((entry) => entry.id === form.triggerMap.Q.id)?.label ?? 'Primary Cast',
+        cooldown: form.boss.attacks.find((entry) => entry.id === form.triggerMap.Q.id)?.cooldown ?? 0,
+        description: form.triggerMap.Q.description,
+      },
+      utility: {
+        id: form.triggerMap.X.id,
+        name: form.boss.attacks.find((entry) => entry.id === form.triggerMap.X.id)?.label ?? 'Utility Cast',
+        trigger: 'X',
+        description: form.triggerMap.X.description,
+      },
+      passives: form.passiveDescription
+        ? [{ id: `${form.bossKey}-passive`, name: 'Passive Pressure', description: form.passiveDescription }]
+        : [],
+    };
+  }
+
+  private getSandboxBossGameplayClass(classType: TankClass): TankClass | null {
+    return SANDBOX_BOSS_ARchetype_BY_CLASS[classType] ?? null;
+  }
+
+  private clearSandboxBossRuntime(ownerId: number | null = this.player?.id ?? null) {
+    clearSandboxBossTelegraphs(this.sandboxBossTelegraphs, ownerId);
+    this.sandboxBossRuntime = null;
+    if (ownerId != null && this.player?.id === ownerId) {
+      (this.player as any).__bossRushAwakened = false;
+      (this.player as any).__bossRushAwakeningState = false;
+      (this.player as any).__bossRushAwakeningProgress = 0;
+    }
+  }
+
+  private getNearestSandboxBossHostile(): { pos: Vector2 } | null {
+    const player = this.player;
+    let best: Entity | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const entity of this.entities) {
+      if (entity.isDead || entity.id === player.id) continue;
+      const hostileType =
+        entity.type === EntityType.ENEMY ||
+        entity.type === EntityType.ELITE_TANK ||
+        entity.type === EntityType.BOSS ||
+        entity.type === EntityType.SHAPE ||
+        entity.type === EntityType.CRASHER ||
+        entity.type === EntityType.GUARDIAN ||
+        entity.type === EntityType.DUMMY ||
+        entity.type === EntityType.DOMINION_TANK;
+      if (!hostileType) continue;
+      if ((entity.type === EntityType.ENEMY || entity.type === EntityType.PLAYER) && entity.team === player.team && entity.team !== Team.NONE) continue;
+      const distance = Vector.dist(player.pos, entity.pos);
+      if (distance < bestDist) {
+        bestDist = distance;
+        best = entity;
+      }
+    }
+    return best ? { pos: { x: best.pos.x, y: best.pos.y } } : null;
+  }
+
+  private applyBarrelLayout(tank: Tank, layout: number[][], preserveCooldowns = false) {
+    tank.barrels = layout.map((barrel) => [...barrel]);
+    const barrelCount = tank.barrels.length;
+    tank.barrelCooldowns = preserveCooldowns
+      ? Array.from({ length: barrelCount }, (_, i) => tank.barrelCooldowns[i] || 0)
+      : new Array(barrelCount).fill(0);
+    tank.barrelMaxCooldowns = preserveCooldowns
+      ? Array.from({ length: barrelCount }, (_, i) => tank.barrelMaxCooldowns[i] || 100)
+      : new Array(barrelCount).fill(100);
+    tank.barrelHeat = Array.from({ length: barrelCount }, (_, i) => tank.barrelHeat[i] || 0);
+    tank.barrelRecoilOffsets = Array.from({ length: barrelCount }, (_, i) => tank.barrelRecoilOffsets[i] || 0);
+  }
+
+  private isSandboxBossLoadoutActive(tank: Tank): boolean {
+    return this.gameMode === GameMode.SANDBOX && tank === this.player && tank.isTransformed && !!this.getSandboxBossProtocolConfig(tank.classType);
+  }
+
+  private spawnSandboxBossDrones(owner: Tank, count: number, healthScale: number, damageScale: number, orbitBase: number): number {
+    let spawned = 0;
+    const currentDrones = this.entities.filter(e => e.type === EntityType.DRONE && (e as Drone).owner === owner).length;
+    const maxDrones = owner.classType === TankClass.COLOSSAL ? 14 : owner.classType === TankClass.CELESTIAL ? 9 : 6;
+    const available = Math.max(0, maxDrones - currentDrones);
+    const toSpawn = Math.min(count, available);
+    for (let i = 0; i < toSpawn; i++) {
+      const angle = owner.rotation + ((i - (toSpawn - 1) / 2) * 0.28) + Vector.randomRange(-0.16, 0.16);
+      const forward = Vector.fromAngle(angle);
+      const spawnPos = Vector.add(owner.pos, Vector.mult(forward, owner.radius * (0.95 + i * 0.08)));
+      const drone = new Drone(this.nextId(), spawnPos.x, spawnPos.y, owner);
+      drone.maxHealth *= healthScale;
+      drone.health = drone.maxHealth;
+      drone.displayHealth = drone.maxHealth;
+      drone.damage *= damageScale;
+      drone.orbitDistance = orbitBase + (currentDrones + i) * 12;
+      drone.vel = Vector.mult(Vector.fromAngle(angle + Vector.randomRange(-0.45, 0.45)), 3 + Math.random() * 1.4);
+      this.entities.push(drone);
+      spawned += 1;
+    }
+    if (spawned > 0 && (owner === this.player || this.isOnScreen(owner.pos))) {
+      this.sound.playBossDroneLaunch(this.getAudioSpatialOptions(owner.pos, false), owner.classType);
+    }
+    return spawned;
+  }
+
+  private emitSandboxLeviathanPulse(owner: Tank, radius: number, baseDamage: number, knockback: number): number {
+    const neighbors = this.spatialGrid.getNeighbors(owner);
+    let hits = 0;
+    neighbors.forEach((entity: any) => {
+      if (!entity || entity === owner || entity.isDead) return;
+      if (
+        entity.type !== EntityType.PLAYER &&
+        entity.type !== EntityType.ENEMY &&
+        entity.type !== EntityType.ELITE_TANK &&
+        entity.type !== EntityType.GUARDIAN &&
+        entity.type !== EntityType.BOSS &&
+        entity.type !== EntityType.SHAPE &&
+        entity.type !== EntityType.CRASHER &&
+        entity.type !== EntityType.DRONE &&
+        entity.type !== EntityType.MINI_TANK
+      ) {
+        return;
+      }
+      const distance = Vector.dist(owner.pos, entity.pos);
+      if (distance > radius) return;
+      const dir = Vector.normalize(Vector.sub(entity.pos, owner.pos));
+      if (this.sandboxConfig.knockbackEnabled && entity.vel) {
+        entity.vel = Vector.add(entity.vel, Vector.mult(dir, knockback * Math.max(0.35, 1 - distance / radius)));
+      }
+      const scaledDamage = baseDamage * Math.max(0.62, 1 - distance / (radius * 1.2));
+      entity.takeDamage(scaledDamage, owner.id);
+      hits += 1;
+    });
+    this.particles.push(new Particle(owner.pos.x, owner.pos.y, 'rgba(45,212,255,0.65)', owner.radius * 1.15, 20, 'FLASH'));
+    this.particles.push(new Particle(owner.pos.x, owner.pos.y, 'rgba(34,211,238,0.4)', radius * 0.45, 28, 'RING'));
+    if (owner === this.player || this.isOnScreen(owner.pos)) {
+      this.sound.playBossRushAura(this.getAudioSpatialOptions(owner.pos, true), 'reactor', true);
+    }
+    return hits;
+  }
+
+  private fireSandboxCelestialRelay(owner: Tank): void {
+    const baseAngle = Math.atan2(this.mouse.y - owner.pos.y, this.mouse.x - owner.pos.x);
+    const burstAngles = [-0.24, -0.08, 0.08, 0.24];
+    burstAngles.forEach((offset, index) => {
+      const angle = baseAngle + offset + Vector.randomRange(-0.03, 0.03);
+      const forward = Vector.fromAngle(angle);
+      const tip = Vector.add(owner.pos, Vector.mult(forward, owner.radius * 1.25));
+      const orb = new Bullet(
+        this.nextId(),
+        tip.x,
+        tip.y,
+        Vector.mult(forward, (BASE_STATS.bulletSpeed + owner.stats[StatType.BULLET_SPEED] * 0.8) * (1.14 + index * 0.03)),
+        owner,
+        4.8,
+        2.8,
+        2.35
+      );
+      orb.maxHealth *= 1.35;
+      orb.health = orb.maxHealth;
+      this.entities.push(orb);
+      this.particles.push(new Particle(tip.x, tip.y, 'rgba(216,180,254,0.52)', owner.radius * 0.72, 18, 'RING'));
+    });
+  }
+
+  private fireSandboxObliteratorLance(owner: Tank): void {
+    const angle = Math.atan2(this.mouse.y - owner.pos.y, this.mouse.x - owner.pos.x);
+    const forward = Vector.fromAngle(angle);
+    const tip = Vector.add(owner.pos, Vector.mult(forward, owner.radius * 1.45));
+    const shell = new Bullet(
+      this.nextId(),
+      tip.x,
+      tip.y,
+      Vector.mult(forward, (BASE_STATS.bulletSpeed + owner.stats[StatType.BULLET_SPEED] * 0.8) * 1.42),
+      owner,
+      11.5,
+      5.6,
+      3.45
+    );
+    shell.maxHealth *= 4.6;
+    shell.health = shell.maxHealth;
+    shell.mass *= 2.6;
+    this.entities.push(shell);
+    if (this.sandboxConfig.knockbackEnabled) {
+      owner.vel = Vector.sub(owner.vel, Vector.mult(forward, 3.1));
+    }
+    this.particles.push(new Particle(tip.x, tip.y, 'rgba(255,255,255,0.82)', owner.radius * 0.98, 8, 'FLASH'));
+    this.particles.push(new Particle(tip.x, tip.y, 'rgba(216,180,254,0.6)', owner.radius * 1.7, 22, 'RING'));
+    if (owner === this.player || this.isOnScreen(owner.pos)) {
+      this.sound.playCelestialBoom(this.getAudioSpatialOptions(owner.pos, true));
+    }
+  }
+
+  private triggerSandboxBossAbility(trigger: 'Q' | 'X' | 'R') {
+    const player = this.player;
+    if (!this.isSandboxBossLoadoutActive(player)) return;
+    const form = getSandboxBossForm(player.classType);
+    if (!form || !this.sandboxBossRuntime) return;
+
+    const result = castSandboxBossAbility(
+      this as any,
+      {
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
+        player: player as any,
+        telegraphs: this.sandboxBossTelegraphs,
+        noCooldown: !!this.sandboxConfig.noAbilityCooldown,
+        worldTarget: this.getWorldMousePos(),
+        nearestHostile: this.getNearestSandboxBossHostile(),
+      },
+      form,
+      this.sandboxBossRuntime,
+      trigger,
+    );
+
+    if (result.success) {
+      const spatial = this.getAudioSpatialOptions(player.pos, true);
+      const attackId = trigger === 'R'
+        ? form.heavyOptions[this.sandboxBossRuntime.selectedHeavyIndex]?.id ?? form.heavyOptions[0]?.id ?? form.triggerMap.Q.id
+        : form.triggerMap[trigger].id;
+      this.sound.playSandboxBossAbilityCast(form.bossKey, attackId, spatial, trigger === 'R' ? 'major' : 'standard');
+      if (trigger === 'R') {
+        this.sound.playBossRushRoar(spatial, form.bossKey, true);
+      } else {
+        this.sound.playBossRushAura(spatial, form.bossKey, trigger === 'X');
+      }
+    }
+
+  }
+
+  private triggerSandboxBossPrimary(showFailureNotification = false): boolean {
+    const player = this.player;
+    if (!this.isSandboxBossLoadoutActive(player)) return false;
+    const form = getSandboxBossForm(player.classType);
+    if (!form || !this.sandboxBossRuntime) return false;
+
+    const result = castSandboxBossPrimary(
+      this as any,
+      {
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
+        player: player as any,
+        telegraphs: this.sandboxBossTelegraphs,
+        noCooldown: !!this.sandboxConfig.noAbilityCooldown,
+        worldTarget: this.getWorldMousePos(),
+        nearestHostile: this.getNearestSandboxBossHostile(),
+      },
+      form,
+      this.sandboxBossRuntime,
+    );
+
+    if (result.success) {
+      const spatial = this.getAudioSpatialOptions(player.pos, true);
+      this.sound.playSandboxBossAbilityCast(form.bossKey, 'boss_basic_volley', spatial, 'light');
+      this.sound.playBossRushAura(spatial, form.bossKey, false);
+      return true;
+    }
+
+    return false;
+  }
+
+  private activateSandboxBossProtocol(tank: Tank, classType: TankClass) {
+    const protocol = this.getSandboxBossProtocolConfig(classType);
+    const form = getSandboxBossForm(classType);
+    tank.secondarySector = 'none';
+    tank.isTransformed = true;
+    tank.hasRebirthed = true;
+    tank.transformationTimer = 0;
+    tank.bossAbilityTimer = 0;
+    tank.sandboxBossPrimaryCooldown = 0;
+    tank.sandboxBossPrimaryActiveTimer = 0;
+    tank.isSiegeMode = false;
+    tank.autoFire = false;
+    tank.updateStats();
+    tank.health = tank.maxHealth;
+    tank.displayHealth = tank.maxHealth;
+    tank.shield = tank.maxShield;
+    tank.displayShield = tank.maxShield;
+    tank.invulnerableTime = Math.max(tank.invulnerableTime, 1200);
+    tank.team = Team.NONE;
+    (tank as any).__sandboxBossRushKey = protocol?.bossKey ?? null;
+    (tank as any).__bossRushKey = protocol?.bossKey ?? null;
+    (tank as any).__sandboxBossRushVisual = !!protocol?.bossKey;
+    (tank as any).__bossRushAwakened = false;
+    (tank as any).__bossRushAwakeningState = false;
+    (tank as any).__bossRushAwakeningProgress = 0;
+    if (protocol?.barrels?.length) {
+      this.applyBarrelLayout(tank, protocol.barrels);
+    }
+    this.clearSandboxBossRuntime(tank.id);
+    this.sandboxBossRuntime = form ? createSandboxBossRuntimeState(form) : null;
+    if (tank === this.player) {
+      tank.color = '#9f76fc';
+      this.addNotification(`${(protocol?.name || classType).toUpperCase()} LINKED`, '#c084fc');
+      this.addNotification('BOSS PROTOCOL // M1 E Q X R', '#c084fc');
+    }
+  }
+
+  private deactivateSandboxBossProtocol(tank: Tank) {
+    this.clearSandboxBossRuntime(tank.id);
+    tank.isTransformed = false;
+    tank.hasRebirthed = false;
+    tank.transformationTimer = 0;
+    tank.bossAbilityTimer = 0;
+    tank.sandboxBossPrimaryCooldown = 0;
+    tank.sandboxBossPrimaryActiveTimer = 0;
+    tank.isSiegeMode = false;
+    tank.autoFire = false;
+    (tank as any).__sandboxBossRushKey = null;
+    (tank as any).__bossRushKey = null;
+    (tank as any).__sandboxBossRushVisual = false;
+    (tank as any).__bossRushAwakened = false;
+    (tank as any).__bossRushAwakeningState = false;
+    (tank as any).__bossRushAwakeningProgress = 0;
+    if (this.gameMode !== GameMode.TEAMS && this.gameMode !== GameMode.DOMINION && this.gameMode !== GameMode.BOSS_RUSH) {
+      tank.team = Team.BLUE;
+      if (tank === this.player) {
+        tank.color = COLORS.player;
+        tank.setSkin(this.preferredSkinId, this.preferredDonorRank);
+      }
+    }
+  }
+
+  private updateSandboxBossAwakeningPresentation(tank: Tank, runtime: SandboxBossRuntimeState, form: NonNullable<ReturnType<typeof getSandboxBossForm>>) {
+    const awakeningProgress = runtime.awakeningDuration > 0
+      ? Math.max(0, Math.min(1, 1 - runtime.awakeningTimer / runtime.awakeningDuration))
+      : runtime.awakened ? 1 : 0;
+    (tank as any).__bossRushAwakened = runtime.awakened;
+    (tank as any).__bossRushAwakeningState = runtime.awakeningTimer > 0;
+    (tank as any).__bossRushAwakeningProgress = runtime.awakeningTimer > 0 ? awakeningProgress : runtime.awakened ? 1 : 0;
+    if (runtime.awakened) {
+      tank.color = form.boss.color;
+    }
+  }
+
+  private triggerSandboxBossAwakening(tank: Tank, runtime: SandboxBossRuntimeState, form: NonNullable<ReturnType<typeof getSandboxBossForm>>) {
+    if (runtime.awakened) return;
+    runtime.awakened = true;
+    runtime.awakeningDuration = Math.max(form.boss.awakeningSeconds, 0.8);
+    runtime.awakeningTimer = runtime.awakeningDuration;
+    tank.health = Math.max(tank.health, tank.maxHealth * form.boss.awakenRestoreRatio);
+    tank.displayHealth = Math.max(tank.displayHealth, tank.health);
+    if (tank.maxShield > 0) {
+      const restoredShield = tank.maxShield * Math.min(0.45, Math.max(0.18, form.boss.awakenRestoreRatio * 0.5));
+      tank.shield = Math.max(tank.shield, restoredShield);
+      tank.displayShield = Math.max(tank.displayShield ?? 0, tank.shield);
+    }
+    tank.invulnerableTime = Math.max(tank.invulnerableTime, Math.ceil(runtime.awakeningDuration * 1000));
+    this.updateSandboxBossAwakeningPresentation(tank, runtime, form);
+    this.spawnParticles(tank.pos, form.boss.accent, 42, 8);
+    const spatial = this.getAudioSpatialOptions(tank.pos, true);
+    this.sound.playBossRushCinematicOpen(spatial, form.bossKey as any, 'awakening');
+    this.sound.playBossRushAwaken(spatial, form.bossKey as any);
+    this.sound.playBossRushRoar(spatial, form.bossKey as any, true);
+    this.sound.playBossRushAura(spatial, form.bossKey as any, true);
+    this.addNotification(`${form.name.toUpperCase()} AWAKENS`, '#ff6363');
+  }
+
+  private buildSandboxBossHud(): SandboxBossHudInfo | null {
+    if (!this.isSandboxBossLoadoutActive(this.player) || !this.sandboxBossRuntime) return null;
+    const form = getSandboxBossForm(this.player.classType);
+    if (!form) return null;
+    const hud = buildSandboxBossHudData({
+      form,
+      runtime: this.sandboxBossRuntime,
+      health: this.player.displayHealth,
+      maxHealth: this.player.maxHealth,
+      shield: this.player.displayShield ?? this.player.shield,
+      maxShield: this.player.maxShield,
+      autoFireEnabled: this.player.autoFire,
+    });
+    return {
+      classType: form.classType,
+      name: form.name,
+      callsign: form.callsign,
+      summary: form.summary,
+      health: this.player.displayHealth,
+      maxHealth: this.player.maxHealth,
+      shield: this.player.displayShield ?? this.player.shield,
+      maxShield: this.player.maxShield,
+      awakened: this.sandboxBossRuntime.awakened,
+      awakeningActive: this.sandboxBossRuntime.awakeningTimer > 0,
+      awakeningProgress: this.sandboxBossRuntime.awakeningDuration > 0
+        ? Math.max(0, Math.min(1, 1 - this.sandboxBossRuntime.awakeningTimer / this.sandboxBossRuntime.awakeningDuration))
+        : this.sandboxBossRuntime.awakened ? 1 : 0,
+      statusText: this.sandboxBossRuntime.awakeningTimer > 0
+        ? 'Awakening'
+        : this.sandboxBossRuntime.awakened
+          ? 'Awakened Overdrive'
+          : 'Base Form',
+      abilities: hud.abilities,
+      heavyOptions: hud.heavyOptions,
+    };
   }
 
   private triggerBloodSectorAbility(player: Tank, noCooldown: boolean) {
@@ -10745,15 +12082,11 @@ export class GameEngine {
   }
 
   isBossClass(classType: TankClass): boolean {
-    return classType === TankClass.COLOSSAL ||
-           classType === TankClass.LEVIATHAN ||
-           classType === TankClass.WARLORD ||
-           classType === TankClass.CELESTIAL ||
-           classType === TankClass.OBLITERATOR;
+    return REBIRTH_BOSS_CLASSES.has(classType);
   }
 
   isRebirthClass(classType: TankClass): boolean {
-    return this.isBossClass(classType);
+    return REBIRTH_BOSS_CLASSES.has(classType);
   }
 
   isRebirthTank(entity: Entity | null | undefined): entity is Tank {
@@ -10952,7 +12285,16 @@ export class GameEngine {
                     else if (index === 2) multiplier = 0.25;
                     else if (index >= 3) multiplier = 0.1;
                     
-                    const healAmount = healer.healingAuraEfficiency * multiplier * dt * 60;
+                    let healAmount = healer.healingAuraEfficiency * multiplier * dt * 60;
+                    if (healer.classType === TankClass.PLAGUE_DOCTOR) {
+                        const missingHpRatio = 1 - target.health / Math.max(1, target.maxHealth);
+                        healAmount *= 1 + Math.min(0.24, missingHpRatio * 0.3);
+                        target.regenOverchargeTimer = Math.max(target.regenOverchargeTimer, 1.35 + multiplier * 0.9);
+                        target.regenOverchargeRate = Math.max(target.regenOverchargeRate, target.maxHealth * (0.008 + multiplier * 0.01));
+                        if (missingHpRatio > 0.28) {
+                            target.clearHostileDebuffs();
+                        }
+                    }
                     totalHealRate += healAmount;
                     
                     // Track healing for XP and AI threat
@@ -10997,7 +12339,11 @@ export class GameEngine {
             let xpEligibleDamage = 0;
             targetsInRange.forEach(target => {
                 const lifestealMult = drainer.bloodPactActiveTimer > 0 ? CLASS_ABILITY_CONFIG.blood.lifestealAuraMultiplier : 1;
-                const damage = drainer.drainAuraDamage * lifestealMult * dt;
+                const vampireFocusMult =
+                    drainer.classType === TankClass.VAMPIRE
+                        ? (targetsInRange.length <= 2 ? 1.2 : 1.08)
+                        : 1;
+                const damage = drainer.drainAuraDamage * lifestealMult * vampireFocusMult * dt;
                 const actualDamage = Math.min(target.health, damage);
                 target.takeDamage(actualDamage, drainer.id);
                 totalDamageDealt += actualDamage;
@@ -11155,6 +12501,39 @@ export class GameEngine {
 
     if (this.gameMode === GameMode.BOSS_RUSH && !this.sandboxConfig.freezeAll) {
         this.bossRushMode.update(this as any, dt);
+    }
+
+    if (
+        this.gameMode === GameMode.SANDBOX &&
+        this.playerState === PlayerState.ACTIVE &&
+        !this.player.isDead &&
+        this.isSandboxBossLoadoutActive(this.player) &&
+        this.sandboxBossRuntime &&
+        !this.sandboxConfig.freezeAll
+    ) {
+        const sandboxBossForm = getSandboxBossForm(this.player.classType)!;
+        if (!this.sandboxBossRuntime.awakened && this.player.health <= this.player.maxHealth * sandboxBossForm.boss.awakenThreshold) {
+            this.triggerSandboxBossAwakening(this.player, this.sandboxBossRuntime, sandboxBossForm);
+        }
+        tickSandboxBossRuntime(
+            this as any,
+            {
+                width: CANVAS_WIDTH,
+                height: CANVAS_HEIGHT,
+                player: this.player as any,
+                telegraphs: this.sandboxBossTelegraphs,
+                noCooldown: !!this.sandboxConfig.noAbilityCooldown,
+                worldTarget: this.getWorldMousePos(),
+                nearestHostile: this.getNearestSandboxBossHostile(),
+            },
+            sandboxBossForm,
+            this.sandboxBossRuntime,
+            dt,
+        );
+        this.updateSandboxBossAwakeningPresentation(this.player, this.sandboxBossRuntime, sandboxBossForm);
+        updateBossRushTelegraphs(this as any, this.sandboxBossTelegraphs as BossRushTelegraph[], dt);
+    } else if (this.sandboxBossTelegraphs.length > 0 || this.sandboxBossRuntime) {
+        this.clearSandboxBossRuntime();
     }
 
     if (!this.attractMode) {
@@ -11472,6 +12851,7 @@ export class GameEngine {
     this.updateEnemyZoneWarningState(dt);
 
     let abilityHud: any = null;
+    const sandboxBossHud = this.buildSandboxBossHud();
     const rightClickAbilityClasses = [TankClass.OVERLORD, TankClass.OVERSEER, TankClass.MANAGER];
     if (rightClickAbilityClasses.includes(this.player.classType)) {
         const noCooldown = this.gameMode === GameMode.SANDBOX && this.sandboxConfig.noAbilityCooldown;
@@ -11572,6 +12952,7 @@ export class GameEngine {
         sandboxConfig: this.sandboxConfig,
         primedSpawn: this.primedSpawn,
         abilityHud,
+        sandboxBossHud,
         playerState: this.playerState,
         evolutionTransitionRemaining: this.playerState === PlayerState.EVOLVING ? this.evolutionTransitionTimer : 0,
         bossChoices: this.playerState === PlayerState.BOSS_SELECTION ? [...this.bossChoices] : [],
@@ -11638,7 +13019,11 @@ export class GameEngine {
       this.player.rotation += dt * 3;
     }
 
-    if (this.mouseDown || this.player.autoFire) {
+    if (this.isSandboxBossLoadoutActive(this.player)) {
+      if (this.mouseDown || this.player.autoFire) {
+        this.triggerSandboxBossPrimary(false);
+      }
+    } else if (this.mouseDown || this.player.autoFire) {
       this.attemptShoot(this.player);
     }
     this.player.droneCommandMode = this.mouseRightDown
@@ -12091,6 +13476,7 @@ export class GameEngine {
                   maxHealth: t.maxHealth,
                   level: t.level,
                   score: t.score,
+                  invulnerableTime: t.invulnerableTime,
                   classType: t.classType,
                   aiState: t.aiState,
                   aiTargetId: t.aiTargetId,
@@ -12371,23 +13757,23 @@ export class GameEngine {
 
   private getSequentialCadenceMultiplier(classType: TankClass): number {
     if (classType === TankClass.TWIN) return 0.62;
-    if (classType === TankClass.TWIN_FLANK) return 0.66;
+    if (classType === TankClass.TWIN_FLANK) return 0.64;
     if (classType === TankClass.TRIPLE_SHOT) return 0.56;
-    if (classType === TankClass.TRIPLE_TANK) return 0.52;
-    if (classType === TankClass.TRIPLE_TWIN) return 0.7;
-    if (classType === TankClass.SPRAYER) return 0.56;
-    if (classType === TankClass.SPREAD_SHOT) return 0.54;
+    if (classType === TankClass.TRIPLE_TANK) return 0.5;
+    if (classType === TankClass.TRIPLE_TWIN) return 0.66;
+    if (classType === TankClass.SPRAYER) return 0.54;
+    if (classType === TankClass.SPREAD_SHOT) return 0.52;
     return 1.0;
   }
 
   private getClassMinCooldown(classType: TankClass): number {
     if (classType === TankClass.TWIN) return 22;
-    if (classType === TankClass.TWIN_FLANK) return 24;
+    if (classType === TankClass.TWIN_FLANK) return 22;
     if (classType === TankClass.TRIPLE_SHOT) return 18;
-    if (classType === TankClass.TRIPLE_TANK) return 16;
-    if (classType === TankClass.TRIPLE_TWIN) return 26;
-    if (classType === TankClass.SPRAYER) return 18;
-    if (classType === TankClass.SPREAD_SHOT) return 28;
+    if (classType === TankClass.TRIPLE_TANK) return 15;
+    if (classType === TankClass.TRIPLE_TWIN) return 23;
+    if (classType === TankClass.SPRAYER) return 17;
+    if (classType === TankClass.SPREAD_SHOT) return 25;
     if (classType === TankClass.GUNNER) return 20;
     if (classType === TankClass.AUTO_GUNNER) return 17;
     if (classType === TankClass.STREAMLINER) return 15;
@@ -12430,111 +13816,113 @@ export class GameEngine {
     switch (classType) {
       case TankClass.DUAL_TRAPPER:
         return {
-          speed: 0.74,
-          damage: 1.16,
-          life: 2.72,
+          speed: 0.8,
+          damage: 1.2,
+          life: 2.96,
           size: 1.12,
-          cooldown: 1.86,
-          maxLifeTime: 8600,
-          friction: 0.89,
+          cooldown: 1.8,
+          maxLifeTime: 9400,
+          friction: 0.9,
           anchorSpeed: 0.33,
-          armDelayMs: 155,
-          damageMultiplier: 1.08,
-          healthMultiplier: 2.95,
+          armDelayMs: 145,
+          damageMultiplier: 1.12,
+          healthMultiplier: 3.08,
           massMultiplier: 2.22,
           spinRate: 2.35,
-          activeTrapCap: 12,
+          activeTrapCap: 14,
           firePattern: 'dual',
-          spreadMultiplier: 0.64,
-          travelDistance: 276,
+          spreadMultiplier: 0.6,
+          travelDistance: 456,
         };
       case TankClass.MACHINE_GUN_TRAPPER:
         return {
-          speed: 0.68,
-          damage: 0.94,
-          life: 2.16,
-          size: 1.0,
-          cooldown: 0.78,
-          maxLifeTime: 6900,
-          friction: 0.86,
+          speed: 0.76,
+          damage: 1.04,
+          life: 2.52,
+          size: 1.02,
+          cooldown: 0.92,
+          maxLifeTime: 9800,
+          friction: 0.88,
           anchorSpeed: 0.4,
-          armDelayMs: 95,
-          damageMultiplier: 0.92,
-          healthMultiplier: 1.8,
-          massMultiplier: 1.68,
+          armDelayMs: 78,
+          damageMultiplier: 1.02,
+          healthMultiplier: 2.18,
+          massMultiplier: 1.82,
           spinRate: 3.1,
-          activeTrapCap: 14,
+          activeTrapCap: 18,
           firePattern: 'single',
-          spreadMultiplier: 1.18,
-          travelDistance: 244,
+          spreadMultiplier: 1.08,
+          travelDistance: 428,
         };
       case TankClass.OCTO_TRAPPER:
         return {
-          speed: 0.62,
-          damage: 1.04,
-          life: 2.34,
+          speed: 0.7,
+          damage: 1.08,
+          life: 2.64,
           size: 1.02,
-          cooldown: 2.02,
-          maxLifeTime: 7900,
-          friction: 0.87,
+          cooldown: 1.92,
+          maxLifeTime: 8600,
+          friction: 0.89,
           anchorSpeed: 0.38,
-          armDelayMs: 105,
-          damageMultiplier: 0.96,
-          healthMultiplier: 2.08,
-          massMultiplier: 1.9,
+          armDelayMs: 94,
+          damageMultiplier: 1.0,
+          healthMultiplier: 2.2,
+          massMultiplier: 2.0,
           spinRate: 2.7,
-          activeTrapCap: 18,
+          activeTrapCap: 20,
           firePattern: 'radial',
           spreadMultiplier: 0.22,
-          travelDistance: 248,
+          travelDistance: 436,
         };
       case TankClass.TRIPLE_TRAPPER:
         return {
-          speed: 0.72,
-          damage: 1.14,
-          life: 2.48,
+          speed: 0.78,
+          damage: 1.18,
+          life: 2.78,
           size: 1.08,
-          cooldown: 1.72,
-          maxLifeTime: 8100,
-          friction: 0.88,
+          cooldown: 1.64,
+          maxLifeTime: 9000,
+          friction: 0.9,
           anchorSpeed: 0.36,
-          armDelayMs: 145,
-          damageMultiplier: 1.02,
-          healthMultiplier: 2.24,
-          massMultiplier: 2.0,
+          armDelayMs: 132,
+          damageMultiplier: 1.06,
+          healthMultiplier: 2.38,
+          massMultiplier: 2.08,
           spinRate: 2.55,
-          activeTrapCap: 15,
+          activeTrapCap: 17,
           firePattern: 'triple',
-          spreadMultiplier: 0.68,
-          travelDistance: 286,
+          spreadMultiplier: 0.62,
+          travelDistance: 472,
         };
       case TankClass.TRAPPER:
       default:
         return {
-          speed: 0.74,
-          damage: 1.34,
-          life: 2.9,
+          speed: 0.82,
+          damage: 1.42,
+          life: 3.18,
           size: 1.24,
-          cooldown: 1.68,
-          maxLifeTime: 8600,
-          friction: 0.89,
+          cooldown: 1.58,
+          maxLifeTime: 9600,
+          friction: 0.9,
           anchorSpeed: 0.34,
-          armDelayMs: 150,
-          damageMultiplier: 1.14,
-          healthMultiplier: 3.1,
-          massMultiplier: 2.28,
+          armDelayMs: 138,
+          damageMultiplier: 1.18,
+          healthMultiplier: 3.28,
+          massMultiplier: 2.36,
           spinRate: 2.45,
-          activeTrapCap: 10,
+          activeTrapCap: 12,
           firePattern: 'single',
-          spreadMultiplier: 0.8,
-          travelDistance: 302,
+          spreadMultiplier: 0.72,
+          travelDistance: 510,
         };
     }
   }
 
   private getTrapTravelDistance(owner: Tank, baseDistance: number): number {
     const trapRangeStat = Math.max(0, owner.stats[StatType.BULLET_SPEED] || 0);
-    return Math.max(120, baseDistance + trapRangeStat * 42);
+    const statMultiplier = 1 + trapRangeStat * 0.11;
+    const statFlatBonus = trapRangeStat * 92;
+    return Math.max(220, baseDistance * statMultiplier + statFlatBonus);
   }
 
   private getActiveTrapsForTank(ownerId: number): Bullet[] {
@@ -12569,6 +13957,8 @@ export class GameEngine {
       tank.autoTurretTargetId = null;
       tank.rebirthDroneLaunchCooldownMs = 0;
       tank.colossalDroneLaunchCooldownMs = 0;
+      tank.sandboxBossPrimaryCooldown = 0;
+      tank.sandboxBossPrimaryActiveTimer = 0;
       tank.healingAuraRadius = 0;
       tank.healingAuraEfficiency = 0;
       tank.healingBurstCooldown = 0;
@@ -12610,6 +14000,10 @@ export class GameEngine {
       this.rebirthSelectionPos = null;
       this.rebirthOptions = [];
       this.transformationReadyClass = null;
+
+      if ((tank as any).__sandboxBossRushVisual || (tank as any).__sandboxBossRushKey || (tank as any).__bossRushKey) {
+          this.deactivateSandboxBossProtocol(tank);
+      }
 
       tank.stats = createEmptyStatRecord();
       tank.universalUpgrades = createEmptyStatRecord();
@@ -12771,6 +14165,9 @@ export class GameEngine {
     if (this.gameMode === GameMode.SANDBOX && tank.type !== EntityType.PLAYER && !this.sandboxConfig.botsEnabled) {
         return;
     }
+    if (tank === this.player && this.isSandboxBossLoadoutActive(tank)) {
+        return;
+    }
 
     const CLASS_FIRE_RATE_MULT: Record<TankClass, number> = {
         [TankClass.BASIC]: 1.0,
@@ -12781,8 +14178,8 @@ export class GameEngine {
         [TankClass.MACHINE_GUN]: 0.64,
         [TankClass.FLANK_GUARD]: 0.96,
         [TankClass.TRIPLE_SHOT]: 0.72,
-        [TankClass.QUAD_TANK]: 0.95,
-        [TankClass.TWIN_FLANK]: 0.9,
+        [TankClass.QUAD_TANK]: 0.92,
+        [TankClass.TWIN_FLANK]: 0.86,
         [TankClass.ASSASSIN]: 1.2,
         [TankClass.TRAPPER]: 1.68,
         [TankClass.DUAL_TRAPPER]: 1.82,
@@ -12790,17 +14187,17 @@ export class GameEngine {
         [TankClass.OCTO_TRAPPER]: 1.72,
         [TankClass.TRIPLE_TRAPPER]: 1.58,
         [TankClass.DESTROYER]: 1.58,
-        [TankClass.SPRAYER]: 0.82,
+        [TankClass.SPRAYER]: 0.81,
         [TankClass.TRI_ANGLE]: 0.84,
         [TankClass.HUNTER]: 1.08,
         [TankClass.GUNNER]: 0.66,
         [TankClass.DOCTOR]: 1.0,
         [TankClass.OVERSEER]: 0.9,
-        [TankClass.TRIPLE_TWIN]: 0.96,
+        [TankClass.TRIPLE_TWIN]: 0.9,
         [TankClass.OCTO_TANK]: 0.9,
-        [TankClass.TRIPLE_TANK]: 0.76,
-        [TankClass.PENTA_SHOT]: 0.85,
-        [TankClass.SPREAD_SHOT]: 0.9,
+        [TankClass.TRIPLE_TANK]: 0.74,
+        [TankClass.PENTA_SHOT]: 0.83,
+        [TankClass.SPREAD_SHOT]: 0.87,
         [TankClass.RANGER]: 1.4,
         [TankClass.STALKER]: 1.34,
         [TankClass.ANNIHILATOR]: 1.85,
@@ -12811,21 +14208,27 @@ export class GameEngine {
         [TankClass.X_HUNTER]: 1.02,
         [TankClass.AUTO_GUNNER]: 0.6,
         [TankClass.OVERLORD]: 0.94,
-        [TankClass.MANAGER]: 0.92,
+        [TankClass.MANAGER]: 0.9,
         [TankClass.PLAGUE_DOCTOR]: 1.04,
         [TankClass.DRAINER_TRAINEE]: 0.98,
         [TankClass.LEECH]: 0.96,
         [TankClass.VAMPIRE]: 0.92,
         [TankClass.REAPER]: 0.88,
-        [TankClass.COLOSSAL]: 1.4,
-        [TankClass.LEVIATHAN]: 1.22,
+        [TankClass.COLOSSAL]: 1.55,
+        [TankClass.LEVIATHAN]: 1.9,
         [TankClass.WARLORD]: 1.3,
-        [TankClass.CELESTIAL]: 1.18,
+        [TankClass.CELESTIAL]: 2.0,
         [TankClass.OBLITERATOR]: 1.54,
+        [TankClass.AEGIS_GATEKEEPER]: 1.55,
+        [TankClass.VANTA_SPLITTER]: 1.9,
+        [TankClass.PYRE_REACTOR]: 1.3,
+        [TankClass.IRON_EXECUTIONER]: 2.0,
+        [TankClass.GRAND_SINGULARITY]: 1.54,
     };
 
+    const bossGameplayClass = this.getSandboxBossGameplayClass(tank.classType) ?? tank.classType;
     let baseReloadTimeMs = (BASE_STATS.reload - (tank.stats[StatType.RELOAD] * 2.5)) * 16.67; 
-    baseReloadTimeMs *= CLASS_FIRE_RATE_MULT[tank.classType] ?? 1.0;
+    baseReloadTimeMs *= CLASS_FIRE_RATE_MULT[bossGameplayClass] ?? 1.0;
     
     // SACRIFICIAL GOAT BUFF: Fire Rate increased
     if (tank.isSacrificing) {
@@ -12847,8 +14250,8 @@ export class GameEngine {
         tank.invulnerableTime = 0;
         this.revealStealthOnFire(tank);
         if (tank === this.player || this.isOnScreen(tank.pos)) {
-            this.sound.playShoot(tank.classType, this.getAudioSpatialOptions(tank.pos, false)); 
-            if (tank.classType === TankClass.CELESTIAL && tank.isTransformed) {
+            this.sound.playShoot(bossGameplayClass, this.getAudioSpatialOptions(tank.pos, false)); 
+            if (bossGameplayClass === TankClass.CELESTIAL && tank.isTransformed) {
                 this.sound.playCelestialBoom(this.getAudioSpatialOptions(tank.pos, true));
             }
             if ((tank.classType === TankClass.GUNNER || tank.classType === TankClass.AUTO_GUNNER) && this.settings.shakeEnabled) {
@@ -12870,16 +14273,16 @@ export class GameEngine {
     const isManager = tank.classType === TankClass.MANAGER;
     const isHybrid = tank.classType === TankClass.HYBRID;
     const isOverseerType = tank.classType === TankClass.OVERLORD || tank.classType === TankClass.OVERSEER;
-    const isRebirthCarrier = tank.isTransformed && tank.classType === TankClass.CELESTIAL;
+    const isRebirthCarrier = tank.isTransformed && bossGameplayClass === TankClass.CELESTIAL;
 
     const maybeLaunchRebirthCarrierDrone = (origin: Vector2, forward: Vector2, angle: number) => {
         if (!isRebirthCarrier) return;
         const currentDrones = this.entities.filter(e => e.type === EntityType.DRONE && (e as Drone).owner === tank).length;
-        const droneLimit = tank.classType === TankClass.CELESTIAL ? 9 : 6;
+        const droneLimit = bossGameplayClass === TankClass.CELESTIAL ? 9 : 6;
         if (currentDrones >= droneLimit) return;
         if (tank.rebirthDroneLaunchCooldownMs > 0 && !this.sandboxConfig.infiniteAmmo) return;
 
-        const shouldLaunch = ((this.simulationTick + tank.id + idx) % (tank.classType === TankClass.CELESTIAL ? 2 : 3)) === 0;
+        const shouldLaunch = ((this.simulationTick + tank.id + idx) % (bossGameplayClass === TankClass.CELESTIAL ? 2 : 3)) === 0;
         if (!shouldLaunch) return;
 
         const drone = new Drone(
@@ -12889,7 +14292,7 @@ export class GameEngine {
             tank
         );
 
-        if (tank.classType === TankClass.CELESTIAL) {
+        if (bossGameplayClass === TankClass.CELESTIAL) {
             drone.maxHealth *= 0.62;
             drone.damage *= 0.86;
             drone.orbitDistance = 210 + (currentDrones % 3) * 18;
@@ -12904,10 +14307,10 @@ export class GameEngine {
         drone.health = drone.maxHealth;
         drone.displayHealth = drone.maxHealth;
         this.entities.push(drone);
-        tank.rebirthDroneLaunchCooldownMs = tank.classType === TankClass.CELESTIAL ? 360 : 430;
+        tank.rebirthDroneLaunchCooldownMs = bossGameplayClass === TankClass.CELESTIAL ? 360 : 430;
 
         if (tank === this.player || this.isOnScreen(tank.pos)) {
-            this.sound.playBossDroneLaunch(this.getAudioSpatialOptions(tank.pos, false), tank.classType);
+            this.sound.playBossDroneLaunch(this.getAudioSpatialOptions(tank.pos, false), bossGameplayClass);
         }
     };
 
@@ -13002,7 +14405,7 @@ export class GameEngine {
 
             shotFired = true;
         }
-    } else if (tank.classType === TankClass.OBLITERATOR && tank.isTransformed) {
+    } else if (bossGameplayClass === TankClass.OBLITERATOR && tank.isTransformed) {
         const [length, width = 2.4, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
@@ -13054,7 +14457,7 @@ export class GameEngine {
             tank.nextBarrelIndex++;
             shotFired = true;
         }
-    } else if (tank.classType === TankClass.COLOSSAL && tank.isTransformed) {
+    } else if (bossGameplayClass === TankClass.COLOSSAL && tank.isTransformed) {
         const [length, width = 1.2, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
@@ -13109,7 +14512,7 @@ export class GameEngine {
                     this.entities.push(drone);
                     tank.colossalDroneLaunchCooldownMs = 120;
                     if (tank === this.player || this.isOnScreen(tank.pos)) {
-                        this.sound.playBossDroneLaunch(this.getAudioSpatialOptions(tank.pos, false), tank.classType);
+                        this.sound.playBossDroneLaunch(this.getAudioSpatialOptions(tank.pos, false), bossGameplayClass);
                     }
                 }
                 tank.barrelRecoilOffsets[idx] = Math.max(tank.barrelRecoilOffsets[idx] || 0, 0.7);
@@ -13118,8 +14521,8 @@ export class GameEngine {
 
             if (!this.sandboxConfig.infiniteAmmo) {
                 const cooldownVal = idx <= 2
-                    ? Math.max(128, baseReloadTimeMs * delayMultiplier * 0.9)
-                    : Math.max(58, baseReloadTimeMs * delayMultiplier * 0.55);
+                    ? Math.max(156, baseReloadTimeMs * delayMultiplier * 1.08)
+                    : Math.max(84, baseReloadTimeMs * delayMultiplier * 0.78);
                 tank.barrelCooldowns[idx] = cooldownVal;
                 tank.barrelMaxCooldowns[idx] = cooldownVal;
             }
@@ -13132,7 +14535,7 @@ export class GameEngine {
             tank.nextBarrelIndex++;
             shotFired = true;
         }
-    } else if (tank.classType === TankClass.CELESTIAL && tank.isTransformed) {
+    } else if (bossGameplayClass === TankClass.CELESTIAL && tank.isTransformed) {
         const [length, width = 0.92, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
 
@@ -13156,7 +14559,7 @@ export class GameEngine {
                     tip.y,
                     Vector.mult(forward, bSpeed * 0.96),
                     tank,
-                    5.25 * widthScale,
+                    4.15 * widthScale,
                     2.95,
                     2.65 * widthScale,
                     idx
@@ -13169,7 +14572,7 @@ export class GameEngine {
             maybeLaunchRebirthCarrierDrone(tip, forward, angle);
 
             if (!this.sandboxConfig.infiniteAmmo) {
-                const cooldownVal = Math.max(104, baseReloadTimeMs * delayMultiplier * 0.82);
+                const cooldownVal = Math.max(184, baseReloadTimeMs * delayMultiplier * 1.42);
                 tank.barrelCooldowns[idx] = cooldownVal;
                 tank.barrelMaxCooldowns[idx] = cooldownVal;
             }
@@ -13178,7 +14581,7 @@ export class GameEngine {
             tank.barrelRecoilOffsets[idx] = Math.max(tank.barrelRecoilOffsets[idx] || 0, 1.15);
 
             if (this.sandboxConfig.knockbackEnabled) {
-                tank.vel = Vector.sub(tank.vel, Vector.mult(forward, 2.35));
+                tank.vel = Vector.sub(tank.vel, Vector.mult(forward, 1.25));
             }
 
             if (tank === this.player || this.isOnScreen(tank.pos)) {
@@ -13196,7 +14599,7 @@ export class GameEngine {
             tank.nextBarrelIndex++;
             shotFired = true;
         }
-    } else if (tank.classType === TankClass.WARLORD && tank.isTransformed) {
+    } else if (bossGameplayClass === TankClass.WARLORD && tank.isTransformed) {
         const [length, width = 1.0, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
@@ -13245,7 +14648,7 @@ export class GameEngine {
             tank.nextBarrelIndex++;
             shotFired = true;
         }
-    } else if (tank.classType === TankClass.LEVIATHAN && tank.isTransformed) {
+    } else if (bossGameplayClass === TankClass.LEVIATHAN && tank.isTransformed) {
         const [length, width = 0.9, xOff, angleOff, delayMultiplier, yOff = 0] = barrel;
         const ready = tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo;
         if (ready) {
@@ -13275,7 +14678,7 @@ export class GameEngine {
                     this.entities.push(mini);
                     tank.rebirthDroneLaunchCooldownMs = Math.max(tank.rebirthDroneLaunchCooldownMs, 520);
                     if (tank === this.player || this.isOnScreen(tank.pos)) {
-                        this.sound.playBossDroneLaunch(this.getAudioSpatialOptions(tank.pos, false), tank.classType);
+                        this.sound.playBossDroneLaunch(this.getAudioSpatialOptions(tank.pos, false), bossGameplayClass);
                     }
                 }
             } else {
@@ -13285,7 +14688,7 @@ export class GameEngine {
                     tip.y,
                     Vector.mult(forward, (BASE_STATS.bulletSpeed + tank.stats[StatType.BULLET_SPEED] * 0.8) * 1.18),
                     tank,
-                    4.95,
+                    4.35,
                     2.45,
                     2.45 * widthScale,
                     idx
@@ -13299,15 +14702,15 @@ export class GameEngine {
             if (!isLeviathanManagerBarrel) maybeLaunchRebirthCarrierDrone(tip, forward, angle);
 
             if (!this.sandboxConfig.infiniteAmmo) {
-                const cooldownVal = Math.max(136, baseReloadTimeMs * delayMultiplier * 1.0);
+                const cooldownVal = Math.max(228, baseReloadTimeMs * delayMultiplier * 1.62);
                 tank.barrelCooldowns[idx] = cooldownVal;
                 tank.barrelMaxCooldowns[idx] = cooldownVal;
             }
 
             tank.barrelHeat[idx] = 1.0;
-            tank.barrelRecoilOffsets[idx] = Math.max(tank.barrelRecoilOffsets[idx] || 0, 1.05);
+            tank.barrelRecoilOffsets[idx] = Math.max(tank.barrelRecoilOffsets[idx] || 0, isLeviathanManagerBarrel ? 0.42 : 0.34);
             if (!isLeviathanManagerBarrel && this.sandboxConfig.knockbackEnabled) {
-                tank.vel = Vector.sub(tank.vel, Vector.mult(forward, 2.05));
+                tank.vel = Vector.sub(tank.vel, Vector.mult(forward, 0.48));
             }
 
             if (tank === this.player || this.isOnScreen(tank.pos)) {
@@ -13370,7 +14773,7 @@ export class GameEngine {
             shotFired = true;
         }
     } else if (isManager) {
-        const unitLimit = 6;
+        const unitLimit = 7;
         let currentMiniTanks = this.entities.filter(e => e.type === EntityType.MINI_TANK && (e as MiniTank).owner === tank).length;
         if (currentMiniTanks < unitLimit && (tank.barrelCooldowns[idx] <= 0 || this.sandboxConfig.infiniteAmmo)) {
             const [length, , , angleOff] = barrel;
@@ -13379,10 +14782,16 @@ export class GameEngine {
 
             const unitVariant: 'BASIC' | 'TWIN' = (currentMiniTanks % 2 === 0) ? 'TWIN' : 'BASIC';
             const unit = new MiniTank(this.nextId(), tip.x, tip.y, tank, unitVariant);
-            unit.combatOrbitDistance = unitVariant === 'TWIN' ? 200 : 180;
+            unit.combatOrbitDistance = unitVariant === 'TWIN' ? 214 : 188;
+            unit.detectionRadius = unitVariant === 'TWIN' ? 560 : 520;
+            if (unitVariant === 'TWIN') {
+                unit.maxHealth *= 1.08;
+                unit.health = unit.maxHealth;
+                unit.displayHealth = unit.maxHealth;
+            }
             this.entities.push(unit);
 
-            const cooldownVal = Math.max(300, baseReloadTimeMs * 3.3);
+            const cooldownVal = Math.max(270, baseReloadTimeMs * 3.1);
             if (!this.sandboxConfig.infiniteAmmo) {
                 tank.barrelCooldowns[idx] = cooldownVal;
                 tank.barrelMaxCooldowns[idx] = cooldownVal;
@@ -13475,12 +14884,12 @@ export class GameEngine {
         if (tank.classType === TankClass.BASIC) { bulletSpeedMult = 1.02; bulletDamageMult = 1.02; bulletLifeMult = 1.03; bulletSizeMult = 1.0; }
         else if (tank.classType === TankClass.TWIN) { bulletSpeedMult = 1.06; bulletDamageMult = 1.0; bulletLifeMult = 1.02; bulletSizeMult = 0.96; }
         else if (tank.classType === TankClass.TRIPLE_SHOT) { bulletSpeedMult = 1.16; bulletDamageMult = 1.08; bulletLifeMult = 1.16; bulletSizeMult = 0.98; }
-        else if (tank.classType === TankClass.QUAD_TANK) { bulletSpeedMult = 1.04; bulletDamageMult = 0.9; bulletLifeMult = 1.02; bulletSizeMult = 0.9; }
-        else if (tank.classType === TankClass.TWIN_FLANK) { bulletSpeedMult = 1.08; bulletDamageMult = 0.98; bulletLifeMult = 1.05; bulletSizeMult = 0.94; }
-        else if (tank.classType === TankClass.TRIPLE_TWIN) { bulletSpeedMult = 1.1; bulletDamageMult = 0.96; bulletLifeMult = 1.08; bulletSizeMult = 0.92; }
-        else if (tank.classType === TankClass.TRIPLE_TANK) { bulletSpeedMult = 1.14; bulletDamageMult = 1.18; bulletLifeMult = 1.16; bulletSizeMult = 1.0; }
-        else if (tank.classType === TankClass.PENTA_SHOT) { bulletSpeedMult = 1.1; bulletDamageMult = 0.88; bulletLifeMult = 1.12; bulletSizeMult = 0.85; }
-        else if (tank.classType === TankClass.SPREAD_SHOT) { bulletSpeedMult = 1.2; bulletDamageMult = 0.82; bulletLifeMult = 0.96; bulletSizeMult = 0.8; }
+        else if (tank.classType === TankClass.QUAD_TANK) { bulletSpeedMult = 1.04; bulletDamageMult = 0.94; bulletLifeMult = 1.06; bulletSizeMult = 0.9; }
+        else if (tank.classType === TankClass.TWIN_FLANK) { bulletSpeedMult = 1.08; bulletDamageMult = 1.0; bulletLifeMult = 1.08; bulletSizeMult = 0.94; }
+        else if (tank.classType === TankClass.TRIPLE_TWIN) { bulletSpeedMult = 1.1; bulletDamageMult = 0.99; bulletLifeMult = 1.1; bulletSizeMult = 0.92; }
+        else if (tank.classType === TankClass.TRIPLE_TANK) { bulletSpeedMult = 1.14; bulletDamageMult = 1.2; bulletLifeMult = 1.17; bulletSizeMult = 1.0; }
+        else if (tank.classType === TankClass.PENTA_SHOT) { bulletSpeedMult = 1.1; bulletDamageMult = 0.91; bulletLifeMult = 1.15; bulletSizeMult = 0.85; }
+        else if (tank.classType === TankClass.SPREAD_SHOT) { bulletSpeedMult = 1.2; bulletDamageMult = 0.86; bulletLifeMult = 1.0; bulletSizeMult = 0.8; }
         else if (tank.classType === TankClass.SNIPER) { bulletSpeedMult = 1.5; bulletDamageMult = 1.65; bulletLifeMult = 1.3; bulletSizeMult = 0.9; }
         else if (isTrapperBranchClass(tank.classType)) {
             const trapProfile = this.getTrapperProfile(tank.classType);
@@ -13522,9 +14931,9 @@ export class GameEngine {
         else if (isPacifistClass) {
             // Support identity: reliable utility damage, lower than DPS classes
             bulletSizeMult = 0.95;
-            bulletDamageMult = 0.65;
+            bulletDamageMult = tank.classType === TankClass.PLAGUE_DOCTOR ? 0.78 : 0.68;
             bulletLifeMult = 1.05;
-            bulletSpeedMult = 1.05;
+            bulletSpeedMult = tank.classType === TankClass.PLAGUE_DOCTOR ? 1.12 : 1.05;
         }
         else if (isDrainingClass) {
             // Sustain-offense hybrid: consistent but controlled offensive profile
@@ -13532,6 +14941,12 @@ export class GameEngine {
             bulletDamageMult = 1.08; // slight class-wide uplift for blood line
             bulletLifeMult = 1.26;
             bulletSpeedMult = 1.22;
+            if (tank.classType === TankClass.VAMPIRE) {
+                bulletSizeMult = 1.02;
+                bulletDamageMult = 1.14;
+                bulletLifeMult = 1.34;
+                bulletSpeedMult = 1.28;
+            }
         }
         else if (isMachineGun) {
             // Sustained suppression identity with a wider spray cone.
@@ -13546,12 +14961,12 @@ export class GameEngine {
         else if (isSprayer) {
             if (isSprayerCoreBarrel) {
                 bulletSizeMult = 1.38;
-                bulletDamageMult = 1.52;
+                bulletDamageMult = 1.54;
                 bulletLifeMult = 1.26;
                 bulletSpeedMult = 1.12;
             } else {
                 bulletSizeMult = 0.94;
-                bulletDamageMult = 0.84;
+                bulletDamageMult = 0.87;
                 bulletLifeMult = 0.96;
                 bulletSpeedMult = 1.24;
             }
@@ -13593,7 +15008,7 @@ export class GameEngine {
                 bulletLifeMult *= 1.12;
                 bulletSizeMult *= 1.2;
             } else {
-                bulletDamageMult *= 0.76;
+                bulletDamageMult *= 0.8;
                 bulletSpeedMult *= 1.03;
                 bulletLifeMult *= 0.9;
                 bulletSizeMult *= 0.9;
@@ -13815,8 +15230,8 @@ export class GameEngine {
         tank.invulnerableTime = 0;
         this.revealStealthOnFire(tank);
         if (tank === this.player || this.isOnScreen(tank.pos)) {
-            this.sound.playShoot(tank.classType, this.getAudioSpatialOptions(tank.pos, false)); 
-            if (tank.classType === TankClass.CELESTIAL && tank.isTransformed) {
+            this.sound.playShoot(bossGameplayClass, this.getAudioSpatialOptions(tank.pos, false)); 
+            if (bossGameplayClass === TankClass.CELESTIAL && tank.isTransformed) {
                 this.sound.playCelestialBoom(this.getAudioSpatialOptions(tank.pos, true));
             }
             if ((tank.classType === TankClass.GUNNER || tank.classType === TankClass.AUTO_GUNNER) && this.settings.shakeEnabled) {
@@ -13915,7 +15330,8 @@ export class GameEngine {
   applyTankMovement(tank: Tank, dir: Vector2) { 
     if (Vector.mag(dir) > 0) {
       const isRamClass = tank.classType === TankClass.TRI_ANGLE || tank.classType === TankClass.BOOSTER || tank.classType === TankClass.FIGHTER;
-      const isBossClass = this.isBossClass(tank.classType);
+      const bossGameplayClass = resolveBossGameplayClass(tank.classType);
+      const isBossClass = bossGameplayClass !== null;
       const weightPenalty = tank.stats[StatType.BODY_DAMAGE] * 0.12;
       const rawSpeedStat = tank.stats[StatType.MOVEMENT_SPEED];
       const speedSoftcap = 5;
@@ -13926,13 +15342,13 @@ export class GameEngine {
 
       if (isBossClass) {
         const bossSpeedCap =
-          tank.classType === TankClass.CELESTIAL ? 2.35 :
-          tank.classType === TankClass.LEVIATHAN ? 1.82 :
-          tank.classType === TankClass.WARLORD ? 1.58 :
-          tank.classType === TankClass.OBLITERATOR ? 1.3 :
+          bossGameplayClass === TankClass.CELESTIAL ? 2.35 :
+          bossGameplayClass === TankClass.LEVIATHAN ? 1.82 :
+          bossGameplayClass === TankClass.WARLORD ? 1.58 :
+          bossGameplayClass === TankClass.OBLITERATOR ? 1.3 :
           1.5;
         effectiveSpeed = Math.min(effectiveSpeed, bossSpeedCap);
-        effectiveSpeed *= tank.classType === TankClass.WARLORD && (tank as Tank).isSiegeMode ? 0.82 : 1;
+        effectiveSpeed *= bossGameplayClass === TankClass.WARLORD && (tank as Tank).isSiegeMode ? 0.82 : 1;
       }
 
       if (tank.type === EntityType.ELITE_TANK) {
@@ -14229,7 +15645,7 @@ export class GameEngine {
       const nearbyHealers = this.findFriendlyRestorationSupporters(bot, aliveRestorationTanks);
       if (nearbyHealers.length === 0) continue;
       if (!this.canBotSpeak(bot.id, 12000)) continue;
-      if (Math.random() > 0.12) continue;
+      if (Math.random() > 0.08) continue;
       this.queueBotChat(bot, 'healing_request', { cooldownMs: 12000, visibleMs: 1600 });
       break;
     }
@@ -14255,17 +15671,17 @@ export class GameEngine {
       const hpRatio = bot.health / Math.max(1, bot.maxHealth);
       const nearbyHostile = this.hasNearbyHostile(bot, 460);
 
-      if (hpRatio < 0.24 && nearbyHostile && Math.random() < 0.055) {
+      if (hpRatio < 0.24 && nearbyHostile && Math.random() < 0.035) {
         this.queueBotChat(bot, 'panic', { cooldownMs: BOT_RARE_CHAT_COOLDOWN_MS, visibleMs: 1400 });
         continue;
       }
 
-      if (hpRatio < 0.18 && Math.random() < 0.03) {
+      if (hpRatio < 0.18 && Math.random() < 0.018) {
         this.queueBotChat(bot, 'low_health', { cooldownMs: BOT_RARE_CHAT_COOLDOWN_MS, visibleMs: 1300 });
         continue;
       }
 
-      if (!nearbyHostile && Math.random() < 0.004 && this.isOnScreen(bot.pos, 220)) {
+      if (!nearbyHostile && Math.random() < 0.0016 && this.isOnScreen(bot.pos, 220)) {
         this.queueBotChat(bot, 'rare_random', { cooldownMs: BOT_RARE_CHAT_COOLDOWN_MS, visibleMs: 1500 });
       }
     }
@@ -14426,8 +15842,20 @@ export class GameEngine {
               .map((e) => clean((e as Tank).name).toLowerCase())
       );
 
-      const pool = BOT_NAMES.map((name) => clean(stripInjectedTeamPrefix(name))).filter((n) => n.length > 0);
+      const modePool =
+          this.gameMode === GameMode.TEAMS ? BOT_NAME_POOLS.teams :
+          this.gameMode === GameMode.DOMINION ? BOT_NAME_POOLS.dominion :
+          this.gameMode === GameMode.BOSS_RUSH ? BOT_NAME_POOLS.bossRush :
+          BOT_NAME_POOLS.ffa;
+
+      const sourcePool = Math.random() < BOT_LEGENDARY_NAME_CHANCE ? BOT_LEGENDARY_NAMES : modePool;
+      const pool = sourcePool.map((name) => clean(stripInjectedTeamPrefix(name))).filter((n) => n.length > 0);
       let base = pool[Math.floor(Math.random() * pool.length)] || 'Vextor Unit';
+
+      if (!base) {
+          const fallbackPool = BOT_NAMES.map((name) => clean(stripInjectedTeamPrefix(name))).filter((n) => n.length > 0);
+          base = fallbackPool[Math.floor(Math.random() * fallbackPool.length)] || 'Vextor Unit';
+      }
 
       if (!activeNames.has(base.toLowerCase())) return base;
 
@@ -14457,7 +15885,7 @@ export class GameEngine {
       
       const bot = new Tank(this.nextId(), pos.x, pos.y, false, team);
       bot.name = this.getRefinedBotName(team);
-      bot.invulnerableTime = 2000; // Protection for bots too
+      bot.invulnerableTime = 3000; // Protection for bots too
       
       // Bots now start at level 1 and grind their way up
       bot.level = 1;
@@ -14785,6 +16213,9 @@ export class GameEngine {
                  
                 if (a.type === EntityType.BULLET && (a as Bullet).ownerId === b.id) continue;
                 if (b.type === EntityType.BULLET && (b as Bullet).ownerId === a.id) continue;
+
+                if (a.type === EntityType.BULLET && (a as Bullet).hasRecentPenetrationTarget(b.id, (a as Bullet).lifeTime)) continue;
+                if (b.type === EntityType.BULLET && (b as Bullet).hasRecentPenetrationTarget(a.id, (b as Bullet).lifeTime)) continue;
                  
                 const aIsSummon = a.type === EntityType.DRONE || a.type === EntityType.MINI_TANK;
                 const bIsSummon = b.type === EntityType.DRONE || b.type === EntityType.MINI_TANK;
@@ -14929,10 +16360,17 @@ export class GameEngine {
               const bullet = killer as Bullet;
               const boss = victim as Boss;
               const isGrandSingularity = boss.archetype === 'SINGULARITY';
+              const isBossRushBoss = !!(boss as any).__bossRushBoss;
               if (bullet.ownerClass === TankClass.DESTROYER) {
                   dmg *= isGrandSingularity ? 1.85 : 1.35;
               } else if (bullet.ownerClass === TankClass.ANNIHILATOR) {
                   dmg *= isGrandSingularity ? 2.35 : 1.7;
+              } else if (bullet.ownerClass === TankClass.STREAMLINER && isBossRushBoss) {
+                  // Streamliner was overperforming specifically in Boss Rush because
+                  // its sustained barrel stack converts too cleanly into boss uptime.
+                  // Normalize only against Boss Rush bosses so the class keeps its
+                  // general identity outside the mode.
+                  dmg *= isGrandSingularity ? 0.52 : 0.58;
               }
           }
 
@@ -14949,6 +16387,11 @@ export class GameEngine {
              const healBullet = killer as Bullet;
              // Healing rounds cannot harm allies, but they can still chip hostile/core PvE targets.
              if ((victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY) && victim.team === healBullet.team) return 0;
+             // Plague Doctor keeps the support projectile identity, but it should still threaten enemies when not actively healing.
+             if (healBullet.ownerClass === TankClass.PLAGUE_DOCTOR) {
+                 if (victim.type === EntityType.SHAPE || victim.type === EntityType.CRASHER || victim.type === EntityType.BOSS) return dmg * 0.92;
+                 if (victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY || victim.type === EntityType.ELITE_TANK || victim.type === EntityType.GUARDIAN) return dmg * 0.58;
+             }
              // Keep support identity: reduced hostile damage coefficients.
              if (victim.type === EntityType.SHAPE || victim.type === EntityType.CRASHER || victim.type === EntityType.BOSS) return dmg * 0.75;
              if (victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY || victim.type === EntityType.ELITE_TANK || victim.type === EntityType.GUARDIAN) return dmg * 0.45;
@@ -14999,14 +16442,11 @@ export class GameEngine {
               0.18,
               0.2 + penStat * 0.028 + sizeFactor * 0.11 + durabilityRatio * 0.16 + classBias + sandboxBonus - shapeResistance
           ));
-          const victimBoost = Math.min(
-              0.18,
-              Math.max(0.025, 0.02 + penStat * 0.008 + sizeFactor * 0.03 + durabilityRatio * 0.025 + classBias * 0.5 - shapeResistance * 0.12)
-          );
-
           return {
               attackerIncoming: incomingToAttacker * (1 - passThrough),
-              victimOutgoing: outgoingToVictim * (1 + victimBoost),
+              // Keep shape penetration damage steady per pass; the penetration benefit
+              // should come from staying alive through the target, not from a spiky boost.
+              victimOutgoing: outgoingToVictim,
           };
       };
 
@@ -15087,7 +16527,7 @@ export class GameEngine {
           const classPressure =
               owner.classType === TankClass.OVERLORD ? 2.8 :
               owner.classType === TankClass.OVERSEER ? 2.2 :
-              owner.classType === TankClass.MANAGER ? 1.4 :
+              owner.classType === TankClass.MANAGER ? 1.5 :
               owner.classType === TankClass.HYBRID ? 1.3 :
               1.0;
 
@@ -15163,9 +16603,62 @@ export class GameEngine {
           }
       }
 
-     const handleBulletEffect = (bullet: Bullet, victim: Entity) => {
-         const owner = this.entities.find(e => e.id === bullet.ownerId);
-         if (!owner || !(owner instanceof Tank)) return;
+      const shouldBulletPenetrate = (bullet: Bullet, victim: Entity, incomingToBullet: number): boolean => {
+          if (bullet.bulletType === 'TRAP' || bullet.isDead || victim.isDead) return false;
+
+          const owner = this.resolveTankOwner(bullet);
+          if (!(owner instanceof Tank)) return false;
+
+          const penStat = Math.max(0, owner.stats[StatType.BULLET_PENETRATION] || 0);
+          const damageStat = Math.max(0, owner.stats[StatType.BULLET_DAMAGE] || 0);
+          const speedStat = Math.max(0, owner.stats[StatType.BULLET_SPEED] || 0);
+          const remainingAfterHit = bullet.health - Math.max(0, incomingToBullet);
+          if (remainingAfterHit <= 0) return false;
+
+          const durabilityRatio = Vector.clamp(remainingAfterHit / Math.max(1, bullet.maxHealth), 0, 1.2);
+          const pressureBonus = Math.min(0.22, penStat * 0.028 + damageStat * 0.009 + speedStat * 0.006);
+          const giantSlugBias =
+              bullet.ownerClass === TankClass.DESTROYER || bullet.ownerClass === TankClass.ANNIHILATOR ? 0.08 :
+              bullet.ownerClass === TankClass.HYBRID ? 0.05 :
+              bullet.ownerClass === TankClass.SNIPER || bullet.ownerClass === TankClass.ASSASSIN || bullet.ownerClass === TankClass.RANGER ? 0.045 :
+              0;
+
+          const baseThreshold =
+              victim.type === EntityType.SHAPE ? 0.12 :
+              victim.type === EntityType.CRASHER ? 0.18 :
+              victim.type === EntityType.DRONE || victim.type === EntityType.MINI_TANK ? 0.22 :
+              victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY ? 0.3 :
+              victim.type === EntityType.ELITE_TANK ? 0.38 :
+              victim.type === EntityType.BOSS || victim.type === EntityType.GUARDIAN ? 0.52 :
+              0.26;
+
+          const requiredDurability = Math.max(0.06, baseThreshold - pressureBonus - giantSlugBias);
+          return durabilityRatio >= requiredDurability;
+      };
+
+      const pushBulletThroughVictim = (bullet: Bullet, victim: Entity): void => {
+          const moveDir = Vector.mag(bullet.vel) > 0.08
+              ? Vector.normalize(bullet.vel)
+              : Vector.normalize(Vector.sub(victim.pos, bullet.pos));
+          const separation =
+              victim.type === EntityType.SHAPE
+                  ? Math.max(1.4, Math.min(bullet.radius * 0.22, victim.radius * 0.08))
+                  : Math.max(8, bullet.radius * 0.45 + victim.radius * 0.3);
+          bullet.pos = Vector.add(bullet.pos, Vector.mult(moveDir, separation));
+      };
+
+      const bulletAPenetrates =
+          a.type === EntityType.BULLET &&
+          b.type !== EntityType.BULLET &&
+          shouldBulletPenetrate(a as Bullet, b, dmgA);
+      const bulletBPenetrates =
+          b.type === EntityType.BULLET &&
+          a.type !== EntityType.BULLET &&
+          shouldBulletPenetrate(b as Bullet, a, dmgB);
+
+      const handleBulletEffect = (bullet: Bullet, victim: Entity) => {
+          const owner = this.entities.find(e => e.id === bullet.ownerId);
+          if (!owner || !(owner instanceof Tank)) return;
 
           if (bullet.bulletType === 'HEAL') {
                if ((victim.type === EntityType.PLAYER || victim.type === EntityType.ENEMY) && victim.team === bullet.team && victim.id !== owner.id) {
@@ -15258,9 +16751,21 @@ export class GameEngine {
      }
 
      a.takeDamage(dmgA, sA, isBodyCollision); b.takeDamage(dmgB, sB, isBodyCollision);
-     const impactPos = {
-         x: a.pos.x * 0.5 + b.pos.x * 0.5,
-         y: a.pos.y * 0.5 + b.pos.y * 0.5
+
+     if (bulletAPenetrates && !a.isDead) {
+         const bullet = a as Bullet;
+         bullet.markPenetratedTarget(b.id, bullet.lifeTime, b.type);
+         pushBulletThroughVictim(bullet, b);
+     }
+     if (bulletBPenetrates && !b.isDead) {
+         const bullet = b as Bullet;
+         bullet.markPenetratedTarget(a.id, bullet.lifeTime, a.type);
+         pushBulletThroughVictim(bullet, a);
+     }
+
+      const impactPos = {
+          x: a.pos.x * 0.5 + b.pos.x * 0.5,
+          y: a.pos.y * 0.5 + b.pos.y * 0.5
      };
 
      // Upgrade body collision feedback: heavy physical visual debris & spark bursting on collisions!
@@ -15721,7 +17226,7 @@ export class GameEngine {
       this.upgradeClassForTank(this.player, nc);
       this.sound.playClassUpgrade();
   }
-  upgradeClassForTank(tank: Tank, newClass: TankClass) {
+  upgradeClassForTank(tank: Tank, newClass: TankClass, options?: { activateSandboxBossProtocol?: boolean }) {
       const normalizedClass = this.getNormalizedPrimaryClassForSectorClass(newClass);
       const inheritedSector = this.getSecondarySectorForLegacyClass(newClass);
 
@@ -15765,6 +17270,19 @@ export class GameEngine {
           // Bosses become global free agents in all modes: hostile/engageable by everyone.
           tank.team = Team.NONE;
           if (tank === this.player) tank.color = '#9f76fc'; // Purple for commanders
+      } else if (tank === this.player && this.gameMode !== GameMode.TEAMS && this.gameMode !== GameMode.DOMINION && this.gameMode !== GameMode.BOSS_RUSH) {
+          tank.team = Team.BLUE;
+          tank.color = COLORS.player;
+          tank.setSkin(this.preferredSkinId, this.preferredDonorRank);
+      }
+
+      if (tank === this.player && this.gameMode === GameMode.SANDBOX) {
+          const shouldActivateSandboxBossProtocol = !!options?.activateSandboxBossProtocol && !!this.getSandboxBossProtocolConfig(normalizedClass);
+          if (shouldActivateSandboxBossProtocol) {
+              this.activateSandboxBossProtocol(tank, normalizedClass);
+          } else if ((tank as any).__sandboxBossRushVisual || tank.isTransformed || tank.hasRebirthed) {
+              this.deactivateSandboxBossProtocol(tank);
+          }
       }
       
       const baseReloadMs = (BASE_STATS.reload - (tank.stats[StatType.RELOAD] * 2.5)) * 16.67;
@@ -15808,6 +17326,8 @@ export class GameEngine {
     this.drawGrid(this.ctx); 
     if (this.gameMode === GameMode.BOSS_RUSH) {
       this.bossRushMode.renderWorld(this.ctx);
+    } else if (this.sandboxBossTelegraphs.length > 0) {
+      renderBossRushTelegraphs(this.ctx, this.sandboxBossTelegraphs as BossRushTelegraph[]);
     }
     this.ctx.strokeStyle = '#555'; this.ctx.lineWidth = 10; this.ctx.strokeRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     const visibleEntities = this.visibleEntitiesBuffer;

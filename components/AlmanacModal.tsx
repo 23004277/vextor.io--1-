@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import {
     Activity,
     Aperture,
@@ -25,6 +25,7 @@ import {
 import { ShapeRarity, ShapeType, StatType, TankClass } from '../types';
 import { BOSS_STATS, RARITY_CONFIG, SHAPE_STATS, TANK_CONFIGS } from '../constants';
 import { ShapePreview } from './ShapePreview';
+import './almanac/almanac.css';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VEXTOR ALMANAC — Optimised / simplified / cleaner redesign
@@ -37,60 +38,7 @@ import { ShapePreview } from './ShapePreview';
 // - Density toggle, category shortcuts, clear search, back-to-top, and visible entry counter.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ALMANAC_STYLES = `
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
 
-.vx-modal, .vx-modal * { font-family: 'Rajdhani', sans-serif; }
-.vx-mono { font-family: 'Space Mono', monospace !important; }
-
-.vx-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(251,191,36,.55) rgba(255,255,255,.06); }
-.vx-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
-.vx-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,.045); border-radius: 999px; }
-.vx-scrollbar::-webkit-scrollbar-thumb { background: rgba(251,191,36,.65); border: 3px solid rgba(3,5,8,.92); border-radius: 999px; }
-.vx-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(251,191,36,.86); }
-
-.vx-scrollbar-light { scrollbar-width: thin; scrollbar-color: rgba(15,23,42,.32) rgba(15,23,42,.08); }
-.vx-scrollbar-light::-webkit-scrollbar { width: 10px; height: 10px; }
-.vx-scrollbar-light::-webkit-scrollbar-track { background: rgba(15,23,42,.08); border-radius: 999px; }
-.vx-scrollbar-light::-webkit-scrollbar-thumb { background: rgba(15,23,42,.28); border: 3px solid rgba(248,250,252,.96); border-radius: 999px; }
-.vx-scrollbar-light::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,.42); }
-
-.vx-no-scrollbar { scrollbar-width: none; }
-.vx-no-scrollbar::-webkit-scrollbar { display: none; }
-
-.vx-card { content-visibility: auto; contain-intrinsic-size: 1px 260px; }
-.vx-card-hover { transition: border-color .16s ease, background-color .16s ease, transform .16s ease, box-shadow .16s ease; }
-.vx-card-hover:hover { transform: translateY(-2px); }
-.vx-perf .vx-card-hover:hover { transform: none; }
-
-.vx-table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
-.vx-table-grid { min-width: 720px; }
-.vx-table-grid-sm { min-width: 560px; }
-
-.vx-grid-bg {
-    background-image:
-        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
-    background-size: 48px 48px;
-}
-
-.vx-scanlines::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.12) 3px 4px);
-    opacity: .5;
-}
-
-.vx-pulse-dot { animation: vx-pulse-dot 1.2s ease-in-out infinite; }
-@keyframes vx-pulse-dot { 0%,100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
-
-@media (prefers-reduced-motion: reduce) {
-    .vx-pulse-dot { animation: none !important; }
-    .vx-card-hover, .vx-card-hover:hover { transform: none !important; }
-}
-`;
 
 interface AlmanacModalProps {
     onClose: () => void;
@@ -209,7 +157,7 @@ const CLASS_ROLES: Record<string, ClassRole> = {
     ASSAULT: {
         label: 'Frontline Combatants',
         desc: 'High bullet volume for direct pressure and steady frontline control.',
-        classes: [TankClass.TWIN, TankClass.TRIPLE_SHOT, TankClass.PENTA_SHOT, TankClass.SPREAD_SHOT, TankClass.TRIPLE_TWIN],
+        classes: [TankClass.TWIN, TankClass.TRIPLE_SHOT, TankClass.TRIPLE_TANK, TankClass.OCTO_TANK, TankClass.PENTA_SHOT, TankClass.SPREAD_SHOT, TankClass.TRIPLE_TWIN],
         icon: Zap,
     },
     PRECISION: {
@@ -221,13 +169,13 @@ const CLASS_ROLES: Record<string, ClassRole> = {
     IMPACT: {
         label: 'Heavy Ordnance',
         desc: 'Burst-heavy frames that trade tempo for impact and recoil utility.',
-        classes: [TankClass.MACHINE_GUN, TankClass.DESTROYER, TankClass.ANNIHILATOR, TankClass.HYBRID, TankClass.SPRAYER],
+        classes: [TankClass.MACHINE_GUN, TankClass.DESTROYER, TankClass.GUNNER, TankClass.AUTO_GUNNER, TankClass.STREAMLINER, TankClass.ANNIHILATOR, TankClass.HYBRID, TankClass.SPRAYER],
         icon: Activity,
     },
     TACTICAL: {
         label: 'Advanced Command',
         desc: 'Control-oriented classes built around drones, turrets, and map ownership.',
-        classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.OCTO_TANK, TankClass.TRAPPER, TankClass.DUAL_TRAPPER, TankClass.MACHINE_GUN_TRAPPER, TankClass.OCTO_TRAPPER, TankClass.TRIPLE_TRAPPER, TankClass.AUTO_GUNNER],
+        classes: [TankClass.OVERSEER, TankClass.OVERLORD, TankClass.MANAGER, TankClass.TRAPPER, TankClass.DUAL_TRAPPER, TankClass.MACHINE_GUN_TRAPPER, TankClass.OCTO_TRAPPER, TankClass.TRIPLE_TRAPPER],
         icon: Cpu,
     },
 };
@@ -502,11 +450,7 @@ const CategoryButton: React.FC<{
                     : 'border-transparent text-slate-500 hover:border-slate-200 hover:bg-white hover:text-slate-900'}`}
         >
             {isActive && !performanceMode && (
-                <motion.span
-                    layoutId="almanac-active-rail"
-                    className={`absolute left-0 top-1/2 h-7 w-0.5 -translate-y-1/2 rounded-full ${tone.bgStrong}`}
-                    transition={{ type: 'spring', stiffness: 500, damping: 42 }}
-                />
+                <span className={`absolute left-0 top-1/2 h-7 w-0.5 -translate-y-1/2 rounded-full ${tone.bgStrong}`} />
             )}
             <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${isActive ? `${tone.bg} ${tone.border}` : darkMode ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50'}`}>
                 <Icon className={`h-4 w-4 ${isActive ? tone.text : 'text-current'}`} />
@@ -572,16 +516,41 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
     const [density, setDensity] = useState<DensityMode>(() => getStoredDensity());
     const [performanceMode, setPerformanceMode] = useState(() => getStoredBoolean('vextor_almanac_performance', true));
     const [shapeSort, setShapeSort] = useState<SortMode>('name');
-    const [scrollProgress, setScrollProgress] = useState(0);
 
     const contentRef = useRef<HTMLElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const scrollFrameRef = useRef<number | null>(null);
+    const progressBarRef = useRef<HTMLDivElement | null>(null);
+    const stickySummaryRef = useRef<HTMLDivElement | null>(null);
+    const backToTopRef = useRef<HTMLButtonElement | null>(null);
 
     const debouncedSearch = useDebouncedValue(searchQuery, 130);
     const normalizedQuery = useMemo(() => normalizeSearch(debouncedSearch), [debouncedSearch]);
     const lowMotion = Boolean(prefersReducedMotion || performanceMode);
     const compactMode = density === 'compact';
+
+    const applyScrollChrome = useCallback((progress: number) => {
+        if (progressBarRef.current) {
+            progressBarRef.current.style.width = `${Math.round(progress * 100)}%`;
+        }
+
+        if (stickySummaryRef.current) {
+            const hidden = progress > 0.015;
+            stickySummaryRef.current.style.maxHeight = hidden ? '0px' : '10rem';
+            stickySummaryRef.current.style.opacity = hidden ? '0' : '1';
+            stickySummaryRef.current.style.transform = hidden ? 'translateY(-0.75rem)' : 'translateY(0)';
+            stickySummaryRef.current.style.marginBottom = hidden ? '0' : '0.25rem';
+            stickySummaryRef.current.style.pointerEvents = hidden ? 'none' : 'auto';
+            stickySummaryRef.current.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+        }
+
+        if (backToTopRef.current) {
+            const visible = progress > 0.18;
+            backToTopRef.current.style.opacity = visible ? '1' : '0';
+            backToTopRef.current.style.transform = visible ? 'translateY(0)' : 'translateY(0.5rem)';
+            backToTopRef.current.style.pointerEvents = visible ? 'auto' : 'none';
+        }
+    }, []);
 
     const activeMeta = useMemo(() => CATEGORIES.find(category => category.id === activeCategory) ?? CATEGORIES[0], [activeCategory]);
     const activeTone = TONE[activeMeta.tone];
@@ -682,6 +651,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                 if (Number.isInteger(index) && CATEGORIES[index]) {
                     event.preventDefault();
                     setActiveCategory(CATEGORIES[index].id);
+                    applyScrollChrome(0);
                     requestAnimationFrame(() => contentRef.current?.scrollTo({ top: 0, behavior: 'auto' }));
                 }
             }
@@ -693,7 +663,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
             window.removeEventListener('keydown', handleKeyDown);
             if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
         };
-    }, [onClose]);
+    }, [applyScrollChrome, onClose]);
 
     const scrollToTop = useCallback(() => {
         playSound?.();
@@ -703,9 +673,9 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
     const handleCategoryChange = useCallback((category: MainCategory) => {
         playSound?.();
         setActiveCategory(category);
-        setScrollProgress(0);
+        applyScrollChrome(0);
         requestAnimationFrame(() => contentRef.current?.scrollTo({ top: 0, behavior: lowMotion ? 'auto' : 'smooth' }));
-    }, [lowMotion, playSound]);
+    }, [applyScrollChrome, lowMotion, playSound]);
 
     const handleContentScroll = useCallback((event: React.UIEvent<HTMLElement>) => {
         const element = event.currentTarget;
@@ -714,12 +684,16 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
         scrollFrameRef.current = window.requestAnimationFrame(() => {
             const max = element.scrollHeight - element.clientHeight;
             const nextProgress = max <= 0 ? 0 : clamp(element.scrollTop / max);
-            setScrollProgress(previous => Math.abs(previous - nextProgress) > 0.008 ? nextProgress : previous);
+            applyScrollChrome(nextProgress);
             scrollFrameRef.current = null;
         });
-    }, []);
+    }, [applyScrollChrome]);
 
     const clearSearch = useCallback(() => setSearchQuery(''), []);
+
+    useEffect(() => {
+        applyScrollChrome(0);
+    }, [activeCategory, applyScrollChrome]);
 
     const renderOverview = () => (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -820,7 +794,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                     <CardShell darkMode={darkMode} className="p-4 sm:p-5">
                         <div className="flex min-w-0 items-center gap-3">
                             <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-slate-50'}`}>
-                                <ShapePreview type={visibleShape} rarity={ShapeRarity.COMMON} size={46} />
+                                <ShapePreview type={visibleShape} rarity={ShapeRarity.COMMON} size={46} animated={!performanceMode} />
                             </div>
                             <div className="min-w-0">
                                 <p className={`vx-mono text-[9px] font-bold uppercase tracking-[0.22em] ${activeTone.softText}`}>Selected Resource</p>
@@ -1023,7 +997,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                 <SectionTitle icon={Aperture} title="Dimensional Rift" eyebrow="Void research" desc="A readable summary of rift farming without trying to run an entire animated scene inside the modal." tone={activeTone} darkMode={darkMode} />
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
                     <div className={`flex h-44 items-center justify-center rounded-xl border ${darkMode ? 'border-white/8 bg-black/35' : 'border-slate-200 bg-slate-50'}`}>
-                        <ShapePreview type={VOID_PORTAL_PREVIEW} rarity={ShapeRarity.COMMON} size={112} />
+                        <ShapePreview type={VOID_PORTAL_PREVIEW} rarity={ShapeRarity.COMMON} size={112} animated={!performanceMode} />
                     </div>
                     <div className="space-y-4">
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -1139,9 +1113,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
     ]);
 
     return (
-        <>
-            <style dangerouslySetInnerHTML={{ __html: ALMANAC_STYLES }} />
-            <motion.div
+        <motion.div
                 className="fixed inset-0 z-[1000] flex items-center justify-center overflow-hidden p-1 sm:p-4 lg:p-6"
                 style={{ background: 'rgba(0,0,0,.86)' }}
                 initial={lowMotion ? false : { opacity: 0 }}
@@ -1266,7 +1238,7 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                             </div>
 
                             <div className={`mt-3 h-1 overflow-hidden rounded-full ${darkMode ? 'bg-white/[0.06]' : 'bg-slate-200'}`} aria-hidden="true">
-                                <div className={`h-full ${activeTone.bgStrong}`} style={{ width: `${Math.round(scrollProgress * 100)}%`, transition: lowMotion ? 'none' : 'width .12s linear' }} />
+                                <div ref={progressBarRef} className={`h-full ${activeTone.bgStrong}`} style={{ width: '0%', transition: lowMotion ? 'none' : 'width .12s linear' }} />
                             </div>
                         </header>
 
@@ -1299,8 +1271,10 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                         >
                             <div className={`mx-auto flex w-full max-w-[1320px] min-w-0 flex-col gap-4 ${compactMode ? 'text-[.94rem]' : ''}`}>
                                 <div
-                                    className={`sticky top-0 z-20 overflow-hidden transition-all duration-200 ${scrollProgress > 0.015 ? 'pointer-events-none max-h-0 -translate-y-3 opacity-0 mb-0' : 'max-h-40 translate-y-0 opacity-100 mb-1'}`}
-                                    aria-hidden={scrollProgress > 0.015}
+                                    ref={stickySummaryRef}
+                                    className="sticky top-0 z-20 mb-1 max-h-40 overflow-hidden transition-all duration-200"
+                                    aria-hidden="false"
+                                    style={{ opacity: 1, transform: 'translateY(0)', marginBottom: '0.25rem', maxHeight: '10rem' }}
                                 >
                                 <div className={`rounded-xl border px-3 py-3 backdrop-blur-xl sm:px-4 ${darkMode ? 'border-white/8 bg-[#030508]/90' : 'border-slate-200/90 bg-[#f5f2ea]/94'}`}>
                                     <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -1338,29 +1312,20 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
 
                                 {overviewContent}
 
-                                <AnimatePresence mode="wait">
-                                    <motion.div
-                                        key={`${activeCategory}-${density}-${performanceMode ? 'fast' : 'visual'}`}
-                                        initial={lowMotion ? false : { opacity: 0, y: 8 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={lowMotion ? { opacity: 1 } : { opacity: 0, y: -8 }}
-                                        transition={lowMotion ? { duration: 0 } : { duration: .16, ease: 'easeOut' }}
-                                        className="min-w-0"
-                                    >
-                                        {categoryContent}
-                                    </motion.div>
-                                </AnimatePresence>
+                                <div className="min-w-0">
+                                    {categoryContent}
+                                </div>
                             </div>
 
-                            {scrollProgress > .18 && (
-                                <button
-                                    type="button"
-                                    onClick={scrollToTop}
-                                    className={`sticky bottom-4 ml-auto mr-1 mt-4 flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-bold uppercase tracking-[0.18em] shadow-lg transition-colors ${darkMode ? 'border-white/10 bg-black/75 text-white/75 hover:text-white' : 'border-slate-200 bg-white/95 text-slate-700 hover:text-slate-950'}`}
-                                >
-                                    <ArrowUp className="h-3.5 w-3.5" /> Back To Top
-                                </button>
-                            )}
+                            <button
+                                ref={backToTopRef}
+                                type="button"
+                                onClick={scrollToTop}
+                                className={`sticky bottom-4 ml-auto mr-1 mt-4 flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-bold uppercase tracking-[0.18em] shadow-lg transition-all ${darkMode ? 'border-white/10 bg-black/75 text-white/75 hover:text-white' : 'border-slate-200 bg-white/95 text-slate-700 hover:text-slate-950'}`}
+                                style={{ opacity: 0, transform: 'translateY(0.5rem)', pointerEvents: 'none' }}
+                            >
+                                <ArrowUp className="h-3.5 w-3.5" /> Back To Top
+                            </button>
                         </section>
 
                         <footer className={`hidden shrink-0 items-center justify-between gap-4 border-t px-6 py-3 md:flex ${darkMode ? 'border-white/8 bg-black/25' : 'border-slate-200 bg-white/55'}`}>
@@ -1379,7 +1344,9 @@ export const AlmanacModal: React.FC<AlmanacModalProps> = ({ onClose, darkMode, p
                     </main>
                 </motion.div>
             </motion.div>
-        </>
     );
 };
+
+
+
 

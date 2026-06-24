@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, Variants } from 'motion/react';
 import { BookOpen, ChevronRight, Eye, HeartHandshake, Pencil, Radar, ScrollText, SlidersHorizontal, Trophy, Warehouse } from 'lucide-react';
 
@@ -7,6 +7,7 @@ import { COLORS } from '../constants';
 import { BackendService } from '../services/BackendService';
 import { GameMode, HighScoreEntry, TankClass, Team, User } from '../types';
 import { MenuMusicVisualizer } from './MenuMusicVisualizer';
+import { COMMAND_THEME } from './uiTheme';
 
 interface MainMenuProps {
   isPlaying: boolean;
@@ -61,22 +62,7 @@ type TeamMeta = {
   border: string;
 };
 
-const UI = {
-  ink: '#ecfeff',
-  soft: '#a7e8f2',
-  dim: 'rgba(167, 232, 242, 0.48)',
-  faint: 'rgba(167, 232, 242, 0.26)',
-  cyan: '#20e6ff',
-  teal: '#2cffc7',
-  violet: '#9f7cff',
-  amber: '#ffd15c',
-  rose: '#ff5f86',
-  panel: 'linear-gradient(180deg, rgba(5, 25, 44, 0.92), rgba(2, 8, 22, 0.97))',
-  panelDeep: 'linear-gradient(180deg, rgba(7, 35, 58, 0.76), rgba(2, 7, 20, 0.98))',
-  panelTint: 'linear-gradient(135deg, rgba(8, 145, 178, 0.18), rgba(15, 23, 42, 0.84))',
-  border: 'rgba(56, 189, 248, 0.18)',
-  borderStrong: 'rgba(45, 255, 199, 0.38)',
-};
+const UI = COMMAND_THEME;
 
 const MODE_META: Record<GameMode, ModeMeta> = {
   [GameMode.FFA]: {
@@ -229,36 +215,11 @@ const Scanlines: React.FC = () => (
   />
 );
 
-const bootRevealBackdropTransition = { duration: 0.42, ease: 'easeOut' } as const;
-const bootRevealContainerTransition = { duration: 0.46, ease: SPRING_EASE } as const;
 const MENU_COLUMN_DELAYS = {
   left: 0.08,
   center: 0.14,
   right: 0.2,
 } as const;
-
-const MenuBootRevealOverlay = React.memo(function MenuBootRevealOverlay() {
-  return (
-    <motion.div
-      initial={{ opacity: 0.3 }}
-      animate={{ opacity: 0 }}
-      exit={{ opacity: 0 }}
-      transition={bootRevealContainerTransition}
-      className="pointer-events-none absolute inset-0 z-[6] overflow-hidden"
-    >
-      <motion.div
-        aria-hidden="true"
-        className="absolute inset-0"
-        initial={{ opacity: 0.3 }}
-        animate={{
-          opacity: [0.3, 0.14, 0],
-          background: 'linear-gradient(180deg, rgba(2,6,23,0.32), rgba(2,6,23,0.12) 48%, rgba(2,6,23,0))',
-        }}
-        transition={bootRevealBackdropTransition}
-      />
-    </motion.div>
-  );
-});
 
 const Panel: React.FC<{
   title?: string;
@@ -539,6 +500,68 @@ const PolicyModal: React.FC<{ open: boolean; type: 'privacy' | 'terms'; onClose:
   );
 };
 
+const LeaderboardModal: React.FC<{
+  open: boolean;
+  entries: HighScoreEntry[];
+  onClose: () => void;
+}> = ({ open, entries, onClose }) => (
+  <AnimatePresence>
+    {open && (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto p-4"
+        style={{ background: 'rgba(2, 6, 23, 0.78)' }}
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ opacity: 0, y: 14, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 10, scale: 0.98 }}
+          transition={{ duration: 0.2 }}
+          className="menu-scrollbar w-full max-w-3xl overflow-y-auto rounded-2xl border p-5 shadow-[0_28px_80px_rgba(0,0,0,0.62)]"
+          style={{ maxHeight: 'min(86vh, 760px)', background: UI.panel, borderColor: 'rgba(32,230,255,0.28)' }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex flex-col gap-2 border-b border-cyan-300/10 pb-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h3 className="menu-copy text-xl font-black uppercase leading-tight tracking-[0.06em]" style={{ color: UI.cyan }}>Leaderboard</h3>
+              <div className="menu-copy mt-1 text-[9px] font-black uppercase leading-[1.35] tracking-[0.10em]" style={{ color: UI.dim }}>
+                Top arena score uplinks
+              </div>
+            </div>
+            <div className="rounded-full border border-cyan-300/12 bg-cyan-400/[0.07] px-3 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-cyan-100/74">
+              {entries.length} ranked
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-2">
+            {entries.length === 0 ? (
+              <div className="flex min-h-[220px] items-center justify-center rounded-xl border border-cyan-300/10 bg-sky-950/20 px-4 text-center text-[10px] font-black uppercase tracking-[0.12em] text-sky-100/28">
+                No leaderboard data available
+              </div>
+            ) : (
+              entries.map((entry, index) => <LeaderboardRow key={`${entry.name}-${index}`} entry={entry} index={index} />)
+            )}
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl border px-4 py-2 text-[10px] font-black uppercase tracking-[0.12em] transition hover:-translate-y-0.5"
+              style={{ color: UI.cyan, borderColor: 'rgba(32,230,255,0.35)', background: 'rgba(32,230,255,0.1)' }}
+            >
+              Close
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    )}
+  </AnimatePresence>
+);
+
 export const MainMenu: React.FC<MainMenuProps> = ({
   isPlaying,
   bootPhase,
@@ -575,10 +598,11 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 }) => {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTos, setShowTos] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const navigationListRef = useRef<HTMLDivElement | null>(null);
   const compactHeight = useMediaQuery('(max-height: 820px)');
   const bootVisible = bootPhase !== 'locked';
   const bootInteractive = bootPhase === 'ready';
-  const bootTransitioning = bootPhase === 'unlocking' || bootPhase === 'revealing';
   const logoPulse = clampValue((musicSnapshot?.logoPulse ?? 0), 0, 1.3);
   const reactorPulse = clampValue((musicSnapshot?.reactorPulse ?? 0), 0, 1.6);
   const backgroundGlow = clampValue((musicSnapshot?.backgroundGlow ?? 0), 0, 1.2);
@@ -632,6 +656,20 @@ export const MainMenu: React.FC<MainMenuProps> = ({
     ],
     [setShowAchievements, setShowAlmanac, setShowShop, setShowSupport, setShowSettings, setShowUpdateHistory],
   );
+
+  const handleNavigationWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    const container = navigationListRef.current;
+    if (!container) return;
+
+    const dominantDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    if (dominantDelta === 0) return;
+
+    event.preventDefault();
+    container.scrollBy({
+      top: dominantDelta,
+      behavior: 'smooth',
+    });
+  }, []);
 
   const containerVar: Variants = {
     hidden: {
@@ -703,12 +741,6 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               'radial-gradient(circle at 50% 0%, rgba(14, 116, 144, 0.22), transparent 38%), radial-gradient(circle at 100% 10%, rgba(124, 58, 237, 0.14), transparent 34%), linear-gradient(160deg, #020617 0%, #03111f 48%, #020617 100%)',
           }}
         >
-          <AnimatePresence>
-            {bootTransitioning && (
-              <MenuBootRevealOverlay key="menu-boot-overlay" />
-            )}
-          </AnimatePresence>
-
           <Scanlines />
 
           <div className="pointer-events-none absolute inset-0 z-0">
@@ -727,17 +759,17 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 50%, transparent 34%, rgba(2,6,23,0.88) 100%)' }} />
           </div>
 
-          <div className="vextor-menu relative z-10 mx-auto flex h-full max-h-full min-h-0 w-full max-w-[1800px] flex-col gap-2.5 overflow-hidden px-3 py-3 lg:px-4">
-            <header className="grid shrink-0 grid-cols-1 gap-2 rounded-2xl border border-cyan-300/12 bg-slate-950/58 px-4 py-2.5 shadow-[0_12px_42px_rgba(0,0,0,0.24)] backdrop-blur-xl md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-teal-300 shadow-[0_0_14px_rgba(44,255,199,0.9)]" />
-                <div className="min-w-0">
-                  <div className="menu-copy text-[9px] font-black uppercase leading-[1.35] tracking-[0.22em] text-teal-100/86">VEXTOR Command Interface</div>
-                  <div className="menu-copy mt-0.5 text-[8px] font-bold uppercase leading-[1.4] tracking-[0.10em] text-sky-100/38">Clean cockpit layout / no clipped labels / no dead space</div>
+          <div className="main-menu-shell vextor-menu relative z-10 mx-auto flex h-full max-h-full w-full max-w-[1500px] flex-col gap-2 px-3 py-2 lg:px-4 lg:py-3">
+            <header className="grid shrink-0 grid-cols-1 gap-2 rounded-2xl border border-cyan-300/12 bg-slate-950/58 px-4 py-2.5 shadow-[0_12px_42px_rgba(0,0,0,0.24)] backdrop-blur-xl lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="h-2 w-2 shrink-0 rounded-full bg-teal-300 shadow-[0_0_14px_rgba(44,255,199,0.9)]" />
+                  <div className="menu-copy text-[10px] font-black uppercase tracking-[0.22em] text-teal-100/88">VEXTOR</div>
                 </div>
+                <div className="menu-copy mt-1 text-[8px] font-bold uppercase tracking-[0.12em] text-sky-100/40">Simple launch interface</div>
               </div>
 
-              <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">
                 <span className="rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.16em]" style={{ color: modeMeta.color, borderColor: modeMeta.border, background: modeMeta.fill }}>
                   {modeMeta.title}
                 </span>
@@ -746,11 +778,14 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     {teamMeta.label}
                   </span>
                 )}
+                <span className="rounded-full border border-cyan-300/12 bg-cyan-400/[0.06] px-3 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-sky-100/54">
+                  Build 4.2.8
+                </span>
               </div>
             </header>
 
-            <div className="grid min-h-0 flex-1 gap-2.5 overflow-hidden lg:grid-cols-[245px_minmax(0,1fr)_315px] xl:grid-cols-[265px_minmax(0,1fr)_345px] 2xl:grid-cols-[285px_minmax(0,1fr)_365px]">
-              <motion.aside variants={slideLeft} className="menu-scrollbar grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2.5 overflow-y-auto pr-1">
+            <div className="main-menu-grid grid min-h-0 flex-1 gap-2 overflow-hidden lg:grid-cols-[250px_minmax(0,1fr)] xl:grid-cols-[270px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]">
+              <motion.aside variants={slideLeft} className="menu-scrollbar grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2 overflow-y-auto pr-1">
                 <Panel title="Pilot" subtitle={user ? 'Cloud profile' : 'Guest profile'}>
                   <div className="relative rounded-xl border border-cyan-300/12 p-3" style={{ background: UI.panelDeep }}>
                     <div className="absolute right-[-24px] top-[-24px] h-24 w-24 rounded-full bg-cyan-400/10 blur-2xl" />
@@ -790,7 +825,11 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 </Panel>
 
                 <Panel title="Navigation" subtitle="Primary terminals only" bodyClassName="h-full p-2.5">
-                  <div className="grid h-full content-start gap-1.5">
+                  <div
+                    ref={navigationListRef}
+                    onWheel={handleNavigationWheel}
+                    className="menu-scrollbar grid h-full max-h-[320px] content-start gap-1.5 overflow-y-auto pr-1 scroll-smooth overscroll-contain"
+                  >
                     {navItems.map((link) => (
                       <NavButton
                         key={link.label}
@@ -811,31 +850,31 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     ))}
                   </div>
                 </Panel>
+
+                <Panel title="Controls" subtitle="Fast reference">
+                  <div className="grid gap-1.5">
+                    <ControlRow label="Move" keyLabel="WASD" desc="Navigate grid" />
+                    <ControlRow label="Fire" keyLabel="LMB" desc="Primary weapon" />
+                    <ControlRow label="Observe" keyLabel="A / D" desc="Spectate cycle" />
+                  </div>
+                </Panel>
               </motion.aside>
 
-              <motion.main variants={panelVar} className="min-h-0 min-w-0">
-                <form onSubmit={submitHandler} className="grid h-full min-h-0 min-w-0 gap-2.5 overflow-visible lg:grid-rows-[auto_minmax(210px,1fr)_auto]">
+              <motion.main variants={panelVar} className="menu-scrollbar min-h-0 min-w-0 overflow-y-auto pr-1">
+                <form onSubmit={submitHandler} className="grid min-h-full min-w-0 gap-2 overflow-visible lg:grid-rows-[auto_auto_minmax(0,1fr)]">
                   <Panel bodyClassName="p-0" className="shrink-0 overflow-visible">
-                    <div className="grid min-w-0 gap-3 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(260px,360px)] xl:items-center">
+                    <div className="grid min-w-0 gap-3 p-3.5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-cyan-300/16 bg-cyan-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-cyan-200/82">{modeMeta.code}</span>
                           <span className="rounded-full border border-violet-300/16 bg-violet-400/[0.08] px-3 py-1 text-[8px] font-black uppercase tracking-[0.15em] text-violet-200/72">{latestUpdate?.id ?? 'Live Build'}</span>
                         </div>
-                        <div
-                          className="vextor-logo-shell relative mt-2 max-w-full overflow-visible"
-                           style={{
-                             transform: `scale(${1 + logoPulse * 0.035})`,
-                             filter: `drop-shadow(0 0 ${20 + bloom * 18}px rgba(32,230,255,${0.14 + backgroundGlow * 0.12}))`,
-                             transition: 'transform 70ms linear, filter 90ms linear',
-                             willChange: 'transform, filter',
-                           }}
-                         >
+                        <div className="vextor-logo-shell relative mt-2 max-w-full overflow-visible" style={{ transform: `scale(${1 + logoPulse * 0.02})`, filter: `drop-shadow(0 0 ${14 + bloom * 10}px rgba(32,230,255,${0.1 + backgroundGlow * 0.08}))`, transition: 'transform 70ms linear, filter 90ms linear', willChange: 'transform, filter' }}>
                           <h1
                             className="vextor-title"
                             style={{
                               fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                              fontSize: compactHeight ? 'clamp(38px, 4.8vw, 70px)' : 'clamp(42px, 5.35vw, 88px)',
+                              fontSize: compactHeight ? 'clamp(34px, 4.4vw, 58px)' : 'clamp(38px, 4.9vw, 72px)',
                               fontWeight: 900,
                               fontStyle: 'italic',
                               letterSpacing: '-0.038em',
@@ -845,7 +884,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                               WebkitBackgroundClip: 'text',
                               backgroundClip: 'text',
                               color: 'transparent',
-                              filter: `drop-shadow(0 0 ${28 + bloom * 22}px rgba(32,230,255,${0.18 + backgroundGlow * 0.16}))`,
+                              filter: `drop-shadow(0 0 ${18 + bloom * 14}px rgba(32,230,255,${0.14 + backgroundGlow * 0.12}))`,
                               display: 'inline-block',
                               paddingLeft: '0.035em',
                               paddingRight: '0.16em',
@@ -861,7 +900,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                               className={klass}
                               style={{
                                 fontFamily: '"Arial Black", "Arial Bold", sans-serif',
-                                fontSize: compactHeight ? 'clamp(38px, 5vw, 70px)' : 'clamp(44px, 5.8vw, 92px)',
+                                fontSize: compactHeight ? 'clamp(34px, 4.4vw, 58px)' : 'clamp(38px, 5.1vw, 74px)',
                                 fontWeight: 900,
                                 fontStyle: 'italic',
                                 letterSpacing: '-0.038em',
@@ -870,7 +909,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                                 color: klass.endsWith('r') ? UI.rose : UI.cyan,
                                 position: 'absolute',
                                 inset: 0,
-                                 opacity: glitchIntensity > 0.22 ? 0.08 + glitchIntensity * 0.08 : 0,
+                                 opacity: glitchIntensity > 0.28 ? 0.05 + glitchIntensity * 0.05 : 0,
                                  mixBlendMode: 'screen',
                                  pointerEvents: 'none',
                                  paddingLeft: '0.035em',
@@ -882,85 +921,115 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             </h1>
                           ))}
                         </div>
-                        <p className="menu-copy mt-3 max-w-[820px] text-[10px] font-black uppercase leading-[1.6] tracking-[0.09em] text-sky-100/48 md:text-[11px] xl:text-[12px]">
-                          Evolve fast. Control the grid. Leave the arena looking traumatised.
+                        <p className="menu-copy mt-3 max-w-[760px] text-[10px] font-black uppercase leading-[1.55] tracking-[0.08em] text-sky-100/46 md:text-[11px]">
+                          Enter the arena, pick a mode, and launch. Everything else stays out of the way.
                         </p>
                       </div>
 
-                      {latestUpdate && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            playClick();
-                            setShowUpdateHistory(true);
-                          }}
-                          onMouseEnter={playHover}
-                          className="min-w-0 rounded-2xl border border-violet-300/18 bg-[linear-gradient(135deg,rgba(36,24,66,0.62),rgba(18,22,42,0.92))] px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-violet-300/32"
-                        >
-                          <div className="menu-copy text-[8px] font-black uppercase leading-[1.3] tracking-[0.12em] text-violet-200/64">Latest Update</div>
-                          <div className="menu-copy mt-1 break-words text-[11px] font-black uppercase leading-[1.35] tracking-[0.045em] text-cyan-50/90">{latestUpdate.title}</div>
-                          <div className="menu-copy mt-2 text-[8px] font-bold uppercase leading-[1.3] tracking-[0.08em] text-sky-100/40">{latestUpdate.date}</div>
-                        </button>
-                      )}
-                    </div>
-                  </Panel>
-
-                  <Panel bodyClassName="p-0" className="min-h-0 overflow-hidden">
-                    <div
-                      className="relative flex h-full min-h-[220px] items-center justify-center overflow-hidden p-3"
-                      style={{
-                        background: `
-                          radial-gradient(circle at center, rgba(32,230,255,${0.08 + backgroundGlow * 0.12}), transparent 58%),
-                          radial-gradient(circle at 50% 56%, rgba(255,213,79,${0.02 + reactorPulse * 0.08}), transparent 22%)
-                        `,
-                        boxShadow: `inset 0 0 ${28 + bloom * 24}px rgba(32,230,255,${0.04 + backgroundGlow * 0.06})`,
-                        contain: 'layout paint style',
-                        transform: 'translateZ(0)',
-                      }}
-                    >
-                      <MenuMusicVisualizer snapshot={musicSnapshot} variant="hero" />
-                      <div
-                        className="absolute inset-x-10 top-1/2 h-px bg-gradient-to-r from-transparent via-cyan-300/20 to-transparent"
-                        style={{ opacity: 0.45 + scanlineIntensity * 0.24 }}
-                      />
-                      <div
-                        className="absolute inset-y-8 left-1/2 w-px bg-gradient-to-b from-transparent via-teal-300/14 to-transparent"
-                        style={{ opacity: 0.42 + reactorPulse * 0.18 }}
-                      />
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                        <div className="rounded-xl border border-cyan-300/12 bg-cyan-400/[0.05] px-3 py-2">
+                          <div className="menu-copy text-[8px] font-black uppercase tracking-[0.14em] text-cyan-200/62">Mode</div>
+                          <div className="menu-copy mt-1 text-[10px] font-black uppercase tracking-[0.06em] text-cyan-50/90">{modeMeta.title}</div>
+                        </div>
+                        <div className="rounded-xl border border-cyan-300/12 bg-cyan-400/[0.05] px-3 py-2">
+                          <div className="menu-copy text-[8px] font-black uppercase tracking-[0.14em] text-cyan-200/62">Pilot</div>
+                          <div className="menu-copy mt-1 text-[10px] font-black uppercase tracking-[0.06em] text-cyan-50/90">{playerName || user?.username || 'Guest'}</div>
+                        </div>
+                        {latestUpdate && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              playClick();
+                              setShowUpdateHistory(true);
+                            }}
+                            onMouseEnter={playHover}
+                            className="rounded-xl border border-violet-300/18 bg-violet-400/[0.06] px-3 py-2 text-left transition hover:-translate-y-0.5 hover:border-violet-300/30"
+                          >
+                            <div className="menu-copy text-[8px] font-black uppercase tracking-[0.14em] text-violet-200/64">Update</div>
+                            <div className="menu-copy mt-1 text-[10px] font-black uppercase tracking-[0.06em] text-cyan-50/90">{latestUpdate.date}</div>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </Panel>
 
                   <Panel bodyClassName="p-0" className="shrink-0">
-                    <div className="grid gap-2.5 p-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(235px,285px)_minmax(250px,320px)] 2xl:grid-cols-[minmax(0,1fr)_minmax(235px,285px)_minmax(220px,270px)_minmax(250px,320px)]">
-                      <div className="min-w-0 rounded-xl border border-cyan-300/10 bg-sky-950/20 p-3">
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/18 bg-cyan-400/[0.08]"><Pencil className="h-4 w-4 text-cyan-300" /></div>
-                          <div className="min-w-0">
-                            <div className="break-words text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200/78">Callsign</div>
-                            <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/30">Name shown in the arena</div>
+                    <div className="main-menu-control-grid grid gap-2.5 p-2.5 xl:grid-cols-[minmax(0,1fr)_290px] 2xl:grid-cols-[minmax(0,1fr)_320px]">
+                      <div className="grid gap-2.5">
+                        <div className="rounded-xl border border-cyan-300/10 bg-sky-950/20 p-3">
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-300/18 bg-cyan-400/[0.08]"><Pencil className="h-4 w-4 text-cyan-300" /></div>
+                            <div className="min-w-0">
+                              <div className="break-words text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200/78">Callsign</div>
+                              <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/30">Name shown in the arena</div>
+                            </div>
                           </div>
+                          <input
+                            type="text"
+                            placeholder="Choose your callsign"
+                            value={playerName}
+                            onChange={(event) => setPlayerName(event.target.value.slice(0, 15))}
+                            maxLength={15}
+                            spellCheck={false}
+                            autoComplete="off"
+                            className="mt-3 w-full min-w-0 rounded-xl border border-cyan-300/12 bg-slate-950/55 px-3 py-3 uppercase outline-none transition placeholder:text-sky-200/18 focus:border-cyan-300/45"
+                            style={{
+                              fontFamily: '"Arial Black", sans-serif',
+                              fontSize: 14,
+                              fontWeight: 900,
+                              letterSpacing: '0.11em',
+                              color: user ? UI.teal : UI.ink,
+                              cursor: 'text',
+                            }}
+                          />
                         </div>
-                        <input
-                          type="text"
-                          placeholder="Choose your callsign"
-                          value={playerName}
-                          onChange={(event) => setPlayerName(event.target.value.slice(0, 15))}
-                          maxLength={15}
-                          spellCheck={false}
-                          autoComplete="off"
-                          className="mt-3 w-full min-w-0 rounded-xl border border-cyan-300/12 bg-slate-950/55 px-3 py-3 uppercase outline-none transition placeholder:text-sky-200/18 focus:border-cyan-300/45"
-                          style={{
-                            fontFamily: '"Arial Black", sans-serif',
-                            fontSize: 14,
-                            fontWeight: 900,
-                            letterSpacing: '0.11em',
-                            color: user ? UI.teal : UI.ink,
-                            cursor: 'text',
-                          }}
-                        />
+
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="rounded-xl border p-3" style={{ borderColor: modeMeta.border, background: modeMeta.fill }}>
+                            <div className="break-words text-[8px] font-black uppercase tracking-[0.16em]" style={{ color: modeMeta.color }}>Selected Mode</div>
+                            <div className="mt-1 break-words text-sm font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/90">{modeMeta.title}</div>
+                            <p className="mt-1.5 break-words text-[9px] font-bold uppercase leading-relaxed tracking-[0.07em] text-sky-100/42">{modeMeta.desc}</p>
+                            {isTeamsMode && (
+                              <div className="mt-2 rounded-lg border px-2.5 py-2" style={{ borderColor: teamMeta.border, background: teamMeta.bg }}>
+                                <div className="break-words text-[8px] font-black uppercase tracking-[0.14em]" style={{ color: teamMeta.color }}>Team</div>
+                                <div className="mt-1 break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/82">{teamMeta.label}</div>
+                              </div>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              playClick();
+                              setShowLeaderboard(true);
+                            }}
+                            onMouseEnter={playHover}
+                            className="rounded-xl border border-cyan-300/10 bg-slate-950/45 p-3 text-left transition hover:-translate-y-0.5 hover:border-cyan-300/24"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="break-words text-[8px] font-black uppercase tracking-[0.16em] text-cyan-200/78">Leaderboard</div>
+                                <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/30">
+                                  Open centered ranking view
+                                </div>
+                              </div>
+                              <div className="shrink-0 rounded-full border border-cyan-300/12 bg-cyan-400/[0.07] px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-cyan-100/70">
+                                {topScores.length}
+                              </div>
+                            </div>
+                            <div className="mt-3 flex items-center justify-between rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-2.5">
+                              <div className="menu-copy text-[8px] font-black uppercase tracking-[0.14em] text-cyan-50/84">
+                                {topScores[0]?.name || 'No top pilot yet'}
+                              </div>
+                              <div className="text-[8px] font-black uppercase tracking-[0.12em] text-sky-100/40">
+                                {topScores[0] ? `${safeNumber(topScores[0].score).toLocaleString()} pts` : 'Standby'}
+                              </div>
+                            </div>
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="grid min-w-0 gap-2">
+                      <div className="grid min-w-0 content-start gap-2">
                         <button
                           type="submit"
                           disabled={!deploymentReady}
@@ -1007,101 +1076,66 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                           </div>
                           <Radar className={`h-4 w-4 shrink-0 ${spectateAvailable ? 'text-teal-300/80' : 'text-slate-600'}`} />
                         </button>
-                      </div>
 
-                      <div className="rounded-xl border p-3 2xl:block hidden" style={{ borderColor: modeMeta.border, background: modeMeta.fill }}>
-                        <div className="break-words text-[8px] font-black uppercase tracking-[0.16em]" style={{ color: modeMeta.color }}>{modeMeta.code}</div>
-                        <div className="mt-1 break-words text-sm font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/90">{modeMeta.title}</div>
-                        <p className="mt-1.5 break-words text-[9px] font-bold uppercase leading-relaxed tracking-[0.07em] text-sky-100/42">{modeMeta.desc}</p>
-                        {isTeamsMode && (
-                          <div className="mt-2 rounded-lg border px-2.5 py-2" style={{ borderColor: teamMeta.border, background: teamMeta.bg }}>
-                            <div className="break-words text-[8px] font-black uppercase tracking-[0.14em]" style={{ color: teamMeta.color }}>Selected Team</div>
-                            <div className="mt-1 break-words text-[10px] font-black uppercase leading-relaxed tracking-[0.06em] text-cyan-50/82">{teamMeta.label}</div>
+                        <div className="rounded-xl border border-cyan-300/10 bg-slate-950/45 p-3">
+                          <div className="menu-copy text-[8px] font-black uppercase tracking-[0.14em] text-cyan-200/62">Live Visualizer</div>
+                          <div className="mt-3 relative min-h-[170px] overflow-hidden rounded-xl border border-cyan-300/10 bg-slate-950/60">
+                            <MenuMusicVisualizer snapshot={musicSnapshot} variant="panel" />
                           </div>
-                        )}
-                      </div>
-
-                      <div className="min-w-0 rounded-xl border border-cyan-300/10 bg-slate-950/45 p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="break-words text-[8px] font-black uppercase tracking-[0.16em] text-cyan-200/78">Top Agents</div>
-                            <div className="break-words text-[8px] font-bold uppercase leading-relaxed tracking-[0.08em] text-sky-100/30">Leaderboard uplink</div>
-                          </div>
-                          <div className="shrink-0 rounded-full border border-cyan-300/12 bg-cyan-400/[0.07] px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-cyan-100/70">
-                            {topScores.length}
-                          </div>
-                        </div>
-                        <div className="menu-scrollbar mt-3 grid max-h-[170px] content-start gap-1.5 overflow-y-auto pr-1">
-                          {topScores.length === 0 ? (
-                            <div className="flex items-center justify-center rounded-xl border border-cyan-300/10 bg-sky-950/20 px-3 py-5 text-center text-[9px] font-black uppercase tracking-[0.12em] text-sky-100/25">No data stream</div>
-                          ) : (
-                            topScores.map((entry, index) => <LeaderboardRow key={`${entry.name}-${index}`} entry={entry} index={index} />)
-                          )}
                         </div>
                       </div>
                     </div>
                   </Panel>
+
+                  <Panel title="Arena Setup" subtitle="Pick a mode and optional team">
+                    <div className="grid gap-3">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                        {MODE_CHOICES.map((mode) => (
+                          <ModeButton
+                            key={mode}
+                            mode={mode}
+                            active={gameMode === mode}
+                            onSelect={() => {
+                              playSelect();
+                              setGameMode(mode);
+                            }}
+                            onHover={() => {
+                              playHover();
+                              showTT(MODE_META[mode].title, MODE_META[mode].desc);
+                            }}
+                            onLeave={hideTT}
+                          />
+                        ))}
+                      </div>
+
+                      {isTeamsMode && (
+                        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                          {allowedTeams.map((team) => {
+                            const active = safeTeam === team;
+                            const canJoin = active || canJoinTeam(team);
+                            return (
+                              <TeamButton
+                                key={team}
+                                team={team}
+                                active={active}
+                                count={safeNumber(teamCounts?.[team])}
+                                canJoin={canJoin}
+                                onSelect={() => {
+                                  playSelect();
+                                  setSelectedTeam(team);
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </Panel>
                 </form>
               </motion.main>
-
-              <motion.aside variants={slideRight} className="grid min-h-0 min-w-0 grid-rows-[auto_auto] gap-2.5 overflow-hidden">
-                <Panel title="Arena Setup" subtitle="Mode and team grouped">
-                  <div className="grid gap-3">
-                    <div className="grid grid-cols-2 gap-2">
-                      {MODE_CHOICES.map((mode) => (
-                        <ModeButton
-                          key={mode}
-                          mode={mode}
-                          active={gameMode === mode}
-                          onSelect={() => {
-                            playSelect();
-                            setGameMode(mode);
-                          }}
-                          onHover={() => {
-                            playHover();
-                            showTT(MODE_META[mode].title, MODE_META[mode].desc);
-                          }}
-                          onLeave={hideTT}
-                        />
-                      ))}
-                    </div>
-
-                    {isTeamsMode && (
-                      <div className="grid grid-cols-2 gap-2">
-                        {allowedTeams.map((team) => {
-                          const active = safeTeam === team;
-                          const canJoin = active || canJoinTeam(team);
-                          return (
-                            <TeamButton
-                              key={team}
-                              team={team}
-                              active={active}
-                              count={safeNumber(teamCounts?.[team])}
-                              canJoin={canJoin}
-                              onSelect={() => {
-                                playSelect();
-                                setSelectedTeam(team);
-                              }}
-                            />
-                          );
-                        })}
-                      </div>
-                    )}
-
-                  </div>
-                </Panel>
-
-                <Panel title="Controls" subtitle="Fast reference">
-                  <div className="grid gap-1.5">
-                    <ControlRow label="Move" keyLabel="WASD" desc="Navigate grid" />
-                    <ControlRow label="Fire" keyLabel="LMB" desc="Primary weapon" />
-                    <ControlRow label="Observe" keyLabel="A / D" desc="Spectate cycle" />
-                  </div>
-                </Panel>
-              </motion.aside>
             </div>
 
-            <footer className="flex shrink-0 flex-col gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/42 px-3 py-2 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between">
+            <footer className="flex shrink-0 flex-col gap-1.5 rounded-2xl border border-cyan-300/10 bg-slate-950/42 px-3 py-1.5 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between">
               <div className="menu-copy text-[8px] font-black uppercase leading-[1.35] tracking-[0.12em] text-sky-100/38">Secure Protocol / Build 4.2.8 Origin</div>
               <div className="flex shrink-0 items-center gap-3">
                 <button type="button" onClick={() => { playClick(); setShowPrivacy(true); }} className="text-[9px] font-black uppercase tracking-[0.12em] text-cyan-300/82 transition hover:text-cyan-200">Privacy</button>
@@ -1139,6 +1173,16 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
             .vextor-menu button {
               max-width: 100%;
+            }
+
+            .main-menu-shell {
+              min-height: 0;
+              overflow: hidden;
+            }
+
+            .main-menu-grid,
+            .main-menu-control-grid {
+              min-height: 0;
             }
 
             .vextor-logo-shell {
@@ -1209,6 +1253,14 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
             @media (max-width: 1023px) {
               .vextor-menu .grid { min-height: auto; }
+              .main-menu-shell {
+                height: 100%;
+                max-height: 100%;
+                padding-bottom: 0.75rem;
+              }
+              .main-menu-grid {
+                align-content: start;
+              }
             }
 
             @media (max-height: 840px) and (min-width: 1024px) {
@@ -1228,6 +1280,16 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             }
 
             @media (max-width: 767px) {
+              .main-menu-shell {
+                gap: 0.65rem;
+                padding-left: 0.75rem;
+                padding-right: 0.75rem;
+                padding-top: 0.65rem;
+                padding-bottom: 0.65rem;
+              }
+              .main-menu-control-grid {
+                grid-template-columns: minmax(0, 1fr);
+              }
               .vextor-logo-shell {
                 max-width: 100%;
                 padding-right: 0.72rem;
@@ -1238,10 +1300,19 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 letter-spacing: -0.03em !important;
               }
             }
+
+            @media (max-height: 760px) {
+              .main-menu-shell {
+                gap: 0.55rem;
+                padding-top: 0.55rem;
+                padding-bottom: 0.55rem;
+              }
+            }
           `}</style>
 
           <PolicyModal open={showPrivacy} type="privacy" onClose={() => setShowPrivacy(false)} />
           <PolicyModal open={showTos} type="terms" onClose={() => setShowTos(false)} />
+          <LeaderboardModal open={showLeaderboard} entries={topScores} onClose={() => setShowLeaderboard(false)} />
         </motion.div>
       )}
     </AnimatePresence>

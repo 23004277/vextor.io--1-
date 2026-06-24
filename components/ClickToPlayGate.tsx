@@ -12,8 +12,15 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
   return (
     <motion.button
       type="button"
-      aria-label="Click to play"
+      aria-label="Enter the command deck"
+      autoFocus
       onClick={() => void onActivate()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          void onActivate();
+        }
+      }}
       disabled={activating}
       initial={{ opacity: 1 }}
       animate={{
@@ -86,16 +93,16 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
           ease: GATE_EASE,
         }}
       >
-        <div className="rounded-full border border-cyan-300/25 bg-cyan-300/5 px-5 py-2 text-[11px] font-black uppercase tracking-[0.5em] text-cyan-100/80 shadow-[0_0_45px_rgba(34,211,238,0.14)]">
+        <div className="rounded-full border border-cyan-300/25 bg-cyan-300/5 px-5 py-2 text-[10px] font-black uppercase tracking-[0.28em] text-cyan-100/80 shadow-[0_0_45px_rgba(34,211,238,0.14)]">
           VEXTOR ONLINE
         </div>
 
-        <h1 className="select-none text-[clamp(3rem,8vw,6.5rem)] font-black uppercase tracking-[0.22em] text-white drop-shadow-[0_0_32px_rgba(34,211,238,0.55)]">
-          Click To Play
+        <h1 className="select-none text-[clamp(2.7rem,7vw,5.7rem)] font-black uppercase tracking-[0.12em] text-white drop-shadow-[0_0_32px_rgba(34,211,238,0.55)]">
+          Enter Command
         </h1>
 
-        <p className="max-w-[42rem] text-[clamp(0.95rem,1.2vw,1.08rem)] leading-7 text-cyan-100/62">
-          Unlock the soundtrack and bring the command deck online.
+        <p className="max-w-[34rem] text-[clamp(0.92rem,1.12vw,1.02rem)] leading-7 text-cyan-100/62">
+          Unlock audio and hand off into the live command deck.
         </p>
 
         <div className="h-[2px] w-[28rem] max-w-[70vw] overflow-hidden rounded-full bg-white/10">
@@ -110,7 +117,7 @@ export function ClickToPlayGate({ activating, onActivate }: ClickToPlayGateProps
           />
         </div>
 
-        <div className="text-[11px] font-bold uppercase tracking-[0.24em] text-white/42">
+        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/42">
           Click anywhere or press Enter / Space
         </div>
       </motion.div>

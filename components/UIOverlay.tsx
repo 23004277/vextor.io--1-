@@ -1,13 +1,15 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { BossRushLoadout, GameMode, GameSettings, GameState, HighScoreEntry, PlayerState, SecondarySector, StatType, TankClass, Team, ShapeType, ShapeRarity } from '../types';
+import { BossRushLoadout, GameMode, GameSettings, GameState, HighScoreEntry, PlayerState, SecondarySector, StatType, TankClass, Team, ShapeType, ShapeRarity, type SandboxBossAbilityInfo } from '../types';
 import { CLASS_TREE, COLORS, STAT_COLORS, TANK_CONFIGS } from '../constants';
 import { TankPreview } from './TankPreview';
 import { ShapePreview } from './ShapePreview';
 import { TacticalMinimap } from './TacticalMinimap';
 import { formatScoreValue } from '../services/MathUtils';
-import { Search, SlidersHorizontal, FlaskConical, Cpu, Boxes, MousePointer2, HeartPulse, Droplets } from 'lucide-react';
+import { getSandboxBossForm } from '../services/sandbox/SandboxBossForms';
+import { Search, SlidersHorizontal, FlaskConical, Cpu, Boxes, MousePointer2, HeartPulse, Droplets, Crown } from 'lucide-react';
+import { COMMAND_THEME_CLASS } from './uiTheme';
 
 interface UIOverlayProps {
   gameState: GameState;
@@ -38,7 +40,7 @@ const STAT_ORDER = [
   StatType.MAX_SHIELD,
 ];
 
-type SandboxTab = 'SYSTEM' | 'RESEARCH' | 'SPAWN';
+type SandboxTab = 'SYSTEM' | 'RESEARCH' | 'BOSS' | 'SPAWN';
 const SANDBOX_RESEARCH_ICON_REV = '2026-06-11-sandbox-preview-remaster';
 const isTrapperBranchClass = (cls: TankClass): boolean =>
   cls === TankClass.TRAPPER ||
@@ -50,6 +52,7 @@ const isTrapperBranchClass = (cls: TankClass): boolean =>
 const SANDBOX_TAB_META: Record<SandboxTab, { label: string; icon: any; hint: string }> = {
   SYSTEM: { label: 'World', icon: Cpu, hint: 'Simulation controls' },
   RESEARCH: { label: 'Tanks', icon: FlaskConical, hint: 'Class research and swap' },
+  BOSS: { label: 'Boss Rush', icon: Crown, hint: 'Playable boss protocols' },
   SPAWN: { label: 'Entities', icon: Boxes, hint: 'Spawner and templates' },
 };
 
@@ -86,6 +89,8 @@ const CLASS_CATEGORIES = [
             TankClass.TWIN, 
             TankClass.TRIPLE_SHOT, 
             TankClass.TWIN_FLANK, 
+            TankClass.TRIPLE_TANK,
+            TankClass.OCTO_TANK,
             TankClass.PENTA_SHOT, 
             TankClass.SPREAD_SHOT, 
             TankClass.TRIPLE_TWIN
@@ -99,8 +104,7 @@ const CLASS_CATEGORIES = [
             TankClass.HUNTER, 
             TankClass.RANGER, 
             TankClass.STALKER, 
-            TankClass.X_HUNTER, 
-            TankClass.STREAMLINER
+            TankClass.X_HUNTER
         ]
     },
     {
@@ -112,7 +116,8 @@ const CLASS_CATEGORIES = [
             TankClass.GUNNER, 
             TankClass.ANNIHILATOR, 
             TankClass.HYBRID, 
-            TankClass.AUTO_GUNNER
+            TankClass.AUTO_GUNNER,
+            TankClass.STREAMLINER
         ]
     },
     {
@@ -123,7 +128,6 @@ const CLASS_CATEGORIES = [
             TankClass.QUAD_TANK, 
             TankClass.BOOSTER, 
             TankClass.FIGHTER, 
-            TankClass.OCTO_TANK, 
             TankClass.TRAPPER,
             TankClass.DUAL_TRAPPER,
             TankClass.MACHINE_GUN_TRAPPER,
@@ -131,8 +135,7 @@ const CLASS_CATEGORIES = [
             TankClass.TRIPLE_TRAPPER,
             TankClass.OVERSEER, 
             TankClass.OVERLORD, 
-            TankClass.MANAGER, 
-            TankClass.TRIPLE_TANK
+            TankClass.MANAGER
         ]
     },
     {
@@ -148,11 +151,11 @@ const CLASS_CATEGORIES = [
 ];
 
 const SANDBOX_BOSS_CLASSES: TankClass[] = [
-  TankClass.COLOSSAL,
-  TankClass.LEVIATHAN,
-  TankClass.WARLORD,
-  TankClass.CELESTIAL,
-  TankClass.OBLITERATOR,
+  TankClass.AEGIS_GATEKEEPER,
+  TankClass.VANTA_SPLITTER,
+  TankClass.PYRE_REACTOR,
+  TankClass.IRON_EXECUTIONER,
+  TankClass.GRAND_SINGULARITY,
 ];
 
 const SANDBOX_ELITE_CLASS_TEMPLATES: TankClass[] = [
@@ -193,6 +196,33 @@ const BOSS_RUSH_CATEGORY_META: Record<string, { hint: string; tone: string }> = 
 };
 
 const formatTankClassLabel = (klass: TankClass): string => String(klass).replace(/_/g, ' ');
+const SANDBOX_BOSS_LABELS: Partial<Record<TankClass, { name: string; note: string }>> = {
+  [TankClass.AEGIS_GATEKEEPER]: { name: 'Aegis Gatekeeper', note: 'Vault sentinel with squared lock geometry.' },
+  [TankClass.VANTA_SPLITTER]: { name: 'Vanta Splitter', note: 'Fracture boss with multi-angle pressure.' },
+  [TankClass.PYRE_REACTOR]: { name: 'Pyre Reactor', note: 'Core furnace with arena-control pressure.' },
+  [TankClass.IRON_EXECUTIONER]: { name: 'Iron Executioner', note: 'Verdict engine with heavy punishment patterns.' },
+  [TankClass.GRAND_SINGULARITY]: { name: 'The Grand Singularity', note: 'Final boss with gravitational collapse pressure.' },
+};
+
+const getSandboxBossLabel = (klass: TankClass): string =>
+  SANDBOX_BOSS_LABELS[klass]?.name ?? formatTankClassLabel(klass);
+const getSandboxBossRushKey = (klass: TankClass): 'gatekeeper' | 'splitter' | 'reactor' | 'executioner' | 'grand_singularity' => {
+  if (klass === TankClass.AEGIS_GATEKEEPER) return 'gatekeeper';
+  if (klass === TankClass.VANTA_SPLITTER) return 'splitter';
+  if (klass === TankClass.PYRE_REACTOR) return 'reactor';
+  if (klass === TankClass.IRON_EXECUTIONER) return 'executioner';
+  return 'grand_singularity';
+};
+const getSandboxPreviewBarrels = (klass: TankClass): number[][] | undefined =>
+  getSandboxBossForm(klass)?.barrels;
+
+const COMMAND_SHELL = COMMAND_THEME_CLASS.shell;
+const COMMAND_SHELL_SOFT = COMMAND_THEME_CLASS.shellSoft;
+const COMMAND_SHELL_INSET = COMMAND_THEME_CLASS.shellInset;
+const COMMAND_HEADER = COMMAND_THEME_CLASS.header;
+const COMMAND_HEADER_SOFT = COMMAND_THEME_CLASS.headerSoft;
+const COMMAND_PILL = COMMAND_THEME_CLASS.pill;
+const COMMAND_PILL_MUTED = COMMAND_THEME_CLASS.pillMuted;
 
 const getSandboxPreviewPose = (cls: TankClass): { turretRotation: number; chassisRotation: number } => {
   if (cls === TankClass.TRAPPER) return { turretRotation: -8, chassisRotation: 4 };
@@ -203,7 +233,18 @@ const getSandboxPreviewPose = (cls: TankClass): { turretRotation: number; chassi
   if (cls === TankClass.DESTROYER || cls === TankClass.ANNIHILATOR) return { turretRotation: -10, chassisRotation: 3 };
   if (cls === TankClass.GUNNER || cls === TankClass.AUTO_GUNNER) return { turretRotation: 10, chassisRotation: -4 };
   if (cls === TankClass.OVERLORD || cls === TankClass.OVERSEER || cls === TankClass.MANAGER) return { turretRotation: -14, chassisRotation: 8 };
-  if (cls === TankClass.COLOSSAL || cls === TankClass.LEVIATHAN || cls === TankClass.WARLORD || cls === TankClass.CELESTIAL || cls === TankClass.OBLITERATOR) {
+  if (
+    cls === TankClass.COLOSSAL ||
+    cls === TankClass.LEVIATHAN ||
+    cls === TankClass.WARLORD ||
+    cls === TankClass.CELESTIAL ||
+    cls === TankClass.OBLITERATOR ||
+    cls === TankClass.AEGIS_GATEKEEPER ||
+    cls === TankClass.VANTA_SPLITTER ||
+    cls === TankClass.PYRE_REACTOR ||
+    cls === TankClass.IRON_EXECUTIONER ||
+    cls === TankClass.GRAND_SINGULARITY
+  ) {
     return { turretRotation: -16, chassisRotation: 6 };
   }
   return { turretRotation: -6, chassisRotation: 2 };
@@ -214,7 +255,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     score, level, xp, maxXp, stats, availableStatPoints, mainClass, currentClass, secondarySector, isDead, fps, killFeed, 
     leaderboard, health, maxHealth, camera, mapSize, gameMode, 
     notifications, inVoid, voidTimeRemaining, isTransformed, transformationTime, 
-    transformationReady, activeBuffs, minimapMarkers, sandboxConfig, primedSpawn, abilityHud,
+    transformationReady, activeBuffs, minimapMarkers, sandboxConfig, primedSpawn, abilityHud, sandboxBossHud,
     playerState, evolutionTransitionRemaining, bossChoices, enemyZoneWarningLevel, enemyZoneWarningText,
     bloodDrainLive, bloodDrainStacks, bloodDrainSession, rebirthEligible, dominionScores, dominionOwnedCount, dominionTimeRemaining, dominionZones, bossRush,
     botChatBubbles = [], deathPresentation, deathKiller,
@@ -292,15 +333,18 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   const showSectorChoiceUI = playerState === PlayerState.SECTOR_SELECTION;
   const showStandardUpgrades = !showBossChoiceUI && !showSectorChoiceUI && (unlockableClasses.length > 0 && !isTransformed) && gameMode !== GameMode.SANDBOX;
   const isRebirthClass = currentClass === TankClass.COLOSSAL || currentClass === TankClass.LEVIATHAN || currentClass === TankClass.WARLORD || currentClass === TankClass.CELESTIAL || currentClass === TankClass.OBLITERATOR;
-  const showStatUpgradeUI = showStatsMenu && !showStandardUpgrades && !isRebirthClass;
   const bossRushLoadout = bossRush?.loadout;
   const bossRushSelectionActive = gameMode === GameMode.BOSS_RUSH && !!bossRush?.loadoutEditable && !!bossRushLoadout && !!onBossRushLoadoutChange;
+  const sandboxBossProtocolClass = sandboxBossHud && SANDBOX_BOSS_CLASSES.includes(currentClass as TankClass)
+    ? (currentClass as TankClass)
+    : null;
+  const showStatUpgradeUI = showStatsMenu && !showStandardUpgrades && !isRebirthClass && !sandboxBossProtocolClass;
   const bossRushSelectedCategory = useMemo(
     () => BOSS_RUSH_CLASS_CATEGORIES.find((category) => category.classes.includes(bossRushLoadout?.classType as TankClass))?.name ?? 'Custom',
     [bossRushLoadout],
   );
   const rightHudWidthClass = bossRushSelectionActive
-    ? 'w-[min(25rem,calc(100vw-1rem))] md:w-[24rem] xl:w-[25rem]'
+    ? 'w-[min(22.5rem,calc(100vw-1rem))] md:w-[22rem] xl:w-[23rem]'
     : 'w-[244px]';
 
   const handleBossRushClassPick = (classType: TankClass) => {
@@ -360,6 +404,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
   }, []);
 
   const topFiveLeaderboard = useMemo(() => leaderboard.slice(0, 5), [leaderboard]);
+  const isSandboxMode = gameMode === GameMode.SANDBOX;
   const isTeamMode = gameMode === GameMode.TEAMS || gameMode === GameMode.DOMINION;
   const dominionScoreRows = useMemo(() => {
     if (gameMode !== GameMode.DOMINION) return [];
@@ -622,7 +667,612 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
     : abilityHud?.id === 'sanguine_pact'
       ? Droplets
       : MousePointer2;
+  const sandboxBossCombinedMax = sandboxBossHud ? Math.max(1, sandboxBossHud.maxHealth + Math.max(0, sandboxBossHud.maxShield ?? 0)) : 1;
+  const sandboxBossCombinedCurrent = sandboxBossHud ? Math.max(0, sandboxBossHud.health) + Math.max(0, sandboxBossHud.shield ?? 0) : 0;
+  const sandboxBossCombinedPercent = sandboxBossHud ? Math.max(0, Math.min(100, (sandboxBossCombinedCurrent / sandboxBossCombinedMax) * 100)) : 0;
+  const sandboxBossShieldSharePercent = sandboxBossHud && sandboxBossCombinedCurrent > 0
+    ? Math.max(0, Math.min(100, (Math.max(0, sandboxBossHud.shield ?? 0) / sandboxBossCombinedMax) * 100))
+    : 0;
+  const sandboxBossAbilityOrder: Array<SandboxBossAbilityInfo['trigger']> = ['M1', 'E', 'Q', 'X', 'R', 'PASSIVE'];
+  const orderedSandboxBossAbilities = sandboxBossHud
+    ? [...sandboxBossHud.abilities].sort((a, b) => sandboxBossAbilityOrder.indexOf(a.trigger) - sandboxBossAbilityOrder.indexOf(b.trigger))
+    : [];
+  const sandboxBossCoreAbilities = orderedSandboxBossAbilities.filter((ability) => ability.trigger === 'M1' || ability.trigger === 'E');
+  const sandboxBossPatternAbilities = orderedSandboxBossAbilities.filter((ability) => ability.trigger === 'Q' || ability.trigger === 'X' || ability.trigger === 'R');
+  const sandboxBossActiveAbilities = orderedSandboxBossAbilities.filter((ability) => ability.trigger !== 'PASSIVE');
+  const sandboxBossPassiveAbilities = orderedSandboxBossAbilities.filter((ability) => ability.trigger === 'PASSIVE');
+  const selectedSandboxBossHeavy = sandboxBossHud?.heavyOptions?.find((option) => option.selected) ?? sandboxBossHud?.heavyOptions?.[0] ?? null;
+  const getSandboxBossTriggerTone = (trigger: SandboxBossAbilityInfo['trigger']) => {
+    if (trigger === 'PASSIVE') return 'text-white/40 border-white/10 bg-white/[0.06]';
+    if (trigger === 'R') return 'text-fuchsia-100 border-fuchsia-300/30 bg-fuchsia-400/12';
+    if (trigger === 'X') return 'text-amber-100 border-amber-300/30 bg-amber-400/12';
+    if (trigger === 'E') return 'text-rose-100 border-rose-300/30 bg-rose-400/12';
+    if (trigger === 'M1') return 'text-sky-100 border-sky-300/30 bg-sky-400/12';
+    return 'text-cyan-100 border-cyan-300/30 bg-cyan-400/12';
+  };
+  const getSandboxBossStateTone = (ability: SandboxBossAbilityInfo, ready: boolean) => {
+    if (ability.trigger === 'E') {
+      return ability.active
+        ? 'text-rose-100 border-rose-300/28 bg-rose-400/12'
+        : 'text-white/52 border-white/10 bg-white/[0.05]';
+    }
+    if (ability.active) return 'text-emerald-200 border-emerald-300/24 bg-emerald-400/12';
+    if (ready) return 'text-cyan-100 border-cyan-300/28 bg-cyan-400/12';
+    return 'text-amber-100 border-amber-300/28 bg-amber-400/12';
+  };
+  const getSandboxBossStateLabel = (ability: SandboxBossAbilityInfo, ready: boolean, activeSecs: number, cooldownSecs: number) => {
+    if (ability.trigger === 'E') return ability.active ? 'online' : 'offline';
+    return ability.active ? `${activeSecs}s active` : ready ? 'ready' : `${cooldownSecs}s`;
+  };
+  const renderSandboxBossAbilityCard = (ability: SandboxBossAbilityInfo, keyPrefix: string, compact = false) => {
+    const activeSecs = Math.max(0, Math.ceil(ability.activeRemaining || 0));
+    const cooldownSecs = Math.max(0, Math.ceil(ability.cooldownRemaining || 0));
+    const ready = !ability.active && (ability.cooldownTotal <= 0 || ability.cooldownRemaining <= 0);
+    const progress = ability.active
+      ? Math.max(0, Math.min(100, ((ability.activeRemaining || 0) / Math.max(1, ability.activeTotal || 1)) * 100))
+      : ability.cooldownTotal > 0
+        ? Math.max(0, Math.min(100, ((ability.cooldownTotal - ability.cooldownRemaining) / Math.max(1, ability.cooldownTotal)) * 100))
+        : 100;
+    const triggerTone = getSandboxBossTriggerTone(ability.trigger);
+    const stateTone = getSandboxBossStateTone(ability, ready);
+    const stateLabel = getSandboxBossStateLabel(ability, ready, activeSecs, cooldownSecs);
+    const barTone = ability.trigger === 'E'
+      ? (ability.active ? 'bg-[linear-gradient(90deg,#fb7185,#e879f9)]' : 'bg-white/18')
+      : ability.active
+        ? 'bg-[linear-gradient(90deg,#34d399,#22c55e)]'
+        : ready
+          ? 'bg-[linear-gradient(90deg,#22d3ee,#38bdf8)]'
+          : 'bg-[linear-gradient(90deg,#f59e0b,#fbbf24)]';
+
+    const shimmerOpacity = ability.active ? 0.28 : ready ? 0.22 : 0.12;
+
+    return (
+      <motion.div
+        key={`${keyPrefix}-${ability.id}`}
+        className={`rounded-[1.15rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.02))] ${compact ? 'px-3 py-3' : 'px-3.5 py-3.5'} shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]`}
+        initial={{ opacity: 0, y: 10, scale: 0.985 }}
+        animate={{
+          opacity: 1,
+          y: 0,
+          scale: ability.active ? [1, 1.01, 1] : 1,
+          boxShadow: ready
+            ? ['inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 rgba(34,211,238,0)', 'inset 0 1px 0 rgba(255,255,255,0.04), 0 0 24px rgba(34,211,238,0.08)', 'inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 rgba(34,211,238,0)']
+            : undefined,
+        }}
+        transition={{
+          duration: 0.28,
+          ease: 'easeOut',
+          scale: { duration: 1.4, repeat: ability.active ? Infinity : 0, ease: 'easeInOut' },
+          boxShadow: { duration: 1.8, repeat: ready ? Infinity : 0, ease: 'easeInOut' },
+        }}
+        whileHover={{ y: -2, scale: 1.01 }}
+      >
+        <div className="flex items-start gap-3">
+          <div className={`shrink-0 rounded-[0.95rem] border px-2.5 py-2 text-center ${triggerTone}`}>
+            <div className="text-[8px] font-black uppercase tracking-[0.2em] text-white/52">Key</div>
+            <div className="mt-1 text-[11px] font-black uppercase tracking-[0.14em]">{ability.trigger}</div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className={`${compact ? 'text-[9px]' : 'text-[10px]'} break-words font-black uppercase leading-tight tracking-[0.14em] text-white`}>
+                  {ability.name}
+                </div>
+                <div className="mt-1 break-words text-[9px] font-bold uppercase tracking-[0.12em] text-white/32">
+                  {ability.trigger === 'M1' ? 'Primary pressure cast' : ability.trigger === 'E' ? 'Boss-only drive toggle' : ability.trigger === 'R' ? 'Selected heavy pattern' : ability.trigger === 'PASSIVE' ? 'Passive battlefield effect' : 'Active protocol command'}
+                </div>
+              </div>
+              <div className={`shrink-0 rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] ${stateTone}`}>
+                {stateLabel}
+              </div>
+            </div>
+            <p className={`mt-2 ${compact ? 'text-[8px]' : 'text-[9px]'} leading-4 text-white/60`}>
+              {ability.description}
+            </p>
+            <div className="mt-3">
+              <div className="mb-1 flex items-center justify-between gap-2 text-[8px] font-black uppercase tracking-[0.16em] text-white/38">
+                <span>{ability.trigger === 'E' ? 'Drive State' : ability.active ? 'Active Window' : ability.cooldownTotal > 0 ? 'Cooldown Trace' : 'Status'}</span>
+                <span>{ability.trigger === 'E' ? (ability.active ? 'linked' : 'standby') : ability.active ? `${activeSecs}s` : ability.cooldownTotal > 0 ? `${cooldownSecs}s` : 'ready'}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full border border-white/10 bg-white/8">
+                <div className={`relative h-full overflow-hidden transition-all duration-150 ${barTone}`} style={{ width: `${progress}%` }}>
+                  <motion.div
+                    className="pointer-events-none absolute inset-y-0 w-10 bg-gradient-to-r from-transparent via-white/40 to-transparent"
+                    style={{ opacity: shimmerOpacity }}
+                    animate={{ x: ['-120%', '220%'] }}
+                    transition={{ duration: ability.active ? 1.1 : ready ? 1.8 : 2.4, repeat: Infinity, ease: 'linear' }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    );
+  };
+  const getSandboxBossRoleLabel = (ability: SandboxBossAbilityInfo) => {
+    if (ability.trigger === 'M1') return 'Pressure';
+    if (ability.trigger === 'E') return 'Drive';
+    if (ability.trigger === 'Q') return 'Core';
+    if (ability.trigger === 'X') return 'Utility';
+    if (ability.trigger === 'R') return 'Heavy';
+    return 'Passive';
+  };
+  const getSandboxBossStatusLabel = (ability: SandboxBossAbilityInfo) => {
+    const activeSecs = Math.max(0, Math.ceil(ability.activeRemaining || 0));
+    const cooldownSecs = Math.max(0, Math.ceil(ability.cooldownRemaining || 0));
+    const ready = !ability.active && (ability.cooldownTotal <= 0 || ability.cooldownRemaining <= 0);
+    if (ability.trigger === 'E') return ability.active ? 'ONLINE' : 'OFFLINE';
+    if (ability.active) return `CAST ${activeSecs}s`;
+    return ready ? 'READY' : `${cooldownSecs}s CD`;
+  };
+  const getSandboxBossProgress = (ability: SandboxBossAbilityInfo) => {
+    if (ability.active) {
+      return Math.max(0, Math.min(100, ((ability.activeRemaining || 0) / Math.max(1, ability.activeTotal || 1)) * 100));
+    }
+    if (ability.cooldownTotal > 0) {
+      return Math.max(0, Math.min(100, ((ability.cooldownTotal - ability.cooldownRemaining) / Math.max(1, ability.cooldownTotal)) * 100));
+    }
+    return 100;
+  };
+  const renderSandboxBossCommandCell = (
+    ability: SandboxBossAbilityInfo,
+    keyPrefix: string,
+    emphasis: 'major' | 'minor' | 'passive' = 'major'
+  ) => {
+    const triggerTone = getSandboxBossTriggerTone(ability.trigger);
+    const ready = !ability.active && (ability.cooldownTotal <= 0 || ability.cooldownRemaining <= 0);
+    const stateTone = getSandboxBossStateTone(ability, ready);
+    const progress = getSandboxBossProgress(ability);
+    const statusLabel = getSandboxBossStatusLabel(ability);
+    const roleLabel = getSandboxBossRoleLabel(ability);
+    const major = emphasis === 'major';
+    const passive = emphasis === 'passive';
+
+    return (
+      <motion.div
+        key={`${keyPrefix}-command-${ability.id}`}
+        className={`rounded-[1rem] border shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] ${
+          passive
+            ? 'border-white/10 bg-white/[0.03] px-3 py-2.5'
+            : major
+              ? 'border-fuchsia-300/14 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] px-3 py-2.5'
+              : 'border-white/10 bg-black/18 px-2.5 py-2'
+        }`}
+        initial={{ opacity: 0, y: 8, scale: 0.985 }}
+        animate={{
+          opacity: 1,
+          y: 0,
+          scale: ability.active ? [1, 1.012, 1] : 1,
+        }}
+        transition={{
+          duration: 0.24,
+          ease: 'easeOut',
+          scale: { duration: 1.2, repeat: ability.active ? Infinity : 0, ease: 'easeInOut' },
+        }}
+        whileHover={{ y: -2, scale: 1.01 }}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`shrink-0 rounded-md border px-1.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] ${triggerTone}`}>
+                {ability.trigger}
+              </span>
+              <span className="text-[7px] font-black uppercase tracking-[0.16em] text-white/34">
+                {roleLabel}
+              </span>
+            </div>
+            <div className={`mt-1 break-words font-black uppercase tracking-[0.12em] text-white ${major ? 'text-[9px] leading-4' : 'text-[8px] leading-3.5'}`}>
+              {ability.name}
+            </div>
+          </div>
+          <span className={`shrink-0 rounded-full border px-1.5 py-1 text-[7px] font-black uppercase tracking-[0.14em] ${stateTone}`}>
+            {statusLabel}
+          </span>
+        </div>
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full border border-white/10 bg-white/8">
+          <div
+            className={`relative h-full overflow-hidden transition-all duration-150 ${
+              ability.trigger === 'E'
+                ? (ability.active ? 'bg-[linear-gradient(90deg,#fb7185,#e879f9)]' : 'bg-white/18')
+                : ability.active
+                  ? 'bg-[linear-gradient(90deg,#34d399,#22c55e)]'
+                  : ready
+                    ? 'bg-[linear-gradient(90deg,#22d3ee,#38bdf8)]'
+                    : 'bg-[linear-gradient(90deg,#f59e0b,#fbbf24)]'
+            }`}
+            style={{ width: `${progress}%` }}
+          >
+            <motion.div
+              className="pointer-events-none absolute inset-y-0 w-8 bg-gradient-to-r from-transparent via-white/35 to-transparent"
+              animate={{ x: ['-120%', '220%'] }}
+              transition={{ duration: ready ? 1.6 : 2.2, repeat: Infinity, ease: 'linear' }}
+            />
+          </div>
+        </div>
+        {major && (
+          <div className="mt-2 line-clamp-2 text-[8px] leading-4 text-white/50">
+            {ability.description}
+          </div>
+        )}
+      </motion.div>
+    );
+  };
+  const renderSandboxBossAbilitySection = (
+    title: string,
+    subtitle: string,
+    badge: string,
+    abilities: SandboxBossAbilityInfo[],
+    keyPrefix: string,
+    compact: boolean,
+    tone: 'core' | 'pattern' | 'passive'
+  ) => {
+    if (abilities.length === 0) return null;
+    const toneClasses = tone === 'core'
+      ? {
+          shell: 'border-sky-300/12 bg-sky-400/[0.04]',
+          title: 'text-sky-100/82',
+          badge: 'border-sky-300/18 bg-sky-400/10 text-sky-100/90',
+        }
+      : tone === 'pattern'
+        ? {
+            shell: 'border-fuchsia-300/12 bg-fuchsia-400/[0.04]',
+            title: 'text-fuchsia-100/84',
+            badge: 'border-fuchsia-300/18 bg-fuchsia-400/10 text-fuchsia-100/90',
+          }
+        : {
+            shell: 'border-white/10 bg-white/[0.03]',
+            title: 'text-white/72',
+            badge: 'border-white/12 bg-white/[0.05] text-white/70',
+          };
+
+    return (
+      <div className={`rounded-[1.15rem] border ${compact ? 'p-2.5' : 'p-3'} ${toneClasses.shell}`}>
+        <div className={`${compact ? 'mb-2' : 'mb-3'} flex items-center justify-between gap-2`}>
+          <div className="min-w-0">
+            <div className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-[0.2em] ${toneClasses.title}`}>{title}</div>
+            <div className={`mt-1 ${compact ? 'text-[7px]' : 'text-[8px]'} font-bold uppercase tracking-[0.12em] text-white/34`}>{subtitle}</div>
+          </div>
+          <div className={`shrink-0 rounded-full border px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] ${toneClasses.badge}`}>
+            {badge}
+          </div>
+        </div>
+        <div className={`grid grid-cols-1 gap-2 ${compact ? '' : 'xl:grid-cols-2'}`}>
+          {abilities.map((ability) => renderSandboxBossAbilityCard(ability, keyPrefix, compact))}
+        </div>
+      </div>
+    );
+  };
+  const renderSandboxBossHeavyControls = (compact: boolean) => {
+    if (!sandboxBossHud?.heavyOptions || sandboxBossHud.heavyOptions.length === 0 || !selectedSandboxBossHeavy) return null;
+    return (
+      <div className={`rounded-[1.2rem] border border-fuchsia-300/12 bg-fuchsia-400/[0.04] ${compact ? 'p-3' : 'px-4 py-3'}`}>
+        <div className={`flex ${compact ? 'flex-col' : 'items-start'} justify-between gap-3`}>
+          <div className="min-w-0">
+            <div className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-[0.18em] text-fuchsia-100/86`}>
+              Heavy Pattern Routing
+            </div>
+            <p className={`mt-1 ${compact ? 'text-[8px]' : 'text-[8px]'} ${compact ? 'leading-4' : 'font-bold uppercase tracking-[0.12em]'} text-white/38`}>
+              Choose what `R` launches next, then cycle it live without leaving the fight.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <motion.button
+              onClick={() => {
+                playHover?.();
+                engine?.sound?.enable?.();
+                engine?.sound?.playUISelect?.();
+                engine.cycleSandboxBossHeavyAttack(-1);
+              }}
+              className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-white/70 transition-all hover:bg-white/[0.1] hover:text-white"
+              whileHover={{ y: -1, scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+            >
+              Prev
+            </motion.button>
+            <motion.button
+              onClick={() => {
+                playHover?.();
+                engine?.sound?.enable?.();
+                engine?.sound?.playUISelect?.();
+                engine.cycleSandboxBossHeavyAttack(1);
+              }}
+              className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-white/70 transition-all hover:bg-white/[0.1] hover:text-white"
+              whileHover={{ y: -1, scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+            >
+              Next
+            </motion.button>
+          </div>
+        </div>
+
+        <motion.div
+          className={`mt-3 rounded-[1.05rem] border border-fuchsia-300/14 bg-black/18 ${compact ? 'p-3' : 'p-3.5'}`}
+          animate={{
+            boxShadow: [
+              'inset 0 0 0 rgba(232,121,249,0), 0 0 0 rgba(232,121,249,0)',
+              'inset 0 0 22px rgba(232,121,249,0.08), 0 0 26px rgba(232,121,249,0.1)',
+              'inset 0 0 0 rgba(232,121,249,0), 0 0 0 rgba(232,121,249,0)',
+            ],
+          }}
+          transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className={`${compact ? 'text-[9px]' : 'text-[10px]'} break-words font-black uppercase tracking-[0.14em] text-white`}>
+                {selectedSandboxBossHeavy.name}
+              </div>
+              <div className="mt-1 text-[8px] font-black uppercase tracking-[0.16em] text-fuchsia-100/68">
+                Active `R` payload
+              </div>
+            </div>
+            <div className="shrink-0 rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-fuchsia-100/90">
+              Selected
+            </div>
+          </div>
+          <div className={`mt-2 ${compact ? 'text-[8px]' : 'text-[9px]'} leading-4 text-white/58`}>
+            {selectedSandboxBossHeavy.description}
+          </div>
+        </motion.div>
+
+        <div className={`mt-3 grid grid-cols-1 gap-1.5 ${compact ? '' : 'md:grid-cols-2'}`}>
+          {sandboxBossHud.heavyOptions.map((option, index) => (
+            <motion.button
+              key={`${compact ? 'compact' : 'expanded'}-heavy-${option.id}`}
+              onClick={() => {
+                playHover?.();
+                engine?.sound?.enable?.();
+                engine?.sound?.playUISelect?.();
+                engine.selectSandboxBossHeavyAttack(option.id);
+              }}
+              className={`rounded-[1rem] border px-3 py-2.5 text-left transition-all ${option.selected ? 'border-fuchsia-300/28 bg-fuchsia-400/12 text-white shadow-[0_0_0_1px_rgba(232,121,249,0.12)]' : 'border-white/10 bg-white/[0.02] text-white/66 hover:bg-white/[0.05]'}`}
+              whileHover={{ y: -2, scale: 1.01 }}
+              whileTap={{ scale: 0.985 }}
+              animate={option.selected ? { boxShadow: ['0 0 0 1px rgba(232,121,249,0.12)', '0 0 20px rgba(232,121,249,0.16)', '0 0 0 1px rgba(232,121,249,0.12)'] } : {}}
+              transition={{ boxShadow: { duration: 1.6, repeat: option.selected ? Infinity : 0, ease: 'easeInOut' } }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  {index < 5 && (
+                    <span className="shrink-0 rounded-md border border-fuchsia-300/18 bg-black/22 px-1.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-fuchsia-100/86">
+                      {index + 1}
+                    </span>
+                  )}
+                  <div className={`${compact ? 'text-[8px]' : 'text-[9px]'} break-words font-black uppercase tracking-[0.14em]`}>
+                    {option.name}
+                  </div>
+                </div>
+                {option.selected && (
+                  <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-fuchsia-100/90">
+                    R Selected
+                  </span>
+                )}
+              </div>
+              <div className={`mt-1 ${compact ? 'text-[8px]' : 'text-[9px]'} leading-4 text-white/54`}>
+                {option.description}
+              </div>
+            </motion.button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+  const renderSandboxBossHeavyRoutePanel = () => {
+    if (!sandboxBossProtocolClass || !sandboxBossHud) return null;
+    return (
+      <motion.div
+        className="absolute bottom-5 right-4 w-[min(320px,calc(100vw-1.5rem))] pointer-events-auto transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] translate-y-0 opacity-100"
+        initial={{ opacity: 0, x: 30, y: 16, scale: 0.98 }}
+        animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+        transition={{ type: 'spring', stiffness: 220, damping: 22 }}
+      >
+        {renderSandboxBossHeavyControls(true)}
+      </motion.div>
+    );
+  };
+  const renderSandboxBossDeck = (mode: 'compact' | 'expanded') => {
+    if (!sandboxBossHud) return null;
+    const compact = mode === 'compact';
+    if (compact) {
+      const mainPatternAbilities = sandboxBossPatternAbilities.filter((ability) => ability.trigger === 'Q' || ability.trigger === 'X' || ability.trigger === 'R');
+      return (
+        <div className="overflow-hidden rounded-[1.35rem] border border-fuchsia-300/18 bg-[linear-gradient(180deg,rgba(16,10,28,0.92),rgba(5,8,16,0.95))] shadow-[0_14px_32px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+          <div className="border-b border-white/8 px-3 py-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[8px] font-black uppercase tracking-[0.24em] text-fuchsia-200/72">Sandbox Boss Command</div>
+                <div className="mt-1 break-words text-[12px] font-black uppercase tracking-[0.14em] text-white">{sandboxBossHud.name}</div>
+                <div className="mt-1 break-words text-[8px] font-bold uppercase tracking-[0.14em] text-white/40">{sandboxBossHud.callsign}</div>
+                {sandboxBossHud.statusText && (
+                  <div className="mt-1 inline-flex rounded-full border border-amber-300/22 bg-amber-400/12 px-2 py-0.5 text-[7px] font-black uppercase tracking-[0.18em] text-amber-100/90">
+                    {sandboxBossHud.statusText}
+                  </div>
+                )}
+              </div>
+              <div className="shrink-0 rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-fuchsia-100/90">
+                No Scroll
+              </div>
+            </div>
+            <div className="mt-2 grid grid-cols-[1fr_auto] items-start gap-2">
+              <div className="rounded-[0.95rem] border border-white/10 bg-black/18 px-2.5 py-2">
+                <div className="text-[7px] font-black uppercase tracking-[0.18em] text-white/34">Selected Heavy</div>
+                <div className="mt-1 break-words text-[8px] font-black uppercase tracking-[0.12em] text-fuchsia-100/92">
+                  {selectedSandboxBossHeavy?.name ?? 'No route selected'}
+                </div>
+              </div>
+              <div className="rounded-[0.95rem] border border-white/10 bg-white/[0.04] px-2.5 py-2 text-[8px] font-black uppercase tracking-[0.16em] text-white/70">
+                M1 E Q X R
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2.5 px-3 py-3">
+            {sandboxBossCoreAbilities.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[8px] font-black uppercase tracking-[0.18em] text-sky-100/82">Drive Controls</div>
+                  <div className="text-[7px] font-bold uppercase tracking-[0.16em] text-white/34">Mouse-linked pressure and toggle state</div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {sandboxBossCoreAbilities.map((ability) => renderSandboxBossCommandCell(ability, 'compact-core', 'minor'))}
+                </div>
+              </div>
+            )}
+
+            {mainPatternAbilities.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[8px] font-black uppercase tracking-[0.18em] text-fuchsia-100/84">Pattern Controls</div>
+                  <div className="text-[7px] font-bold uppercase tracking-[0.16em] text-white/34">Q / X / R always visible</div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {mainPatternAbilities.filter((ability) => ability.trigger !== 'R').map((ability) => renderSandboxBossCommandCell(ability, 'compact-pattern', 'major'))}
+                  {mainPatternAbilities.filter((ability) => ability.trigger === 'R').map((ability) => (
+                    <div key={`compact-r-wrap-${ability.id}`} className="col-span-2">
+                      {renderSandboxBossCommandCell(ability, 'compact-pattern', 'major')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!!sandboxBossPassiveAbilities.length && (
+              <div className="space-y-2">
+                <div className="text-[8px] font-black uppercase tracking-[0.18em] text-white/72">Passive System</div>
+                {sandboxBossPassiveAbilities.slice(0, 1).map((ability) => renderSandboxBossCommandCell(ability, 'compact-passive', 'passive'))}
+              </div>
+            )}
+
+            <div className="rounded-[1rem] border border-white/10 bg-black/18 px-3 py-2.5">
+              <div className="grid grid-cols-2 gap-2">
+                {sandboxBossHud.heavyOptions?.slice(0, 5).map((option, index) => (
+                    <motion.button
+                      key={`compact-chip-${option.id}`}
+                    onClick={() => {
+                      playHover?.();
+                      engine?.sound?.enable?.();
+                      engine.selectSandboxBossHeavyAttack(option.id);
+                    }}
+                      className={`rounded-[0.9rem] border px-2 py-2 text-left transition-all ${
+                        option.selected
+                          ? 'border-fuchsia-300/28 bg-fuchsia-400/12 text-white shadow-[0_0_0_1px_rgba(232,121,249,0.12)]'
+                          : 'border-white/10 bg-white/[0.02] text-white/66 hover:bg-white/[0.05]'
+                      }`}
+                      whileHover={{ y: -1, scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      animate={option.selected ? { boxShadow: ['0 0 0 1px rgba(232,121,249,0.12)', '0 0 18px rgba(232,121,249,0.18)', '0 0 0 1px rgba(232,121,249,0.12)'] } : {}}
+                      transition={{ boxShadow: { duration: 1.5, repeat: option.selected ? Infinity : 0, ease: 'easeInOut' } }}
+                    >
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 rounded-md border border-fuchsia-300/18 bg-black/22 px-1.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-fuchsia-100/86">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0 break-words text-[8px] font-black uppercase leading-4 tracking-[0.12em]">
+                        {option.name}
+                      </div>
+                    </div>
+                  </motion.button>
+                ))}
+              </div>
+              <div className="mt-2 text-[7px] font-bold uppercase tracking-[0.16em] text-white/34">
+                Heavy routing lives here and on the right panel. Click a chip or use `1-5` to set `R`.
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div
+        className={`overflow-hidden rounded-[1.35rem] border border-fuchsia-300/18 bg-[linear-gradient(180deg,rgba(16,10,28,0.88),rgba(5,8,16,0.92))] ${compact ? 'flex max-h-[min(42rem,calc(100vh-12rem))] min-h-0 flex-col shadow-[0_14px_32px_rgba(0,0,0,0.42)] backdrop-blur-xl' : 'shadow-[0_14px_32px_rgba(0,0,0,0.32)]'}`}
+      >
+        <div className={`border-b border-white/8 ${compact ? 'px-3 py-2.5' : 'px-4 py-3'}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className={`${compact ? 'text-[8px]' : 'text-[8px]'} font-black uppercase tracking-[0.24em] text-fuchsia-200/72`}>
+                {compact ? 'Sandbox Boss Moveset' : 'Live Ability Deck'}
+              </div>
+              <div className="mt-1 break-words text-[12px] font-black uppercase tracking-[0.14em] text-white">{sandboxBossHud.name}</div>
+              <div className={`mt-1 ${compact ? 'break-words text-[9px] text-white/40' : 'text-[9px] text-white/38'} font-bold uppercase tracking-[0.14em]`}>
+                {compact ? sandboxBossHud.callsign : 'Mouse-driven boss controls, tactical commands, and live heavy pattern routing'}
+              </div>
+              {sandboxBossHud.statusText && (
+                <div className="mt-1 inline-flex rounded-full border border-amber-300/22 bg-amber-400/12 px-2 py-0.5 text-[7px] font-black uppercase tracking-[0.18em] text-amber-100/90">
+                  {sandboxBossHud.statusText}
+                </div>
+              )}
+            </div>
+            <div className="shrink-0 rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-fuchsia-100/90">
+              Live
+            </div>
+          </div>
+          <div className={`mt-2 ${compact ? 'text-[9px] leading-4 text-white/60' : 'text-[9px] leading-4 text-white/42'}`}>
+            {compact ? 'Linked boss commands, routed around your cursor, with live heavy-pattern selection and cooldown tracking.' : 'Primary fire is rebuilt into a boss volley. `E` controls Volley Drive. `Q / X / R` stay grouped into the live pattern layer.'}
+          </div>
+        </div>
+
+        <div className={`${compact ? 'min-h-0 flex-1 overflow-y-auto px-3 py-3 custom-scrollbar' : 'px-4 py-3'} space-y-3`}>
+          <div className={`rounded-[1.15rem] border border-white/10 ${compact ? 'bg-black/18 p-3' : 'bg-black/14 p-3'}`}>
+            <div className={`flex ${compact ? 'flex-col' : 'items-start'} justify-between gap-3`}>
+              <div className="min-w-0">
+                <div className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-[0.22em] text-fuchsia-100/84`}>
+                  Command Layout
+                </div>
+                <p className={`mt-1 ${compact ? 'text-[8px] leading-4' : 'text-[9px] leading-4'} text-white/42`}>
+                  M1 handles primary pressure, `E` toggles drive-state control, and `Q / X / R` route the active boss mechanics around your mouse position.
+                </p>
+              </div>
+              <div className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-white/70">
+                M1 E Q X R
+              </div>
+            </div>
+          </div>
+
+          {renderSandboxBossAbilitySection(
+            compact ? 'Chassis Controls' : 'Chassis Control Layer',
+            compact ? 'Aim, pressure fire, and drive-state control' : 'Mouse aim, pressure fire, and drive-state control',
+            'M1 / E',
+            sandboxBossCoreAbilities,
+            compact ? 'hud-core' : 'boss-core',
+            compact,
+            'core'
+          )}
+
+          {renderSandboxBossAbilitySection(
+            compact ? 'Pattern Controls' : 'Pattern Control Layer',
+            compact ? 'Tactical cast routing and heavy trigger management' : 'Tactical attack routing, utility pressure, and heavy cast selection',
+            'Q / X / R',
+            sandboxBossPatternAbilities,
+            compact ? 'hud-pattern' : 'boss-pattern',
+            compact,
+            'pattern'
+          )}
+
+          {sandboxBossActiveAbilities.length === 0 && (
+            <div className="rounded-[1rem] border border-white/8 bg-white/[0.02] px-3 py-3 text-[8px] font-black uppercase tracking-[0.16em] text-white/36">
+              No active protocol commands linked.
+            </div>
+          )}
+
+          {renderSandboxBossAbilitySection(
+            'Passive Systems',
+            compact ? 'Ambient field pressure and automated battlefield behavior' : 'Ambient battlefield systems that remain active while the protocol is linked',
+            'Passive',
+            sandboxBossPassiveAbilities,
+            compact ? 'hud-passive' : 'boss-passive',
+            compact,
+            'passive'
+          )}
+
+          {!compact && renderSandboxBossHeavyControls(false)}
+        </div>
+      </div>
+    );
+  };
   const bossRushCinematic = bossRush?.cinematic;
+  const bossRushHealthRatio = bossRush ? Math.max(0, Math.min(1, bossRush.health / Math.max(1, bossRush.maxHealth))) : 0;
+  const bossRushHealthPercent = Math.round(bossRushHealthRatio * 100);
+  const bossRushPhaseLabel = bossRush?.awakened ? 'Awakened' : `Phase ${bossRush?.phase}/${bossRush?.phaseCount}`;
 
   return (
     <div 
@@ -657,6 +1307,61 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                     filter: `blur(${8 + bossRushCinematic.chromatic * 18}px)`,
                   }}
                 />
+                {bossRushCinematic.mode === 'transformation' && (
+                  <>
+                    <div
+                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/10"
+                      style={{
+                        width: `${260 + (bossRushCinematic.transformationHalo ?? 0) * 260}px`,
+                        height: `${260 + (bossRushCinematic.transformationHalo ?? 0) * 260}px`,
+                        opacity: bossRushCinematic.transformationHalo,
+                        boxShadow: `0 0 ${40 + (bossRushCinematic.transformationHalo ?? 0) * 80}px ${bossRushCinematic.color}66, inset 0 0 26px rgba(255,255,255,0.08)`,
+                        background: `radial-gradient(circle, rgba(255,255,255,0.04) 0%, ${bossRushCinematic.color}16 34%, transparent 70%)`,
+                      }}
+                    />
+                    <div
+                      className="absolute left-1/2 top-1/2"
+                      style={{
+                        width: `${170 + (bossRushCinematic.transformationPulse ?? 0) * 120}px`,
+                        height: `${170 + (bossRushCinematic.transformationPulse ?? 0) * 120}px`,
+                        opacity: bossRushCinematic.transformationPulse,
+                        filter: `blur(${10 + (bossRushCinematic.transformationPulse ?? 0) * 12}px)`,
+                        background: `conic-gradient(from 0deg, ${bossRushCinematic.color}00, ${bossRushCinematic.color}88, rgba(255,255,255,0.9), ${bossRushCinematic.color}55, ${bossRushCinematic.color}00)`,
+                        borderRadius: '9999px',
+                        transform: `translate(-50%, -50%) rotate(${bossRushCinematic.progress * 240}deg) scale(${1 + (bossRushCinematic.transformationPulse ?? 0) * 0.18})`,
+                      }}
+                    />
+                    <div
+                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border"
+                      style={{
+                        width: `${110 + (bossRushCinematic.sigilAlpha ?? 0) * 70}px`,
+                        height: `${110 + (bossRushCinematic.sigilAlpha ?? 0) * 70}px`,
+                        opacity: bossRushCinematic.sigilAlpha,
+                        borderColor: `${bossRushCinematic.accent}88`,
+                        boxShadow: `0 0 28px ${bossRushCinematic.accent}55`,
+                      }}
+                    >
+                      <div className="absolute inset-0">
+                        <div
+                          className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2"
+                          style={{ background: `linear-gradient(180deg, transparent, ${bossRushCinematic.accent}, transparent)` }}
+                        />
+                        <div
+                          className="absolute left-0 top-1/2 h-px w-full -translate-y-1/2"
+                          style={{ background: `linear-gradient(90deg, transparent, ${bossRushCinematic.accent}, transparent)` }}
+                        />
+                        <div
+                          className="absolute left-1/2 top-1/2 h-[70%] w-px origin-center -translate-x-1/2 -translate-y-1/2 rotate-45"
+                          style={{ background: `linear-gradient(180deg, transparent, ${bossRushCinematic.color}, transparent)` }}
+                        />
+                        <div
+                          className="absolute left-1/2 top-1/2 h-[70%] w-px origin-center -translate-x-1/2 -translate-y-1/2 -rotate-45"
+                          style={{ background: `linear-gradient(180deg, transparent, ${bossRushCinematic.color}, transparent)` }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             )}
             <motion.div
@@ -735,6 +1440,14 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                         Source: {bossRushCinematic.mode === 'awakening' ? 'Awakened Core' : bossRushCinematic.mode === 'transformation' ? 'Warform Manifest' : 'Arena Arrival'}
                       </div>
                       <div>Cipher Lock // Live</div>
+                      <div className="pt-1">
+                        <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.04] px-2.5 py-1.5 text-[9px] font-black uppercase tracking-[0.22em] text-white/64">
+                          <span className="rounded-md border border-white/18 bg-white/[0.06] px-2 py-1 text-[8px] text-white shadow-[0_0_12px_rgba(255,255,255,0.08)]">
+                            Space
+                          </span>
+                          <span>Skip</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -745,6 +1458,83 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       </AnimatePresence>
 
       {botBubbleLayer}
+
+      {gameMode === GameMode.BOSS_RUSH && bossRush && !bossRushCinematic?.active && (
+        <div className="absolute left-1/2 top-2 z-[120] w-[min(42rem,calc(100vw-1.25rem))] -translate-x-1/2 pointer-events-none lg:w-[min(42rem,calc(100vw-26rem))]">
+          <div className="overflow-hidden rounded-[1.2rem] border border-rose-300/12 bg-[linear-gradient(180deg,rgba(8,6,12,0.76),rgba(5,4,9,0.62))] shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-lg">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(251,113,133,0.12),transparent_56%),linear-gradient(90deg,rgba(255,255,255,0.02),transparent_30%,transparent_70%,rgba(255,255,255,0.02))]" />
+            <div className="relative px-3 py-2 md:px-4 md:py-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full border border-rose-300/16 bg-rose-400/10 px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.24em] text-rose-100/86">
+                      Boss Rush
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-white/58">
+                      {Math.min(bossRush.bossIndex, bossRush.bossCount)} / {bossRush.bossCount}
+                    </span>
+                    <span className={`rounded-full border px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] ${bossRush.awakened ? 'border-amber-300/22 bg-amber-400/14 text-amber-100' : 'border-white/10 bg-white/[0.04] text-white/62'}`}>
+                      {bossRushPhaseLabel}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-end gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-[0.88rem] font-black uppercase tracking-[0.12em] text-white md:text-[1rem]">
+                        {bossRush.bossName}
+                      </div>
+                      <div className="mt-0.5 truncate text-[8px] font-bold uppercase tracking-[0.18em] text-rose-100/42 md:text-[9px]">
+                        {bossRush.bossSubtitle}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="shrink-0 text-right">
+                  <div className="text-[7px] font-black uppercase tracking-[0.18em] text-white/34">Integrity</div>
+                  <div className="mt-1 text-[11px] font-black text-white md:text-[12px]">
+                    {Math.max(0, Math.round(bossRush.health)).toLocaleString()} <span className="text-white/36">/</span> {Math.round(bossRush.maxHealth).toLocaleString()}
+                  </div>
+                  <div className="mt-0.5 text-[8px] font-black uppercase tracking-[0.16em] text-white/48">{bossRushHealthPercent}%</div>
+                </div>
+              </div>
+
+              <div className="mt-2 rounded-[0.95rem] border border-white/8 bg-black/20 p-2">
+                <div className="relative h-4 overflow-hidden rounded-[0.8rem] border border-white/10 bg-[#12090e] md:h-[1.05rem]">
+                  <div className="absolute inset-0 opacity-55 [background-image:linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] [background-size:34px_100%]" />
+                  <div
+                    className={`absolute inset-y-0 left-0 rounded-[0.8rem] transition-[width] duration-300 ${bossRush.victory ? 'bg-[linear-gradient(90deg,#fbbf24_0%,#fde047_42%,#f59e0b_100%)]' : bossRush.awakened ? 'bg-[linear-gradient(90deg,#fb7185_0%,#fb923c_35%,#fde047_70%,#f59e0b_100%)]' : 'bg-[linear-gradient(90deg,#be123c_0%,#ef4444_30%,#fb7185_60%,#fb923c_100%)]'}`}
+                    style={{
+                      width: `${bossRushHealthRatio * 100}%`,
+                      boxShadow: bossRush.victory
+                        ? '0 0 22px rgba(251,191,36,0.28)'
+                        : bossRush.awakened
+                          ? '0 0 24px rgba(251,191,36,0.18)'
+                          : '0 0 22px rgba(248,113,113,0.22)',
+                    }}
+                  />
+                  <div
+                    className="absolute inset-y-0 left-0 opacity-75"
+                    style={{
+                      width: `${bossRushHealthRatio * 100}%`,
+                      background: 'linear-gradient(110deg, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 24%, rgba(255,255,255,0.14) 48%, rgba(255,255,255,0) 72%)',
+                      backgroundSize: '180px 100%',
+                    }}
+                  />
+                  <div className="absolute inset-0 flex items-center justify-between px-2 text-[7px] font-black uppercase tracking-[0.14em] text-white/82 md:text-[8px]">
+                    <span>{bossRush.victory ? 'Encounter Cleared' : 'Universal Threat Integrity'}</span>
+                    <span>{bossRushHealthPercent}%</span>
+                  </div>
+                </div>
+
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 px-0.5 text-[7px] font-bold uppercase tracking-[0.14em] text-white/42 md:text-[8px]">
+                  <span>{bossRush.pressureText ?? (bossRush.awakened ? 'Core state unstable // heightened aggression' : 'Encounter active // boss pressure rising')}</span>
+                  <span>{bossRush.transitionText ?? 'Survive patterns, punish recoveries, advance the gauntlet'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Notifications Layer */}
       <div className="absolute top-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 w-full max-w-md pointer-events-none z-[110]">
@@ -764,7 +1554,15 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                         ) : primedSpawn.type === 'DUMMY' ? (
                            <ShapePreview type="DUMMY" rarity={ShapeRarity.COMMON} size={40} />
                         ) : primedSpawn.type === 'ELITE_TANK' || primedSpawn.type === 'BOT_TANK' || primedSpawn.type === 'DOMINION_TANK' ? (
-                           <TankPreview tankClass={resolvePreviewClass(primedSpawn.classType || TankClass.BASIC)} size={40} showArenaVfx={isRebirthPreviewClass(primedSpawn.classType || TankClass.BASIC)} />
+                           <TankPreview
+                             tankClass={resolvePreviewClass(primedSpawn.classType || TankClass.BASIC)}
+                             bossRushKey={primedSpawn.classType && SANDBOX_BOSS_CLASSES.includes(primedSpawn.classType as TankClass) ? getSandboxBossRushKey(primedSpawn.classType as TankClass) : undefined}
+                             barrels={primedSpawn.classType ? getSandboxPreviewBarrels(primedSpawn.classType as TankClass) : undefined}
+                             size={40}
+                             showArenaVfx={isRebirthPreviewClass(primedSpawn.classType || TankClass.BASIC)}
+                             renderMode={isSandboxMode ? 'ingame' : 'legacy'}
+                             previewVariant={primedSpawn.classType && SANDBOX_BOSS_CLASSES.includes(primedSpawn.classType as TankClass) ? 'bossProtocol' : 'default'}
+                           />
                         ) : null}
                     </div>
                     <span className="text-white font-black italic">
@@ -820,7 +1618,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
 
       {(playerState === PlayerState.EVOLVING || showBossChoiceUI || showSectorChoiceUI) && (
         <div className="absolute inset-0 z-[180] flex items-center justify-center pointer-events-auto px-6">
-          <div className="w-full max-w-3xl rounded-3xl border border-cyan-300/20 bg-[#030712]/92 backdrop-blur-2xl shadow-[0_30px_80px_rgba(0,0,0,0.7)] p-6">
+          <div className={`w-full max-w-3xl rounded-3xl p-6 ${COMMAND_SHELL}`}>
             {showSectorChoiceUI ? (
               <>
                 <div className="text-center">
@@ -868,21 +1666,24 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 </div>
                 <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
                   {(bossChoices && bossChoices.length > 0 ? bossChoices : [TankClass.COLOSSAL, TankClass.LEVIATHAN, TankClass.WARLORD, TankClass.CELESTIAL, TankClass.OBLITERATOR]).map((cls) => (
-                    <button
+                    <motion.button
                       key={cls}
                       onClick={() => { onUpgradeClass(cls); playHover?.(); }}
-                      className="group rounded-2xl border border-white/10 bg-white/5 hover:bg-cyan-500/10 hover:border-cyan-300/50 transition-all p-3 flex flex-col items-center gap-2"
+                    className={`group rounded-2xl p-3 flex flex-col items-center gap-2 transition-all ${COMMAND_SHELL_INSET} hover:bg-cyan-500/10 hover:border-cyan-300/50`}
+                      whileHover={{ y: -2, scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
                     >
                       <TankPreview
                         key={`${SANDBOX_RESEARCH_ICON_REV}-boss-choice-${cls}`}
                         tankClass={resolvePreviewClass(cls)}
                         size={46}
                         showArenaVfx={isRebirthPreviewClass(cls)}
+                        renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                         turretRotation={getSandboxPreviewPose(cls).turretRotation}
                         chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
                       />
                       <span className="text-[10px] font-black uppercase tracking-wider text-white/85">{cls}</span>
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
               </>
@@ -916,8 +1717,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                   key={`${mainClass}-${unlockableClasses.join('-')}`} 
                   className="animate-in slide-in-from-left-20 duration-500 ease-out fade-in pointer-events-auto"
                 >
-                    <div className="relative overflow-hidden rounded-2xl border border-cyan-400/30 bg-[#0b1119]/88 shadow-[0_12px_32px_rgba(0,0,0,0.32)] backdrop-blur-xl w-[248px]">
-                        <div className="pt-3 pb-2 px-4 text-left border-b border-white/5 bg-cyan-400/5">
+                    <div className={`relative overflow-hidden rounded-2xl w-[248px] ${COMMAND_SHELL_SOFT}`}>
+                        <div className={`pt-3 pb-2 px-4 text-left ${COMMAND_HEADER_SOFT}`}>
                             <h3 className="text-cyan-300 font-black text-sm uppercase tracking-[0.22em]">Evolution Ready</h3>
                             <p className="text-[8px] font-bold text-cyan-200/35 uppercase mt-1 tracking-[0.18em]">Select next chassis</p>
                         </div>
@@ -934,6 +1735,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                           key={`${SANDBOX_RESEARCH_ICON_REV}-evo-${cls}`}
                                           tankClass={resolvePreviewClass(cls as TankClass)}
                                           size={48}
+                                          renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                           turretRotation={getSandboxPreviewPose(cls as TankClass).turretRotation}
                                           chassisRotation={getSandboxPreviewPose(cls as TankClass).chassisRotation}
                                         /> 
@@ -949,9 +1751,9 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
             )}
         </div>
 
-        <div className={`flex ${rightHudWidthClass} flex-col items-stretch gap-3 pointer-events-auto`}>
+        <div className={`flex min-h-0 ${rightHudWidthClass} max-h-[calc(100vh-1rem)] flex-col items-stretch gap-3 overflow-hidden pointer-events-auto`}>
              <div className="flex items-center justify-end gap-2">
-                {gameMode === GameMode.SANDBOX && (
+                {isSandboxMode && (
                     <motion.button 
                         onClick={() => {
                           playHover?.();
@@ -982,8 +1784,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
              </div>
 
              {gameMode === GameMode.DOMINION && (
-                <div className="w-full rounded-2xl border border-amber-400/20 bg-[#0b0913]/84 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
-                  <div className="px-3 py-2 border-b border-white/10 bg-amber-500/[0.06] flex items-center justify-between">
+                <div className={`w-full rounded-2xl overflow-hidden ${COMMAND_SHELL_SOFT}`}>
+                  <div className={`px-3 py-2 flex items-center justify-between ${COMMAND_HEADER_SOFT}`}>
                     <span className="text-[10px] font-black uppercase tracking-[0.25em] text-amber-200/85">Dominion</span>
                     <span className="text-[9px] font-bold uppercase tracking-wider text-white/50">{dominionTimerLabel}</span>
                   </div>
@@ -1003,61 +1805,28 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                 </div>
               )}
 
-             {gameMode === GameMode.BOSS_RUSH && bossRush && (
-                <div className="flex w-full flex-col gap-3">
-                  <div className="w-full rounded-2xl border border-rose-400/20 bg-[#12060a]/86 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
-                    <div className="px-3 py-2 border-b border-white/10 bg-rose-500/[0.08] flex items-center justify-between gap-3">
-                      <span className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-200/90">Boss Rush</span>
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-white/55">{Math.min(bossRush.bossIndex, bossRush.bossCount)} / {bossRush.bossCount}</span>
-                    </div>
-                    <div className="px-3 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="break-words text-[15px] font-black uppercase tracking-[0.08em] text-white">{bossRush.bossName}</div>
-                          <div className="mt-1 break-words text-[10px] font-bold uppercase tracking-[0.14em] text-rose-100/55">{bossRush.bossSubtitle}</div>
-                        </div>
-                        <div className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${bossRush.awakened ? 'border-amber-300/25 bg-amber-400/14 text-amber-100' : 'border-white/10 bg-white/5 text-white/55'}`}>
-                          {bossRush.awakened ? 'Awakened' : `Phase ${bossRush.phase}/${bossRush.phaseCount}`}
-                        </div>
-                      </div>
-                      <div className="mt-3 h-3 rounded-full bg-white/8 overflow-hidden border border-white/8">
-                        <div
-                          className={`h-full rounded-full transition-[width] duration-300 ${bossRush.victory ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-500' : 'bg-gradient-to-r from-rose-500 via-red-400 to-orange-300'}`}
-                          style={{ width: `${Math.max(0, Math.min(100, (bossRush.health / Math.max(1, bossRush.maxHealth)) * 100))}%` }}
-                        />
-                      </div>
-                      <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-white/52">
-                        <span>{Math.max(0, Math.round(bossRush.health)).toLocaleString()} HP</span>
-                        <span>{Math.round(bossRush.maxHealth).toLocaleString()} MAX</span>
-                      </div>
-                      {bossRush.transitionText && (
-                        <div className="mt-3 rounded-xl border border-rose-300/14 bg-rose-500/[0.08] px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-rose-100/82">
-                          {bossRush.transitionText}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {bossRushSelectionActive && bossRushLoadout && (
-                    <div className="w-full max-h-[calc(100vh-10rem)] rounded-2xl border border-cyan-300/18 bg-[linear-gradient(180deg,rgba(4,14,25,0.94),rgba(4,9,18,0.96))] backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
-                      <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-cyan-400/[0.06] px-3 py-2.5">
+             {gameMode === GameMode.BOSS_RUSH && bossRush && bossRushSelectionActive && bossRushLoadout && (
+                  <div className="flex w-full min-h-0 flex-col gap-3">
+                     <div className={`flex min-h-0 w-full flex-1 flex-col rounded-2xl overflow-hidden ${COMMAND_SHELL_SOFT}`}>
+                      <div className={`flex items-center justify-between gap-3 px-3 py-2.5 ${COMMAND_HEADER_SOFT}`}>
                         <div>
                           <div className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-100">Boss Rush Class Select</div>
-                          <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white/42">Choose your class in-match before the first boss arrives</div>
+                          <div className="mt-1 text-[8px] font-bold uppercase tracking-[0.14em] text-white/42">Pick a chassis before the first boss arrives</div>
                         </div>
                         <div className="shrink-0 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-cyan-100">
-                          In-Match Picker
+                          Live Picker
                         </div>
                       </div>
 
-                      <div className="custom-scrollbar max-h-[calc(100vh-14.5rem)] space-y-3 overflow-y-auto px-3 py-3">
-                        <div className="rounded-2xl border border-cyan-300/14 bg-[linear-gradient(135deg,rgba(20,184,166,0.10),rgba(15,23,42,0.52)_48%,rgba(8,12,20,0.74))] px-3 py-3 shadow-[0_10px_28px_rgba(0,0,0,0.22)]">
+                      <div className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+                        <div className={`rounded-2xl px-3 py-3 ${COMMAND_SHELL_INSET}`}>
                           <div className="flex items-start gap-3">
-                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-400/8">
+                            <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${COMMAND_SHELL_INSET}`}>
                               <TankPreview
                                 key={`${SANDBOX_RESEARCH_ICON_REV}-boss-rush-current-${bossRushLoadout.classType}`}
                                 tankClass={resolvePreviewClass(bossRushLoadout.classType)}
-                                size={30}
+                                size={26}
+                                renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                 turretRotation={getSandboxPreviewPose(bossRushLoadout.classType).turretRotation}
                                 chassisRotation={getSandboxPreviewPose(bossRushLoadout.classType).chassisRotation}
                               />
@@ -1065,17 +1834,17 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
                                 <div className="text-[11px] font-black uppercase tracking-[0.16em] text-white">{formatTankClassLabel(bossRushLoadout.classType)}</div>
-                                <span className="rounded-full border border-cyan-300/18 bg-cyan-400/10 px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-cyan-100">
+                                <span className={`${COMMAND_PILL} px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em]`}>
                                   {bossRushSelectedCategory}
                                 </span>
                               </div>
-                              <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white/45">Combat role staged for first contact</div>
+                              <div className="mt-1 text-[8px] font-bold uppercase tracking-[0.14em] text-white/45">Combat role staged for first contact</div>
                               <div className="mt-2 flex flex-wrap gap-2">
                                 <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-white/60">
-                                  Select a combat role
+                                  Pick a role
                                 </span>
                                 <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-white/60">
-                                  Tap any class to swap instantly
+                                  Tap to swap instantly
                                 </span>
                               </div>
                             </div>
@@ -1084,7 +1853,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
 
                         <div className="space-y-2.5">
                           {BOSS_RUSH_CLASS_CATEGORIES.map((category) => (
-                            <div key={`boss-rush-${category.name}`} className="rounded-2xl border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-2.5">
+                            <div key={`boss-rush-${category.name}`} className={`rounded-2xl p-2.5 ${COMMAND_SHELL_INSET}`}>
                               <div
                                 className="mb-2 rounded-xl border border-white/8 px-2.5 py-2"
                                 style={{
@@ -1097,11 +1866,11 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                     {category.classes.length} classes
                                   </div>
                                 </div>
-                                <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/38">
+                                <div className="mt-1 text-[8px] font-bold uppercase tracking-[0.12em] text-white/38">
                                   {BOSS_RUSH_CATEGORY_META[category.name]?.hint ?? 'Combat role group'}
                                 </div>
                               </div>
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 {category.classes.map((klass) => {
                                   const active = bossRushLoadout.classType === klass;
                                   return (
@@ -1110,15 +1879,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                       type="button"
                                       onClick={() => handleBossRushClassPick(klass)}
                                       onMouseEnter={() => playHover?.()}
-                                      className={`min-h-[5.4rem] rounded-2xl border px-2.5 py-2.5 text-left transition-all duration-200 ${active ? 'border-cyan-300/34 bg-[linear-gradient(135deg,rgba(34,211,238,0.16),rgba(10,20,34,0.82))] shadow-[0_0_0_1px_rgba(103,232,249,0.12),0_10px_26px_rgba(8,145,178,0.18)]' : 'border-white/8 bg-slate-950/32 hover:border-cyan-300/22 hover:bg-cyan-400/[0.04]'}`}
+                                      className={`min-h-[4.5rem] rounded-2xl border px-2.5 py-2 text-left transition-all duration-200 ${active ? 'border-cyan-300/34 bg-[linear-gradient(135deg,rgba(34,211,238,0.16),rgba(10,20,34,0.82))] shadow-[0_0_0_1px_rgba(103,232,249,0.12),0_10px_26px_rgba(8,145,178,0.18)]' : 'border-white/8 bg-slate-950/32 hover:border-cyan-300/22 hover:bg-cyan-400/[0.04]'}`}
                                     >
                                       <div className="flex h-full flex-col gap-2">
                                         <div className="flex items-center justify-between gap-2">
-                                          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${active ? 'border-cyan-300/20 bg-cyan-400/10' : 'border-white/10 bg-black/30'}`}>
+                                          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${active ? 'border-cyan-300/20 bg-cyan-400/10' : 'border-white/10 bg-black/30'}`}>
                                             <TankPreview
                                               key={`${SANDBOX_RESEARCH_ICON_REV}-boss-rush-choice-${klass}`}
                                               tankClass={resolvePreviewClass(klass)}
-                                              size={20}
+                                              size={18}
+                                              renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                               turretRotation={getSandboxPreviewPose(klass).turretRotation}
                                               chassisRotation={getSandboxPreviewPose(klass).chassisRotation}
                                             />
@@ -1128,7 +1898,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                           </div>
                                         </div>
                                         <div className="min-w-0">
-                                          <div className="line-clamp-2 text-[10px] font-black uppercase tracking-[0.08em] text-white/92 leading-tight">{formatTankClassLabel(klass)}</div>
+                                          <div className="line-clamp-2 text-[9px] font-black uppercase tracking-[0.08em] text-white/92 leading-tight">{formatTankClassLabel(klass)}</div>
                                           <div className="mt-1 text-[8px] font-bold uppercase tracking-[0.16em] text-white/38">
                                             {category.name}
                                           </div>
@@ -1143,13 +1913,12 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                         </div>
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
+                 </div>
+               )}
 
-              {settings.showLeaderboard && gameMode !== GameMode.DOMINION && (
-             <div className="w-full rounded-2xl border border-cyan-400/16 bg-[#040913]/84 backdrop-blur-xl overflow-hidden shadow-[0_16px_36px_rgba(0,0,0,0.42)]">
-                  <div className="px-3 py-2 border-b border-white/10 bg-cyan-500/[0.05] flex items-center justify-between">
+              {settings.showLeaderboard && gameMode !== GameMode.DOMINION && !bossRushSelectionActive && (
+              <div className={`w-full rounded-2xl overflow-hidden ${COMMAND_SHELL_SOFT}`}>
+                  <div className={`px-3 py-2 flex items-center justify-between ${COMMAND_HEADER_SOFT}`}>
                     <span className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-200/80">Leaderboard</span>
                     <span className="text-[9px] font-bold uppercase tracking-wider text-white/35">Live</span>
                  </div>
@@ -1168,13 +1937,14 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                           >
                              <span className={`text-[10px] font-black ${i < 3 ? 'text-amber-300' : 'text-white/45'}`}>{i + 1}</span>
                              <div className="w-7 h-7 rounded-md bg-black/40 border border-white/10 flex items-center justify-center overflow-hidden">
-                               <TankPreview
-                                 key={`${SANDBOX_RESEARCH_ICON_REV}-leaderboard-${iconClass}-${entry.id}`}
-                                 tankClass={iconClass}
-                                 size={18}
-                                 turretRotation={getSandboxPreviewPose(iconClass).turretRotation}
-                                 chassisRotation={getSandboxPreviewPose(iconClass).chassisRotation}
-                               />
+                                <TankPreview
+                                  key={`${SANDBOX_RESEARCH_ICON_REV}-leaderboard-${iconClass}-${entry.id}`}
+                                  tankClass={iconClass}
+                                  size={18}
+                                  renderMode={isSandboxMode ? 'ingame' : 'legacy'}
+                                  turretRotation={getSandboxPreviewPose(iconClass).turretRotation}
+                                  chassisRotation={getSandboxPreviewPose(iconClass).chassisRotation}
+                                />
                              </div>
                               <span className="break-words font-black leading-tight tracking-wide">{formatDisplayName(entry.name)}</span>
                              <span className="font-mono text-[11px] text-white/75">{formatScoreValue(entry.score, settings.compactScoreNotation)}</span>
@@ -1186,10 +1956,10 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
               </div>
               )}
 
-             {abilityHud && (
-               <div className={`w-full rounded-2xl border backdrop-blur-md px-3 py-2.5 shadow-[0_12px_28px_rgba(0,0,0,0.35)] ${
-                 abilityHud.active
-                   ? 'border-emerald-300/28 bg-emerald-950/28'
+              {abilityHud && (
+                 <div className={`w-full rounded-2xl border backdrop-blur-md px-3 py-2.5 shadow-[0_12px_28px_rgba(0,0,0,0.35)] ${
+                  abilityHud.active
+                    ? 'border-emerald-300/28 bg-emerald-950/28'
                    : abilityReady
                      ? 'border-cyan-300/24 bg-cyan-950/24'
                      : 'border-white/12 bg-black/55'
@@ -1223,8 +1993,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                </div>
              )}
 
-              {settings.showMinimap && (
-               <div className={`relative ml-auto w-[148px] overflow-hidden rounded-[1rem] border border-cyan-400/12 bg-[#050b12]/74 shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${gameMode === GameMode.DOMINION ? 'aspect-[0.88]' : 'aspect-[0.9]'}`}>
+               {settings.showMinimap && gameMode !== GameMode.BOSS_RUSH && (
+                <div className={`relative ml-auto w-[148px] overflow-hidden rounded-[1rem] ${COMMAND_SHELL_INSET} ${gameMode === GameMode.DOMINION ? 'aspect-[0.88]' : 'aspect-[0.9]'}`}>
                     <div className="absolute inset-x-0 top-0 z-10 flex h-5 items-center justify-between border-b border-white/7 bg-black/28 px-2">
                       <span className="text-[7px] font-black uppercase tracking-[0.16em] text-cyan-200/76">Tactical Map</span>
                       <span className="text-[7px] font-bold uppercase tracking-[0.1em] text-white/30">{gameMode === GameMode.DOMINION ? 'zone' : 'x1'}</span>
@@ -1239,24 +2009,24 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
 
       {/* Sandbox Command Panel */}
       <AnimatePresence>
-      {gameMode === GameMode.SANDBOX && sandboxOpen && (
+      {isSandboxMode && sandboxOpen && (
           <motion.div
             initial={{ opacity: 0, x: 36, scale: 0.985 }}
             animate={{ opacity: 1, x: 0, scale: 1, transition: { type: 'spring', stiffness: 280, damping: 24 } }}
             exit={{ opacity: 0, x: 28, scale: 0.99, transition: { duration: 0.18 } }}
-            className="absolute top-20 right-4 z-[200] flex max-h-[calc(100vh-7rem)] w-[620px] max-w-[calc(100vw-1.25rem)] flex-col overflow-hidden rounded-[1.9rem] border border-cyan-400/18 bg-[#06101a]/96 shadow-[0_28px_80px_rgba(0,0,0,0.72)] backdrop-blur-2xl pointer-events-auto"
+            className={`absolute top-20 right-4 z-[200] flex max-h-[calc(100vh-7rem)] w-[620px] max-w-[calc(100vw-1.25rem)] flex-col overflow-hidden rounded-[1.9rem] pointer-events-auto ${COMMAND_SHELL}`}
           >
               {/* Header */}
-              <div className="shrink-0 border-b border-cyan-300/10 bg-[linear-gradient(180deg,rgba(15,35,48,0.94),rgba(8,15,24,0.84))] px-5 py-4">
+              <div className={`shrink-0 px-5 py-4 ${COMMAND_HEADER}`}>
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex min-w-0 items-start gap-3">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-400/22 bg-cyan-400/8 shadow-[inset_0_0_18px_rgba(34,211,238,0.08)]">
+                      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${COMMAND_SHELL_INSET}`}>
                         <SlidersHorizontal className="h-4.5 w-4.5 text-cyan-300" />
                       </div>
                       <div className="min-w-0">
                         <span className="block text-[11px] font-black uppercase tracking-[0.3em] text-cyan-200/80">Sandbox Command Deck</span>
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-white/44">
-                          <span className="rounded-full border border-emerald-300/22 bg-emerald-400/10 px-2.5 py-1 text-emerald-200/88">Live</span>
+                          <span className={`${COMMAND_PILL} px-2.5 py-1 text-emerald-200/88`}>Live</span>
                           <span>{SANDBOX_TAB_META[activeTab].hint}</span>
                         </div>
                       </div>
@@ -1269,16 +2039,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4.5 w-4.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                     </button>
                   </div>
-                  <div className="mt-4 grid grid-cols-3 gap-2">
-                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-2">
+                  <div className="mt-4 grid grid-cols-4 gap-2">
+                    <div className={`rounded-2xl px-3 py-2 ${COMMAND_SHELL_INSET}`}>
                       <div className="text-[8px] font-black uppercase tracking-[0.24em] text-white/36">Mode</div>
                       <div className="mt-1 text-[11px] font-black uppercase tracking-[0.14em] text-white/88">Creative Sandbox</div>
                     </div>
-                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-2">
+                    <div className={`rounded-2xl px-3 py-2 ${COMMAND_SHELL_INSET}`}>
                       <div className="text-[8px] font-black uppercase tracking-[0.24em] text-white/36">Density</div>
                       <div className="mt-1 text-[11px] font-black uppercase tracking-[0.14em] text-cyan-200/92">{spawnAmount} queued</div>
                     </div>
-                    <div className="rounded-2xl border border-white/8 bg-black/18 px-3 py-2">
+                    <div className={`rounded-2xl px-3 py-2 ${COMMAND_SHELL_INSET}`}>
                       <div className="text-[8px] font-black uppercase tracking-[0.24em] text-white/36">Fabricator</div>
                       <div className="mt-1 text-[11px] font-black uppercase tracking-[0.14em] text-white/88">{sandboxConfig?.spawningEnabled ? 'Armed' : 'Standby'}</div>
                     </div>
@@ -1286,9 +2056,9 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
               </div>
 
               {/* Tabs */}
-              <div className="shrink-0 border-b border-cyan-300/10 bg-black/24 px-4 py-3">
-                <div className="grid h-12 grid-cols-3 gap-2 rounded-2xl border border-white/7 bg-black/26 p-1">
-                  {(['SYSTEM', 'RESEARCH', 'SPAWN'] as SandboxTab[]).map(tab => (
+              <div className={`shrink-0 px-4 py-3 ${COMMAND_HEADER}`}>
+                <div className="grid h-12 grid-cols-4 gap-2 rounded-2xl border border-white/7 bg-black/26 p-1">
+                  {(['SYSTEM', 'RESEARCH', 'BOSS', 'SPAWN'] as SandboxTab[]).map(tab => (
                       <button 
                         key={tab}
                         onClick={() => { playHover?.(); setActiveTab(tab); }}
@@ -1530,6 +2300,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                                   tankClass={resolvePreviewClass(cls)}
                                                   size={84}
                                                   showArenaVfx={isRebirthPreviewClass(cls)}
+                                                  renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                                   turretRotation={getSandboxPreviewPose(cls).turretRotation}
                                                   chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
                                                 />
@@ -1542,6 +2313,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                                       size={48}
                                                       color={currentClass === cls ? '#fff' : undefined}
                                                       showArenaVfx={isRebirthPreviewClass(cls)}
+                                                      renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                                       turretRotation={getSandboxPreviewPose(cls).turretRotation}
                                                       chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
                                                     />
@@ -1570,40 +2342,6 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
 
                         <div className="space-y-3">
                             <div className="flex items-center gap-4 px-1">
-                                <span className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200/62">Boss Override</span>
-                                <div className="h-px flex-1 bg-white/[0.04]"></div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                {SANDBOX_BOSS_CLASSES.map(cls => (
-                                    <button
-                                      key={cls}
-                                      onClick={() => { playHover?.(); onUpgradeClass(cls); }}
-                                      className={`group relative flex flex-col gap-3 rounded-[1.4rem] border p-4 text-left transition-all ${currentClass === cls ? 'border-amber-300/55 bg-amber-500/12 shadow-[inset_0_0_20px_rgba(245,158,11,0.12)]' : 'border-white/8 bg-white/[0.03] hover:border-amber-300/35 hover:bg-white/[0.06]'}`}
-                                    >
-                                      <div className="flex items-center gap-3">
-                                        <div className="rounded-2xl border border-white/10 bg-black/30 p-2.5">
-                                          <TankPreview
-                                            key={`${SANDBOX_RESEARCH_ICON_REV}-boss-override-${cls}`}
-                                            tankClass={resolvePreviewClass(cls)}
-                                            size={42}
-                                            showArenaVfx={isRebirthPreviewClass(cls)}
-                                            turretRotation={getSandboxPreviewPose(cls).turretRotation}
-                                            chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
-                                          />
-                                        </div>
-                                        <div className="min-w-0">
-                                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/88">{cls}</div>
-                                          <div className="text-[8px] font-black uppercase tracking-[0.14em] text-amber-300/60">Instant boss chassis swap</div>
-                                        </div>
-                                      </div>
-                                      <div className="text-[8px] font-bold uppercase tracking-[0.15em] text-white/34">Sandbox only. Bypasses rebirth gate.</div>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="space-y-3">
-                            <div className="flex items-center gap-4 px-1">
                                 <span className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200/60">Dominion Profiles</span>
                                 <div className="h-px flex-1 bg-white/[0.04]"></div>
                             </div>
@@ -1620,6 +2358,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                             key={`${SANDBOX_RESEARCH_ICON_REV}-dominion-profile-${profile.id}`}
                                             tankClass={resolvePreviewClass(profile.classType)}
                                             size={42}
+                                            renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                             turretRotation={getSandboxPreviewPose(profile.classType).turretRotation}
                                             chassisRotation={getSandboxPreviewPose(profile.classType).chassisRotation}
                                           />
@@ -1633,6 +2372,121 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                     </button>
                                 ))}
                             </div>
+                        </div>
+                    </motion.div>
+                  )}
+
+                  {activeTab === 'BOSS' && (
+                    <motion.div
+                      key="tab-boss"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.16 }}
+                      className="space-y-4 pb-2"
+                    >
+                        <div className="group relative overflow-hidden rounded-[1.6rem] border border-amber-300/16 bg-[linear-gradient(180deg,rgba(42,18,18,0.72),rgba(18,9,9,0.88))] px-4 py-4">
+                            <div className="absolute right-0 top-0 p-6 opacity-[0.07]">
+                                <Crown className="h-20 w-20 text-amber-300" />
+                            </div>
+                            <h4 className="mb-2 text-[10px] font-black uppercase tracking-[0.24em] text-amber-100/88">Boss Rush Loadouts</h4>
+                            <p className="max-w-[86%] text-[10px] font-bold leading-relaxed text-white/48">
+                              Direct access to the playable Boss Rush chassis. Pick one here in sandbox to test the real encounter visuals, active protocol identity, and live ability HUD without digging through other class sectors.
+                            </p>
+                        </div>
+
+                        <div className="rounded-[1.6rem] border border-amber-300/10 bg-white/[0.025] p-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-200/82">Protocol Archive</div>
+                                  <p className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/30">Playable boss chassis for sandbox-only testing</p>
+                                </div>
+                                <span className="rounded-full border border-amber-300/18 bg-amber-400/10 px-3 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-amber-100/82">
+                                  {SANDBOX_BOSS_CLASSES.length} Protocols
+                                </span>
+                            </div>
+                        </div>
+
+                        {sandboxBossHud && renderSandboxBossDeck('expanded')}
+
+                        <div className="grid grid-cols-2 gap-3">
+                            {SANDBOX_BOSS_CLASSES.map((cls) => {
+                              const isProtocolActive = sandboxBossProtocolClass === cls;
+                              return (
+                              <button
+                                key={cls}
+                                onClick={() => {
+                                  playHover?.();
+                                  if (isSandboxMode && engine?.selectSandboxBossProtocol) {
+                                    engine.selectSandboxBossProtocol(cls);
+                                    return;
+                                  }
+                                  onUpgradeClass(cls);
+                                }}
+                                className={`group relative flex flex-col gap-4 overflow-hidden rounded-[1.5rem] border p-4 text-left transition-all ${
+                                  isProtocolActive
+                                    ? 'border-amber-300/55 bg-amber-500/14 shadow-[inset_0_0_24px_rgba(245,158,11,0.12)]'
+                                    : 'border-white/8 bg-white/[0.03] hover:border-amber-300/28 hover:bg-white/[0.06]'
+                                }`}
+                              >
+                                <div className="pointer-events-none absolute right-0 top-0 translate-x-3 -translate-y-3 p-3 opacity-[0.06]">
+                                  <TankPreview
+                                    key={`${SANDBOX_RESEARCH_ICON_REV}-boss-bg-${cls}`}
+                                    tankClass={resolvePreviewClass(cls)}
+                                    bossRushKey={getSandboxBossRushKey(cls)}
+                                    barrels={getSandboxPreviewBarrels(cls)}
+                                    size={84}
+                                    showArenaVfx={isRebirthPreviewClass(cls)}
+                                    renderMode={isSandboxMode ? 'ingame' : 'legacy'}
+                                    previewVariant="bossProtocol"
+                                    turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                    chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
+                                  />
+                                </div>
+                                <div className="relative z-10 w-fit shrink-0 transition-transform duration-500 group-hover:scale-105">
+                                  <div className="rounded-2xl border border-white/10 bg-black/28 p-3 transition-all group-hover:border-white/20">
+                                    <TankPreview
+                                      key={`${SANDBOX_RESEARCH_ICON_REV}-boss-card-${cls}`}
+                                      tankClass={resolvePreviewClass(cls)}
+                                      bossRushKey={getSandboxBossRushKey(cls)}
+                                      barrels={getSandboxPreviewBarrels(cls)}
+                                      size={50}
+                                      color={isProtocolActive ? '#fff' : undefined}
+                                      showArenaVfx={isRebirthPreviewClass(cls)}
+                                      renderMode={isSandboxMode ? 'ingame' : 'legacy'}
+                                      previewVariant="bossProtocol"
+                                      turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                      chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="relative z-10 flex flex-col">
+                                  <div className="mb-1.5 flex items-center gap-2">
+                                    <div className={`h-1.5 w-1.5 rounded-full ${isProtocolActive ? 'bg-white animate-pulse' : 'bg-amber-400'}`} />
+                                    <span className={`text-[10px] font-black uppercase tracking-[0.14em] ${isProtocolActive ? 'text-white' : 'text-white/84'}`}>
+                                      {getSandboxBossLabel(cls)}
+                                    </span>
+                                  </div>
+                                  <div className="text-[8px] font-black uppercase tracking-[0.14em] text-amber-300/62">
+                                    {SANDBOX_BOSS_LABELS[cls]?.note ?? 'Boss protocol'}
+                                  </div>
+                                  <div className="mt-2 flex items-center justify-between">
+                                    <span className={`text-[7px] font-black uppercase tracking-[0.16em] ${isProtocolActive ? 'text-white/56' : 'text-white/24'}`}>
+                                      Boss Rush Protocol
+                                    </span>
+                                    {isProtocolActive && (
+                                      <span className="rounded-full bg-black/28 px-1.5 py-0.5 text-[7px] font-black uppercase text-white">
+                                        Current
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </button>
+                            )})}
+                        </div>
+
+                        <div className="rounded-[1.45rem] border border-white/8 bg-black/20 px-4 py-3 text-[9px] font-bold uppercase tracking-[0.14em] text-white/36">
+                          These cards now link the actual Boss Rush boss protocols in sandbox. They no longer overwrite the standard rebirth picks in the regular class tree. If you want AI boss enemies, use the `Spawn` tab and the `Elite Boss Fabrication` section.
                         </div>
                     </motion.div>
                   )}
@@ -1719,6 +2573,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                           key={`${SANDBOX_RESEARCH_ICON_REV}-elite-legionnaire`}
                                           tankClass={TankClass.DESTROYER}
                                           size={72}
+                                          renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                           turretRotation={getSandboxPreviewPose(TankClass.DESTROYER).turretRotation}
                                           chassisRotation={getSandboxPreviewPose(TankClass.DESTROYER).chassisRotation}
                                         />
@@ -1741,17 +2596,21 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                           className={`flex items-center gap-3 rounded-[1.35rem] border p-4 transition-all ${primedSpawn?.type === 'ELITE_TANK' && primedSpawn?.classType === cls ? 'border-amber-300 bg-amber-500/16 shadow-[inset_0_0_20px_rgba(245,158,11,0.1)]' : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.07] hover:border-amber-300/30'}`}
                                         >
                                           <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
-                                            <TankPreview
-                                              key={`${SANDBOX_RESEARCH_ICON_REV}-elite-boss-${cls}`}
-                                              tankClass={resolvePreviewClass(cls)}
-                                              size={38}
-                                              showArenaVfx={isRebirthPreviewClass(cls)}
-                                              turretRotation={getSandboxPreviewPose(cls).turretRotation}
+                                          <TankPreview
+                                            key={`${SANDBOX_RESEARCH_ICON_REV}-elite-boss-${cls}`}
+                                            tankClass={resolvePreviewClass(cls)}
+                                            bossRushKey={getSandboxBossRushKey(cls)}
+                                            barrels={getSandboxPreviewBarrels(cls)}
+                                            size={38}
+                                            showArenaVfx={isRebirthPreviewClass(cls)}
+                                            renderMode={isSandboxMode ? 'ingame' : 'legacy'}
+                                            previewVariant="bossProtocol"
+                                            turretRotation={getSandboxPreviewPose(cls).turretRotation}
                                               chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
                                             />
                                           </div>
                                           <div className="min-w-0 text-left">
-                                            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{cls}</div>
+                                            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-white/86">{getSandboxBossLabel(cls)}</div>
                                             <div className="text-[7px] font-black uppercase tracking-[0.14em] text-amber-300/60">Spawn boss AI chassis</div>
                                           </div>
                                         </button>
@@ -1776,6 +2635,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                               key={`${SANDBOX_RESEARCH_ICON_REV}-elite-template-${cls}`}
                                               tankClass={resolvePreviewClass(cls)}
                                               size={36}
+                                              renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                               turretRotation={getSandboxPreviewPose(cls).turretRotation}
                                               chassisRotation={getSandboxPreviewPose(cls).chassisRotation}
                                             />
@@ -1806,6 +2666,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
                                               key={`${SANDBOX_RESEARCH_ICON_REV}-dominion-guardian-${profile.id}`}
                                               tankClass={resolvePreviewClass(profile.classType)}
                                               size={36}
+                                              renderMode={isSandboxMode ? 'ingame' : 'legacy'}
                                               turretRotation={getSandboxPreviewPose(profile.classType).turretRotation}
                                               chassisRotation={getSandboxPreviewPose(profile.classType).chassisRotation}
                                             />
@@ -1893,6 +2754,19 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
       <div className="w-full flex justify-between items-end mt-auto relative gap-8 z-[90]">
         
       {/* stat menu remastered: more compact horizontal-ish layout or smaller vertical stack */}
+      {sandboxBossProtocolClass && (
+        <div
+          className="
+            absolute bottom-5 left-4 w-[min(340px,calc(100vw-1.5rem))] pointer-events-auto
+            transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]
+            translate-y-0 opacity-100
+          "
+        >
+          {renderSandboxBossDeck('compact')}
+        </div>
+      )}
+      {renderSandboxBossHeavyRoutePanel()}
+
       <div className={`
         absolute bottom-5 left-4 w-[252px] pointer-events-auto transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]
         ${showStatUpgradeUI ? 'translate-y-0 opacity-100' : 'translate-y-12 opacity-0 pointer-events-none'}
@@ -2037,13 +2911,37 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, onUpgradeStat, 
               <div className="space-y-1">
                 <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="text-[6px] font-black uppercase tracking-[0.16em] text-white/46">Hull Integrity</span>
+                    <span className="text-[6px] font-black uppercase tracking-[0.16em] text-white/46">{sandboxBossProtocolClass ? 'Boss Health' : 'Hull Integrity'}</span>
                     <span className="text-[8.5px] font-black tracking-[0.04em] text-white/92">
-                      {Math.ceil(displayHealthValue)} / {Math.ceil(maxHealth)}
+                      {sandboxBossProtocolClass ? `${Math.ceil(sandboxBossCombinedCurrent)} / ${Math.ceil(sandboxBossCombinedMax)}` : `${Math.ceil(displayHealthValue)} / ${Math.ceil(maxHealth)}`}
                     </span>
                   </div>
                   <div className="relative h-1.5 overflow-hidden rounded-full border border-gray-600/28 bg-black/45">
+                    {sandboxBossProtocolClass ? (
+                      <div className="relative h-full w-full">
+                        <motion.div
+                          className="absolute inset-y-0 left-0 bg-[linear-gradient(90deg,#fb7185,#f97316)] transition-all duration-75 ease-out"
+                          style={{ width: `${sandboxBossCombinedPercent}%` }}
+                          animate={sandboxBossProtocolClass ? { filter: ['brightness(1)', 'brightness(1.12)', 'brightness(1)'] } : {}}
+                          transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                        />
+                        {(sandboxBossHud?.maxShield ?? 0) > 0 && (
+                          <motion.div
+                            className="absolute inset-y-0 right-0 bg-[linear-gradient(90deg,#38bdf8,#22d3ee)] opacity-90 transition-all duration-75 ease-out"
+                            style={{ width: `${sandboxBossShieldSharePercent}%` }}
+                            animate={{ opacity: [0.72, 0.94, 0.72] }}
+                            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+                          />
+                        )}
+                        <motion.div
+                          className="pointer-events-none absolute inset-y-0 w-10 bg-gradient-to-r from-transparent via-white/28 to-transparent"
+                          animate={{ x: ['-20%', '520%'] }}
+                          transition={{ duration: 2.1, repeat: Infinity, ease: 'linear' }}
+                        />
+                      </div>
+                    ) : (
                       <div className={`relative h-full transition-all duration-75 ease-out ${isTransformed ? 'bg-red-500' : 'bg-[#00e16e]'}`} style={{ width: `${Math.max(0, (displayHealthValue / Math.max(1, maxHealth)) * 100)}%` }} />
+                    )}
                   </div>
                 </div>
                 <div className="rounded-lg border border-white/6 bg-black/16 px-2 py-1.5">

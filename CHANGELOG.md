@@ -1,12 +1,15 @@
 VEXTOR Changelog
 
-v1.9.5 — Boot Flow, Almanac Performance & UI Unification
+v1.9.6 - Systems Overhaul, Sandbox Boss UX & Menu Remaster
 
-- Loading Screen Remaster: deterministic/timeline-driven progress, removed redundant reveal overlay, click-to-play gate simplified (Enter/Space + autofocus)
-- Bullet Penetration Fix: stop visual “jump-through”, reduce shove on penetration, shorter re-hit window, remove penetration damage spikes
-- Almanac Performance Pass: dedicated Almanac CSS, removed heavy inline style/font injection, calmed motion/remounts, improved scroll behavior to avoid re-rendering, added calmer non-animated shape previews
-- Command-Deck UI Unification: shared theme tokens + unified styling across menus/panels (main menu, gameplay panels, sandbox command panel, leaderboard, boss rush class select, evolution/dominion panel, minimap, spectate card, recovery overlay, loading shell, support modal, achievements shell)
+- Main Menu Remaster: simplified the layout, cleaned spacing and scroll issues, reworked overlays, refined leaderboard flow, and aligned connected menus/modals around the updated command-deck theme.
+- Loading Flow Rebuild: replaced the old split boot/reveal handoff with a cleaner deterministic loading sequence and fixed skip/flicker-style presentation problems.
+- Almanac Optimisation: reduced mount overhead, moved styling out of the hot path, calmed motion, improved scroll behaviour, and simplified previews so the archive feels much smoother.
+- Sandbox Boss Upgrade: redesigned the boss ability GUI into a cleaner no-scroll command layout, improved heavy-pattern routing, preview handling, and boss HUD readability.
+- Boss/SFX/UI Polish: improved sound routing, reduced noisy boss notifications, added more UI animation/presentation work, and cleaned boss-protocol carryover bugs.
+- Bot Intelligence Pass: bots now farm more intelligently, respect spawn protection, ease off fresh/low-level players more often, dodge danger better, and use larger mode-aware British humour name pools with rare legendary variants.
+- Gameplay Fixes: fixed bullet penetration jump-through behaviour, stabilised repeated penetration damage, and resolved additional Sandbox/Boss Rush/menu edge cases.
 
 Validation: npm run build passed.
 
-Website (full notes): keep the expanded version in the project changelog page (not Discord-limited).
+Website/in-game archive carries the expanded breakdown.

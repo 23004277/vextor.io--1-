@@ -172,10 +172,35 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onStateUpdate, onEngineInit, on
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      const isSandboxBossProtocolActive = !!(engine.player && (engine.player as any).__sandboxBossRushKey);
+      if (!e.repeat && (e.code === 'Space' || e.key === ' ') && engine.canSkipBossRushCinematic()) {
+        e.preventDefault();
+        engine.skipBossRushCinematic();
+        return;
+      }
+
       // Prevent repeat for toggles
       if (!e.repeat) {
           if (e.key.toLowerCase() === 'e') engine.toggleAutoFire();
           if (e.key.toLowerCase() === 'c') engine.toggleAutoSpin();
+      }
+
+      const heavySlotIndex = !e.repeat && isSandboxBossProtocolActive
+        ? (
+            e.key === '1' || e.code === 'Digit1' || e.code === 'Numpad1' ? 0 :
+            e.key === '2' || e.code === 'Digit2' || e.code === 'Numpad2' ? 1 :
+            e.key === '3' || e.code === 'Digit3' || e.code === 'Numpad3' ? 2 :
+            e.key === '4' || e.code === 'Digit4' || e.code === 'Numpad4' ? 3 :
+            e.key === '5' || e.code === 'Digit5' || e.code === 'Numpad5' ? 4 :
+            null
+          )
+        : null;
+      if (heavySlotIndex !== null) {
+        e.preventDefault();
+        engine.selectSandboxBossHeavyAttackByIndex?.(heavySlotIndex);
+        keys.add(e.key);
+        engine.handleInput(keys, mousePos, mouseDown, mouseRightDown);
+        return;
       }
 
       // Handle Stat Upgrades

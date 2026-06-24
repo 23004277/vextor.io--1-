@@ -9,9 +9,10 @@ interface ShapePreviewProps {
     size: number;
     className?: string;
     autoZoom?: boolean; // New prop to normalize size
+    animated?: boolean;
 }
 
-export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, className = "", autoZoom = true }) => {
+export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, className = "", autoZoom = true, animated = true }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const frameIdRef = useRef<number>(0);
 
@@ -430,12 +431,18 @@ export const ShapePreview: React.FC<ShapePreviewProps> = ({ type, rarity, size, 
             }
 
             ctx.restore();
-            frameIdRef.current = requestAnimationFrame(render);
+            if (animated) {
+                frameIdRef.current = requestAnimationFrame(render);
+            }
         };
 
         render();
-        return () => cancelAnimationFrame(frameIdRef.current);
-    }, [type, rarity, size, autoZoom]);
+        return () => {
+            if (frameIdRef.current) {
+                cancelAnimationFrame(frameIdRef.current);
+            }
+        };
+    }, [type, rarity, size, autoZoom, animated]);
 
     return <canvas ref={canvasRef} width={size} height={size} className={className} />;
 };

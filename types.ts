@@ -178,6 +178,11 @@ export enum TankClass {
   WARLORD = 'Warlord',
   CELESTIAL = 'Celestial',
   OBLITERATOR = 'Obliterator',
+  AEGIS_GATEKEEPER = 'Aegis Gatekeeper',
+  VANTA_SPLITTER = 'Vanta Splitter',
+  PYRE_REACTOR = 'Pyre Reactor',
+  IRON_EXECUTIONER = 'Iron Executioner',
+  GRAND_SINGULARITY = 'The Grand Singularity',
 }
 
 export interface Vector2 {
@@ -301,6 +306,42 @@ export interface AbilityHudInfo {
   active: boolean;
   activeRemaining?: number;
   activeTotal?: number;
+}
+
+export interface SandboxBossAbilityInfo {
+  id: string;
+  name: string;
+  trigger: 'M1' | 'Q' | 'X' | 'R' | 'E' | 'PASSIVE';
+  description: string;
+  cooldownRemaining: number;
+  cooldownTotal: number;
+  active?: boolean;
+  activeRemaining?: number;
+  activeTotal?: number;
+}
+
+export interface SandboxBossHeavyOptionInfo {
+  id: string;
+  name: string;
+  description: string;
+  selected: boolean;
+}
+
+export interface SandboxBossHudInfo {
+  classType: TankClass;
+  name: string;
+  callsign: string;
+  summary: string;
+  health: number;
+  maxHealth: number;
+  shield: number;
+  maxShield: number;
+  awakened?: boolean;
+  awakeningActive?: boolean;
+  awakeningProgress?: number;
+  statusText?: string;
+  abilities: SandboxBossAbilityInfo[];
+  heavyOptions?: SandboxBossHeavyOptionInfo[];
 }
 
 export interface EntityStatusFlags {
@@ -443,6 +484,7 @@ export interface GameState {
   // Fabrication Mode (Sandbox Spawning Tool)
   primedSpawn?: PrimedSpawnConfig | null;
   abilityHud?: AbilityHudInfo | null;
+  sandboxBossHud?: SandboxBossHudInfo | null;
   playerState?: PlayerState;
   evolutionTransitionRemaining?: number;
   bossChoices?: TankClass[];
@@ -466,6 +508,7 @@ export interface GameState {
     phase: number;
     phaseCount: number;
     awakened: boolean;
+    pressureText?: string;
     transitionText?: string;
     victory: boolean;
     loadoutEditable: boolean;
@@ -485,6 +528,9 @@ export interface GameState {
       color: string;
       flash: number;
       chromatic: number;
+      transformationPulse?: number;
+      transformationHalo?: number;
+      sigilAlpha?: number;
     };
   };
   deathPresentation?: DeathPresentationState;

@@ -7,7 +7,8 @@ export type BossRushTelegraphType =
   | 'red_circle_impact'
   | 'red_cone_sweep'
   | 'cross_laser_warning'
-  | 'rotating_danger_arc';
+  | 'rotating_danger_arc'
+  | 'blood_crescent_pressure';
 
 export type BossRushBossState =
   | 'transforming'
@@ -32,6 +33,7 @@ export type BossRushAttackId =
   | 'gate_lane'
   | 'gate_arc_beam'
   | 'gate_squares'
+  | 'gate_corner_crush'
   | 'gate_dash'
   | 'gate_ring_prison'
   | 'gate_hash_lock'
@@ -43,19 +45,36 @@ export type BossRushAttackId =
   | 'splitter_pincer'
   | 'splitter_zigzag_lines'
   | 'splitter_corrupted_cascade'
+  | 'splitter_x_spread'
+  | 'splitter_orbit_minefield'
+  | 'splitter_tripwire_lattice'
   | 'reactor_circles'
   | 'reactor_arc'
   | 'reactor_shuffle'
   | 'reactor_supernova'
+  | 'reactor_blood_crescent'
+  | 'reactor_quadrant_blast'
+  | 'reactor_lane_lattice'
+  | 'reactor_orbit_crush'
+  | 'reactor_meltdown_steps'
   | 'executioner_cleave'
   | 'executioner_lockon'
   | 'executioner_cross'
   | 'executioner_fan_drive'
+  | 'executioner_judgement_ring'
+  | 'executioner_box_cleave'
+  | 'executioner_falling_axes'
+  | 'executioner_pursuit_lines'
+  | 'executioner_corner_purge'
   | 'singularity_lane_chain'
   | 'singularity_gravity'
   | 'singularity_spiral'
   | 'singularity_rapid_chain'
-  | 'singularity_event_horizon';
+  | 'singularity_event_horizon'
+  | 'singularity_cross_maze'
+  | 'singularity_orbit_seal'
+  | 'singularity_gravity_grid'
+  | 'singularity_starfall';
 
 export interface BossRushAttackSpec {
   id: BossRushAttackId;
@@ -66,6 +85,16 @@ export interface BossRushAttackSpec {
   maxRange?: number;
   weight?: number;
   phases?: number[];
+  allowComboFollowup?: boolean;
+}
+
+export interface BossRushAttackEmission {
+  telegraphs: BossRushTelegraph[];
+  lockoutSeconds: number;
+  suppressPassiveUntil?: number;
+  allowComboFollowup?: boolean;
+  attackId?: BossRushAttackId;
+  audioScale?: 'light' | 'standard' | 'major' | 'ultimate' | 'passive';
 }
 
 export interface BossRushBossDefinition {
@@ -103,8 +132,13 @@ export interface BossRushBossRuntime {
   recoveryTimer: number;
   introTimer: number;
   passiveHazardTimer: number;
+  sequenceLockTimer: number;
+  passiveSuppressionTimer: number;
   attackCooldowns: Partial<Record<BossRushAttackId, number>>;
   queuedAttackId: BossRushAttackId | null;
+  transformationCinematicResolved?: boolean;
+  introCinematicResolved?: boolean;
+  awakeningCinematicResolved?: boolean;
 }
 
 export interface BossRushCinematicHudState {
@@ -120,6 +154,9 @@ export interface BossRushCinematicHudState {
   color: string;
   flash: number;
   chromatic: number;
+  transformationPulse?: number;
+  transformationHalo?: number;
+  sigilAlpha?: number;
 }
 
 export interface BossRushBossEntity {
@@ -130,6 +167,7 @@ export interface BossRushBossEntity {
   vel: Vector2;
   acc: Vector2;
   health: number;
+  displayHealth: number;
   maxHealth: number;
   radius: number;
   rotation: number;
@@ -155,6 +193,13 @@ export interface BossRushTelegraph {
   id: string;
   ownerBossId: number;
   ownerBossKey?: string;
+  attackId?: BossRushAttackId;
+  audioScale?: 'light' | 'standard' | 'major' | 'ultimate' | 'passive';
+  ownerEntityId?: number;
+  ownerTeam?: Team;
+  friendlyFire?: boolean;
+  selfDamage?: boolean;
+  sourceMode?: 'boss_rush' | 'sandbox';
   type: BossRushTelegraphType;
   x: number;
   y: number;
@@ -172,6 +217,19 @@ export interface BossRushTelegraph {
   color: string;
   pulseSpeed: number;
   executed: boolean;
+  sequenceId?: string;
+  wave?: number;
+  visualRole?: 'damage' | 'hover_marker' | 'safe_hint';
+  velocity?: Vector2;
+  triggerRadius?: number;
+  detonationRadius?: number;
+  maxTravelSeconds?: number;
+  detonationDamage?: number;
+  detonatesOnProximity?: boolean;
+  detonatesOnArenaEdge?: boolean;
+  triggeredAtSeconds?: number;
+  childDelaySeconds?: number;
+  childSpawned?: boolean;
 }
 
 export interface BossRushHudState {
@@ -185,6 +243,7 @@ export interface BossRushHudState {
   phase: number;
   phaseCount: number;
   awakened: boolean;
+  pressureText?: string;
   transitionText?: string;
   victory: boolean;
   loadoutEditable: boolean;

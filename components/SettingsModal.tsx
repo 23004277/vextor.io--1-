@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { GameSettings } from '../types';
+import { CommandButton } from './menu-ui/CommandButton';
+import { CommandHeader } from './menu-ui/CommandHeader';
+import { CommandOverlay } from './menu-ui/CommandOverlay';
+import { CommandShell } from './menu-ui/CommandShell';
+import { useCommandDialog } from './menu-ui/useCommandDialog';
+import { COMMAND_THEME_CLASS, commandCx } from './uiTheme';
 
 interface SettingsModalProps {
   settings: GameSettings;
@@ -69,7 +75,7 @@ const SHORTCUTS = [
   { key: 'M', title: 'Mute', desc: 'Audio toggle' },
 ];
 
-const rowWrap = 'rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-5 md:p-6';
+const rowWrap = commandCx(COMMAND_THEME_CLASS.shellInset, 'rounded-2xl p-5 md:p-6');
 
 const formatPercent = (v: number, scale = 100) => `${Math.round(v * scale)}%`;
 
@@ -167,56 +173,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, setSetti
   const [activeTab, setActiveTab] = useState<SettingsTab>('Audio');
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const activeMeta = useMemo(() => TAB_META.find((x) => x.id === activeTab) ?? TAB_META[0], [activeTab]);
+  const handleClose = () => {
+    playSound();
+    onClose();
+  };
 
   const updateSetting = <K extends keyof GameSettings>(key: K, value: GameSettings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }));
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const closeBtn = dialog.querySelector<HTMLButtonElement>('[data-autofocus="true"]');
-    closeBtn?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        playSound();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      previous?.focus?.();
-    };
-  }, [onClose, playSound]);
+  useCommandDialog({ containerRef: dialogRef, onClose: handleClose });
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 p-3 md:p-6 backdrop-blur-2xl" onClick={onClose}>
-      <motion.div
+    <CommandOverlay onBackdropClick={handleClose}>
+      <CommandShell
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        initial={{ opacity: 0, y: 16, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 16, scale: 0.96 }}
-        transition={{ type: 'spring', damping: 24, stiffness: 220 }}
-        className="flex h-[92vh] w-full max-w-6xl overflow-hidden rounded-3xl border border-white/10 bg-[#07090d]"
-        onClick={(e) => e.stopPropagation()}
+        className="flex h-[92vh] w-full max-w-6xl"
+        onMouseDown={(e) => e.stopPropagation()}
       >
         <h2 id="settings-title" className="sr-only">System Settings</h2>
 
-        <aside className="hidden w-[21rem] shrink-0 border-r border-white/10 bg-white/[0.02] p-6 lg:flex lg:flex-col">
+        <aside className={commandCx(COMMAND_THEME_CLASS.shellInset, 'hidden w-[21rem] shrink-0 border-r border-cyan-300/10 p-6 lg:flex lg:flex-col')}>
           <div className="mb-7">
             <div className="mb-4 h-1.5 w-14 rounded-full" style={{ background: activeMeta.accent, boxShadow: `0 0 16px ${activeMeta.accent}` }} />
-            <p className="text-4xl font-black uppercase italic leading-[0.92] text-white">
+            <p className="text-4xl font-black uppercase italic leading-[0.92] text-cyan-50">
               System
               <br />
-              <span className="text-white/25">Settings</span>
+              <span className="text-cyan-100/25">Settings</span>
             </p>
-            <p className="mt-4 text-[0.67rem] font-bold uppercase tracking-[0.17em] text-white/35">
-              Fast, readable controls for audio, visuals, and HUD behavior.
+            <p className="mt-4 text-[0.67rem] font-bold uppercase tracking-[0.17em] text-cyan-100/35">
+              Menu shell stays on command-deck theme. These options still affect gameplay, HUD, and sound.
             </p>
           </div>
           <div role="tablist" className="space-y-2">
@@ -229,7 +217,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, setSetti
                   role="tab"
                   aria-selected={active}
                   onClick={() => { playSound(); setActiveTab(tab.id); }}
-                  className="w-full rounded-2xl p-3.5 text-left ring-1 transition"
+                  className={commandCx('w-full rounded-2xl border p-3.5 text-left transition', active ? COMMAND_THEME_CLASS.tabActive : COMMAND_THEME_CLASS.tab)}
                   style={{
                     color: active ? '#0b1118' : 'rgba(255,255,255,0.72)',
                     background: active ? tab.accent : 'rgba(255,255,255,0.03)',
@@ -242,34 +230,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, setSetti
               );
             })}
           </div>
-          <div className="mt-auto rounded-2xl p-4 ring-1" style={{ background: activeMeta.accentSoft, borderColor: `${activeMeta.accent}44` }}>
-            <p className="text-[0.58rem] font-black uppercase tracking-[0.2em] text-white/45">Active</p>
-            <p className="mt-2 text-sm font-black uppercase text-white">{activeMeta.label}</p>
-            <p className="mt-2 text-xs font-semibold text-white/55">{activeMeta.description}</p>
+          <div className={commandCx(COMMAND_THEME_CLASS.shellMuted, 'mt-auto rounded-2xl p-4')} style={{ background: `linear-gradient(180deg, ${activeMeta.accentSoft}, rgba(2,7,20,0.92))`, borderColor: `${activeMeta.accent}44` }}>
+            <p className="text-[0.58rem] font-black uppercase tracking-[0.2em] text-cyan-100/45">Active</p>
+            <p className="mt-2 text-sm font-black uppercase text-cyan-50">{activeMeta.label}</p>
+            <p className="mt-2 text-xs font-semibold text-cyan-50/55">{activeMeta.description}</p>
           </div>
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
-          <header className="border-b border-white/10 px-6 py-5 md:px-8">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[0.62rem] font-black uppercase tracking-[0.3em]" style={{ color: activeMeta.accent }}>
-                  Configuration
-                </p>
-                <p className="mt-1 text-2xl font-black uppercase italic text-white">{activeMeta.label} Settings</p>
-              </div>
-              <button
-                type="button"
-                data-autofocus="true"
-                aria-label="Close settings"
-                onClick={() => { playSound(); onClose(); }}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.05] text-white/55 ring-1 ring-white/10 hover:bg-white/[0.1] hover:text-white"
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
+          <CommandHeader
+            eyebrow="Configuration"
+            title={`${activeMeta.label} Settings`}
+            description={activeTab === 'Video' ? 'Gameplay `dark mode` remains a runtime preference. The menu shell stays on the unified command-deck theme.' : activeMeta.description}
+            onClose={handleClose}
+            closeLabel="Close settings"
+          />
+          <div className="px-6 pb-4 md:px-8 lg:hidden">
             <div className="mt-4 flex gap-2 overflow-x-auto lg:hidden">
               {TAB_META.map((tab) => {
                 const active = tab.id === activeTab;
@@ -278,7 +254,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, setSetti
                     key={tab.id}
                     type="button"
                     onClick={() => { playSound(); setActiveTab(tab.id); }}
-                    className="rounded-xl px-4 py-2 text-[0.62rem] font-black uppercase tracking-[0.16em] ring-1"
+                    className={commandCx('rounded-xl px-4 py-2 text-[0.62rem] font-black uppercase tracking-[0.16em] transition', active ? COMMAND_THEME_CLASS.tabActive : COMMAND_THEME_CLASS.tab)}
                     style={{
                       color: active ? '#0b1118' : 'rgba(255,255,255,0.72)',
                       background: active ? tab.accent : 'rgba(255,255,255,0.03)',
@@ -290,9 +266,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, setSetti
                 );
               })}
             </div>
-          </header>
+          </div>
 
-          <main className="min-h-0 flex-1 overflow-y-auto px-6 py-7 md:px-8">
+          <main className={commandCx(COMMAND_THEME_CLASS.scrollArea, 'min-h-0 flex-1 px-6 py-7 md:px-8')}>
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -391,11 +367,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, setSetti
                 {activeTab === 'Controls' && (
                   <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                     {SHORTCUTS.map((item) => (
-                      <div key={item.key} className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4 flex items-center gap-4">
-                        <div className="h-12 w-14 rounded-xl bg-white/[0.06] ring-1 ring-white/10 text-xs font-black text-white/85 flex items-center justify-center">{item.key}</div>
+                      <div key={item.key} className={commandCx(COMMAND_THEME_CLASS.shellInset, 'rounded-2xl p-4 flex items-center gap-4')}>
+                        <div className={commandCx(COMMAND_THEME_CLASS.shellMuted, 'h-12 w-14 rounded-xl text-xs font-black text-cyan-50/85 flex items-center justify-center')}>{item.key}</div>
                         <div>
-                          <p className="text-xs font-black uppercase tracking-[0.14em] text-white/75">{item.title}</p>
-                          <p className="mt-1 text-[0.6rem] font-bold uppercase tracking-[0.14em] text-white/30">{item.desc}</p>
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-cyan-50/75">{item.title}</p>
+                          <p className="mt-1 text-[0.6rem] font-bold uppercase tracking-[0.14em] text-cyan-100/30">{item.desc}</p>
                         </div>
                       </div>
                     ))}
@@ -405,21 +381,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, setSetti
             </AnimatePresence>
           </main>
 
-          <footer className="border-t border-white/10 px-6 py-5 md:px-8">
+          <footer className={commandCx(COMMAND_THEME_CLASS.footer, 'px-6 py-5 md:px-8')}>
             <div className="flex items-center justify-between gap-3">
-              <p className="text-[0.6rem] font-black uppercase tracking-[0.22em] text-white/28">System Protocol v4.3.0</p>
-              <button
+              <p className="text-[0.6rem] font-black uppercase tracking-[0.22em] text-cyan-100/28">System Protocol v4.3.0</p>
+              <CommandButton
                 type="button"
-                onClick={() => { playSound(); onClose(); }}
-                className="rounded-xl px-6 py-3 text-[0.66rem] font-black uppercase tracking-[0.22em] text-black"
-                style={{ background: activeMeta.accent, boxShadow: `0 12px 30px ${activeMeta.accentSoft}` }}
+                variant="primary"
+                onClick={handleClose}
+                className="shadow-[0_12px_30px_rgba(34,211,238,0.16)]"
               >
                 Save Settings
-              </button>
+              </CommandButton>
             </div>
           </footer>
         </section>
-      </motion.div>
-    </div>
+      </CommandShell>
+    </CommandOverlay>
   );
 };
