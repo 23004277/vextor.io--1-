@@ -26,6 +26,7 @@ import { SHOP_ITEMS, ACHIEVEMENTS, QUESTS } from '../constants';
 
 // ─── Session persistence key ────────────────────────────────────────────────
 const SESSION_KEY = 'vextor_session_token';
+export const GOOGLE_REDIRECT_PENDING_KEY = 'vextor_google_redirect_pending';
 
 // ─── In-flight Firestore fetch deduplication ────────────────────────────────
 // Prevents loginWithGoogle() and getSession() from racing each other with two
@@ -126,6 +127,44 @@ function createTimeoutError(code: string, message: string): Error & { code: stri
   const err = new Error(message) as Error & { code: string };
   err.code = code;
   return err;
+}
+
+function setGoogleRedirectPending(): void {
+  try {
+    sessionStorage.setItem(
+      GOOGLE_REDIRECT_PENDING_KEY,
+      JSON.stringify({
+        provider: 'google',
+        startedAt: Date.now(),
+        returnTo: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+      }),
+    );
+  } catch {
+    // Ignore session storage failures silently.
+  }
+}
+
+export function getGoogleRedirectPending(maxAgeMs = 5 * 60_000): boolean {
+  try {
+    const raw = sessionStorage.getItem(GOOGLE_REDIRECT_PENDING_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { startedAt?: number } | null;
+    if (!parsed?.startedAt || Date.now() - parsed.startedAt > maxAgeMs) {
+      sessionStorage.removeItem(GOOGLE_REDIRECT_PENDING_KEY);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearGoogleRedirectPending(): void {
+  try {
+    sessionStorage.removeItem(GOOGLE_REDIRECT_PENDING_KEY);
+  } catch {
+    // Ignore session storage failures silently.
+  }
 }
 
 /**
@@ -666,9 +705,11 @@ export class BackendService {
 
     try {
       console.log('[Auth] Google redirect sign-in start');
+      setGoogleRedirectPending();
       await signInWithRedirect(auth, googleProvider);
       return { success: true };
     } catch (err: any) {
+      clearGoogleRedirectPending();
       console.error('[Auth] Google redirect initiation failed', err);
       return { success: false, error: mapFirebaseAuthError(err) };
     }

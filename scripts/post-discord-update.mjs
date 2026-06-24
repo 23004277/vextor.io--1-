@@ -102,14 +102,14 @@ const siteUrl =
   "";
 
 const headerLines = [
-  "🚀 **New VEXTOR Update Deployed**",
+  "**VEXTOR v1.9.7 is live**",
   "",
-  `🌿 **Branch:** \`${branch}\``,
-  `🔧 **Commit:** \`${commit}\``
+  `Branch: \`${branch}\``,
+  `Commit: \`${commit}\``
 ];
 
 if (siteUrl) {
-  headerLines.push(`🌐 **Site:** ${siteUrl}`);
+  headerLines.push(`Site: ${siteUrl}`);
 }
 
 headerLines.push("");

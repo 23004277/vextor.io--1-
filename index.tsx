@@ -1,6 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import './src/styles/global.css';
+import './src/styles/vextor-effects.css';
 import App from './App';
+import './src/styles/global.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

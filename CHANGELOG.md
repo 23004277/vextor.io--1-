@@ -1,15 +1,13 @@
 VEXTOR Changelog
 
-v1.9.6 - Systems Overhaul, Sandbox Boss UX & Menu Remaster
+v1.9.7 - Command Access Remaster, UI Cleanup & Systems Polish
 
-- Main Menu Remaster: simplified the layout, cleaned spacing and scroll issues, reworked overlays, refined leaderboard flow, and aligned connected menus/modals around the updated command-deck theme.
-- Loading Flow Rebuild: replaced the old split boot/reveal handoff with a cleaner deterministic loading sequence and fixed skip/flicker-style presentation problems.
-- Almanac Optimisation: reduced mount overhead, moved styling out of the hot path, calmed motion, improved scroll behaviour, and simplified previews so the archive feels much smoother.
-- Sandbox Boss Upgrade: redesigned the boss ability GUI into a cleaner no-scroll command layout, improved heavy-pattern routing, preview handling, and boss HUD readability.
-- Boss/SFX/UI Polish: improved sound routing, reduced noisy boss notifications, added more UI animation/presentation work, and cleaned boss-protocol carryover bugs.
-- Bot Intelligence Pass: bots now farm more intelligently, respect spawn protection, ease off fresh/low-level players more often, dodge danger better, and use larger mode-aware British humour name pools with rare legendary variants.
-- Gameplay Fixes: fixed bullet penetration jump-through behaviour, stabilised repeated penetration damage, and resolved additional Sandbox/Boss Rush/menu edge cases.
+- Login / Sign-Up Remaster: rebuilt the commander access flow into a simpler, clearer auth layout with one obvious credential path, one obvious Google path, better spacing, plainer action labels, and a much cleaner first-read experience.
+- Auth UX Stabilisation: preserved the Google redirect continuity veil, kept text-entry cursor fixes in place, and reduced the old dashboard-style clutter that made the account flow harder to use.
+- Main Menu / UI Cohesion: continued pushing the command-deck visual system across menus, modal surfaces, and update-log presentation so the front end feels more unified and less prototype-like.
+- Loading / Almanac / Sandbox Boss Follow-Through: kept the broader menu, loading, archive, and Sandbox Boss improvements from the previous overhaul while tightening presentation, readability, and responsiveness.
+- Bot / Combat / Sandbox Polish: retained the recent intelligence, spawn-protection, boss-routing, and combat cleanup work as part of the current version baseline.
 
 Validation: npm run build passed.
 
-Website/in-game archive carries the expanded breakdown.
+The in-game update archive carries the full expanded version briefing.

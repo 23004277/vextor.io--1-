@@ -6,7 +6,7 @@ import UIOverlay from './components/UIOverlay';
 import CustomCursor from './components/CustomCursor';
 import { GameMode, GameState, HighScoreEntry, TankClass, User, Team, Achievement, UserStats, GameSettings, BossRushLoadout, StatType } from './types';
 import { GameEngine } from './services/GameEngine';
-import { BackendService } from './services/BackendService';
+import { BackendService, clearGoogleRedirectPending, getGoogleRedirectPending } from './services/BackendService';
 import { LoginModal } from './components/LoginModal';
 import { ShopModal } from './components/ShopModal';
 import { AlmanacModal } from './components/AlmanacModal';
@@ -24,9 +24,20 @@ import { COMMAND_THEME_CLASS } from './components/uiTheme';
 
 type UpdateLogEntry = typeof UPDATE_LOG[number];
 type MenuBootPhase = 'locked' | 'unlocking' | 'revealing' | 'ready';
+type AuthBootPhase = 'idle' | 'redirect-return' | 'session-restore' | 'ready';
 
 const MENU_BOOT_UNLOCK_MS = 2000;
 const MENU_BOOT_TOTAL_MS = 5000;
+const AUTH_RETURN_VEIL_ID = 'auth-return-veil';
+const AUTH_RETURN_FAILSAFE_MS = 15_000;
+
+const hideAuthReturnVeil = () => {
+  if (typeof document === 'undefined') return;
+  document.documentElement.classList.remove('auth-return-pending');
+  document.body.classList.remove('auth-return-pending');
+  const veil = document.getElementById(AUTH_RETURN_VEIL_ID);
+  if (veil) veil.setAttribute('hidden', 'true');
+};
 
 const DEFAULT_SETTINGS: GameSettings = {
     volume: 0.15,
@@ -134,6 +145,9 @@ const App: React.FC = () => {
   const [menuMusicSnapshot, setMenuMusicSnapshot] = useState<BackgroundMusicVisualizerFrame | null>(null);
   const [menuBootPhase, setMenuBootPhase] = useState<MenuBootPhase>('locked');
   const [menuBootOverlayVisible, setMenuBootOverlayVisible] = useState(true);
+  const [authBootPhase, setAuthBootPhase] = useState<AuthBootPhase>(() =>
+    getGoogleRedirectPending() ? 'redirect-return' : 'idle',
+  );
   const [menuMousePos, setMenuMousePos] = useState({ x: 0, y: 0 });
   const lastUnmutedVolumesRef = useRef<{ volume: number; musicVolume: number }>({
     volume: DEFAULT_SETTINGS.volume,
@@ -156,6 +170,7 @@ const App: React.FC = () => {
   const menuBootUnlocking = menuBootPhase === 'unlocking';
   const menuBootTransitioning = menuBootPhase === 'unlocking' || menuBootPhase === 'revealing';
   const [menuBootProgress, setMenuBootProgress] = useState(0);
+  const authBootFailsafeRef = useRef<number | null>(null);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -251,6 +266,9 @@ const App: React.FC = () => {
     const y = (menuMousePos.y / window.innerHeight - 0.5) * 2;
     return { x, y };
   }, [menuMousePos]);
+
+  const authReturnVeilVisible =
+    authBootPhase === 'redirect-return' || authBootPhase === 'session-restore';
 
   useEffect(() => {
     if (menuBootPhase === 'locked') {
@@ -463,22 +481,61 @@ const App: React.FC = () => {
 
   useEffect(() => {
       const initAuth = async () => {
-          const redirectResult = await BackendService.resolveGoogleRedirect();
-          if (redirectResult.success && redirectResult.user) {
-              hydrateSupportRank(redirectResult.user).then(setUser).catch(() => setUser(redirectResult.user!));
-              setPlayerName(prev => prev.trim() ? prev : redirectResult.user!.username);
-              return;
+          const redirectPending = getGoogleRedirectPending();
+          if (redirectPending) {
+            setAuthBootPhase('redirect-return');
           }
 
-          const res = await BackendService.getSession();
-          if (res.success && res.user) {
-              hydrateSupportRank(res.user).then(setUser).catch(() => setUser(res.user!));
-              setPlayerName(prev => prev.trim() ? prev : res.user!.username);
+          try {
+            const redirectResult = await BackendService.resolveGoogleRedirect();
+            if (redirectResult.success && redirectResult.user) {
+                hydrateSupportRank(redirectResult.user).then(setUser).catch(() => setUser(redirectResult.user!));
+                setPlayerName(prev => prev.trim() ? prev : redirectResult.user!.username);
+                return;
+            }
+
+            if (redirectPending) {
+              setAuthBootPhase('session-restore');
+            }
+
+            const res = await BackendService.getSession();
+            if (res.success && res.user) {
+                hydrateSupportRank(res.user).then(setUser).catch(() => setUser(res.user!));
+                setPlayerName(prev => prev.trim() ? prev : res.user!.username);
+            }
+          } finally {
+            clearGoogleRedirectPending();
+            setAuthBootPhase('ready');
+            window.requestAnimationFrame(() => hideAuthReturnVeil());
           }
       };
 
       initAuth();
   }, []);
+
+  useEffect(() => {
+    if (authBootFailsafeRef.current != null) {
+      window.clearTimeout(authBootFailsafeRef.current);
+      authBootFailsafeRef.current = null;
+    }
+
+    if (authBootPhase === 'redirect-return' || authBootPhase === 'session-restore') {
+      authBootFailsafeRef.current = window.setTimeout(() => {
+        clearGoogleRedirectPending();
+        setAuthBootPhase('ready');
+        hideAuthReturnVeil();
+      }, AUTH_RETURN_FAILSAFE_MS);
+    } else {
+      hideAuthReturnVeil();
+    }
+
+    return () => {
+      if (authBootFailsafeRef.current != null) {
+        window.clearTimeout(authBootFailsafeRef.current);
+        authBootFailsafeRef.current = null;
+      }
+    };
+  }, [authBootPhase]);
 
   useEffect(() => {
     if (!user) {
@@ -1075,6 +1132,33 @@ const App: React.FC = () => {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {authReturnVeilVisible && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="fixed inset-0 z-[2100] flex items-center justify-center bg-[radial-gradient(circle_at_50%_-10%,rgba(34,211,238,0.12),transparent_30rem),radial-gradient(circle_at_85%_80%,rgba(45,212,191,0.08),transparent_24rem),linear-gradient(180deg,rgba(2,8,20,0.98),rgba(1,5,14,0.995))] p-6"
+          >
+            <div className={`w-full max-w-[34rem] rounded-[1.8rem] px-6 py-6 text-center ${COMMAND_THEME_CLASS.shellSoft}`}>
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-cyan-300/20 bg-cyan-400/[0.08] shadow-[0_0_30px_rgba(34,211,238,0.12)]">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-200/18 border-t-cyan-200/90" />
+              </div>
+              <div className="mt-4 text-[11px] font-black uppercase tracking-[0.28em] text-cyan-200/70">
+                Google Auth Return
+              </div>
+              <h2 className="mt-3 text-2xl font-black uppercase tracking-[0.08em] text-cyan-50">
+                Restoring Google Sign-In
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-cyan-50/70">
+                Reconnecting your command profile and synced progression.
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
         {/* Modals */}
         {showLogin && <LoginModal onClose={() => setShowLogin(false)} onLoginSuccess={(u) => {
           hydrateSupportRank(u).then(setUser).catch(() => setUser(u));
@@ -1126,10 +1210,10 @@ const App: React.FC = () => {
 
                     <div className="flex items-start justify-between gap-6 border-b border-white/8 bg-[linear-gradient(180deg,rgba(9,18,30,0.94),rgba(6,12,22,0.9))] px-8 py-7">
                         <div className="min-w-0">
-                            <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/76">Update Log</div>
-                            <h2 className="mt-2 text-3xl font-black tracking-tight text-white">Latest VEXTOR Changes</h2>
+                            <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/76">Version Archive</div>
+                            <h2 className="mt-2 text-3xl font-black tracking-tight text-white">VEXTOR Release Briefing</h2>
                             <p className="mt-3 max-w-2xl text-[15px] leading-7 text-white/56">
-                              Straight patch notes, less noise. Pick a release on the left, read the full briefing on the right, and copy the context when you want to post it somewhere else.
+                              The latest version now includes the commander access remaster alongside the newer menu, Sandbox Boss, AI, and combat baseline. Pick a release on the left, read the full briefing on the right, and copy the version context when you need it.
                             </p>
                         </div>
                         <button
@@ -1137,7 +1221,7 @@ const App: React.FC = () => {
                           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-white/62 transition hover:bg-white/[0.1] hover:text-white"
                           aria-label="Close update log"
                         >
-                          <span className="text-lg font-black leading-none">×</span>
+                          <span className="text-lg font-black leading-none">X</span>
                         </button>
                     </div>
 
@@ -1458,3 +1542,5 @@ const App: React.FC = () => {
 };
 
 export default App;
+
+

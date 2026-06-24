@@ -226,6 +226,13 @@ export class EnemyAITanks {
         } else if (nextState === AIState.HUNT) {
             target = engine.entities.find(e => e.id === bot.aiHuntingSpecialId);
         }
+
+        // If every visible hostile is spawn-protected or intentionally deprioritized,
+        // don't leave solo/FFA bots stuck in a fake combat posture.
+        if ((nextState === AIState.FLEE || nextState === AIState.COMBAT || nextState === AIState.BODYGUARD) && !target) {
+            nextState = data.shapes.length > 0 ? AIState.FARM : AIState.IDLE;
+            bot.aiState = nextState;
+        }
         
         bot.aiTargetId = target ? target.id : null;
 

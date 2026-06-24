@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 type UseCommandDialogOptions = {
   containerRef: React.RefObject<HTMLElement | null>;
@@ -22,6 +22,12 @@ export const useCommandDialog = ({
   autoFocusSelector = '[data-autofocus="true"]',
   restoreOverflow = true,
 }: UseCommandDialogOptions) => {
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -39,7 +45,7 @@ export const useCommandDialog = ({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -68,6 +74,5 @@ export const useCommandDialog = ({
       }
       previousFocus?.focus?.();
     };
-  }, [autoFocusSelector, containerRef, onClose, restoreOverflow]);
+  }, [autoFocusSelector, containerRef, restoreOverflow]);
 };
-

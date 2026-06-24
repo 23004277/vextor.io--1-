@@ -5,10 +5,17 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
   const cursorRef = useRef<HTMLDivElement>(null);
   const [isClicking, setIsClicking] = useState(false);
   const [isPointer, setIsPointer] = useState(false);
+  const [isTextEntry, setIsTextEntry] = useState(false);
 
   useEffect(() => {
     const cursor = cursorRef.current;
     if (!cursor) return;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const supportsFinePointer = window.matchMedia('(pointer: fine)').matches;
+    if (!supportsFinePointer) return;
+
+    document.body.classList.add('vextor-custom-cursor');
 
     const handleMouseMove = (e: MouseEvent) => {
       // Use requestAnimationFrame for buttery smooth movement
@@ -21,6 +28,20 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
       // Check if hovering over interactive elements
       const target = e.target as HTMLElement;
       if (!target) return;
+
+      const insideNativeCursor = target.closest('.native-cursor') !== null;
+      const isEditableTarget =
+        insideNativeCursor ||
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable;
+
+      setIsTextEntry(isEditableTarget);
+      if (isEditableTarget) {
+        setIsPointer(false);
+        return;
+      }
 
       const computedCursor = window.getComputedStyle(target).cursor;
       setIsPointer(
@@ -40,13 +61,14 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
     window.addEventListener('mouseup', handleMouseUp);
     
     return () => {
+      document.body.classList.remove('vextor-custom-cursor');
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
 
-  const variant = isPointer ? 'pointer' : isPlaying ? 'playing' : 'default';
+  const variant = isTextEntry ? 'hidden' : isPointer ? 'pointer' : isPlaying ? 'playing' : 'default';
 
   return (
     <div
@@ -57,7 +79,7 @@ const CustomCursor: React.FC<{ isPlaying: boolean }> = ({ isPlaying }) => {
       }}
     >
       <motion.div
-        animate={{ scale: isClicking ? 0.65 : 1 }}
+        animate={{ scale: isClicking ? 0.65 : 1, opacity: isTextEntry ? 0 : 1 }}
         transition={{ type: 'spring', stiffness: 800, damping: 20 }}
         className="relative flex items-center justify-center"
       >
